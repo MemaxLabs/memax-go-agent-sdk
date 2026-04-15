@@ -6,10 +6,13 @@ import (
 	"fmt"
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
+	"github.com/MemaxLabs/memax-go-agent-sdk/session"
 )
 
 type Runtime struct {
-	SessionID string
+	SessionID       string
+	ParentSessionID string
+	Sessions        session.Store
 }
 
 type Tool interface {

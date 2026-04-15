@@ -26,14 +26,22 @@ func NewJSONLStore(dir string) *JSONLStore {
 }
 
 type transcriptEntry struct {
-	Type      string        `json:"type"`
-	Timestamp time.Time     `json:"timestamp"`
-	Message   model.Message `json:"message"`
+	Type      string         `json:"type"`
+	Timestamp time.Time      `json:"timestamp"`
+	Session   *Session       `json:"session,omitempty"`
+	Message   *model.Message `json:"message,omitempty"`
 }
 
-func (s *JSONLStore) Create(context.Context) (Session, error) {
+func (s *JSONLStore) Create(ctx context.Context) (Session, error) {
+	return s.CreateWithOptions(ctx, CreateOptions{})
+}
+
+func (s *JSONLStore) CreateWithOptions(_ context.Context, opts CreateOptions) (Session, error) {
 	if s.dir == "" {
 		return Session{}, fmt.Errorf("session jsonl store directory is required")
+	}
+	if opts.ParentID != "" && !sessionIDPattern.MatchString(opts.ParentID) {
+		return Session{}, fmt.Errorf("invalid parent session id: %q", opts.ParentID)
 	}
 	if err := os.MkdirAll(s.dir, 0o755); err != nil {
 		return Session{}, fmt.Errorf("create session directory: %w", err)
@@ -51,10 +59,20 @@ func (s *JSONLStore) Create(context.Context) (Session, error) {
 	if err != nil {
 		return Session{}, fmt.Errorf("create transcript: %w", err)
 	}
+	session := Session{ID: id, ParentID: opts.ParentID, CreatedAt: time.Now().UTC()}
+	entry := transcriptEntry{
+		Type:      "session",
+		Timestamp: session.CreatedAt,
+		Session:   &session,
+	}
+	if err := json.NewEncoder(file).Encode(entry); err != nil {
+		_ = file.Close()
+		return Session{}, fmt.Errorf("write session transcript entry: %w", err)
+	}
 	if err := file.Close(); err != nil {
 		return Session{}, fmt.Errorf("close transcript: %w", err)
 	}
-	return Session{ID: id, CreatedAt: time.Now().UTC()}, nil
+	return session, nil
 }
 
 func (s *JSONLStore) Append(_ context.Context, id string, msg model.Message) error {
@@ -71,7 +89,7 @@ func (s *JSONLStore) Append(_ context.Context, id string, msg model.Message) err
 	entry := transcriptEntry{
 		Type:      "message",
 		Timestamp: time.Now().UTC(),
-		Message:   msg,
+		Message:   &msg,
 	}
 	if err := json.NewEncoder(file).Encode(entry); err != nil {
 		return fmt.Errorf("append transcript entry: %w", err)
@@ -105,10 +123,10 @@ func (s *JSONLStore) Messages(_ context.Context, id string) ([]model.Message, er
 		if err := json.Unmarshal(data, &entry); err != nil {
 			return nil, fmt.Errorf("decode transcript line %d: %w", line, err)
 		}
-		if entry.Type != "message" {
+		if entry.Type != "message" || entry.Message == nil {
 			continue
 		}
-		messages = append(messages, entry.Message)
+		messages = append(messages, *entry.Message)
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("scan transcript: %w", err)

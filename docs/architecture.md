@@ -44,11 +44,11 @@ Current agent SDKs commonly expose autonomous file reading, command execution, w
 - `telemetry`: minimal SDK tracing interface used by core packages.
 - `otel`: OpenTelemetry adapter for SDK tracing.
 - `toolkit/filetools`: optional memory-backed file tools that demonstrate the tool contract without requiring real filesystem access.
+- `toolkit/subagents`: optional delegation tool for bounded child agents with parent/child session correlation.
 
 Expected near-term packages:
 
 - `workspace`: optional virtual filesystem and checkpoint abstractions.
-- `subagent`: bounded worker agents with parent/child event correlation.
 - `metrics`: optional counters and histograms around turns, model calls, tools, hooks, and compaction.
 
 ## Core Loop
@@ -101,6 +101,14 @@ Hooks complement permissions. Permissions answer "may this run?" while hooks let
 Sessions persist the conversation trajectory: user messages, assistant messages, tool uses, tool results, compact boundaries, and metadata. They must not silently persist workspace state. Checkpoints and virtual filesystem snapshots should be separate services referenced from session metadata.
 
 The SDK includes an in-memory store for tests and short-lived agents, plus an append-only JSONL store for durable transcripts. The JSONL store validates session IDs before path construction and reports corrupt transcript lines with line numbers.
+
+Stores can optionally implement `CreateWithOptions` to preserve parent session IDs. `Query` uses that extension when `Options.ParentSessionID` is set, and otherwise falls back to the base `Store` contract for backward compatibility. Events, model requests, and tool runtime values all carry parent session IDs so subagent runs can be correlated without requiring a specific storage backend.
+
+## Subagents
+
+Subagents are exposed through `toolkit/subagents`, not as a privileged orchestration shortcut. The toolkit registers a normal tool that receives an agent name and prompt, creates a child `Query` run with bounded turns and runtime duration, and returns the child result as a tool result. Because it is still a tool, hosts can gate delegation through the same validation, permission, hook, tracing, and result-size controls used for every other capability.
+
+Child runs set `ParentSessionID` to the calling tool runtime session. When the child uses a store that supports parent-aware creation, the transcript records that relationship. The tool result metadata also includes the parent session ID, child session ID, and selected worker name for audit trails and UI linking.
 
 ## Context Window
 

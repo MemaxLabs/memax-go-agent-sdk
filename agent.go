@@ -9,6 +9,7 @@ import (
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/hook"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
+	"github.com/MemaxLabs/memax-go-agent-sdk/session"
 	"github.com/MemaxLabs/memax-go-agent-sdk/telemetry"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
 )
@@ -30,7 +31,7 @@ func Query(ctx context.Context, prompt string, opts Options) (<-chan Event, erro
 		telemetry.Int("memax.max_tool_concurrency", opts.MaxToolConcurrency),
 	)
 
-	sess, err := opts.Sessions.Create(ctx)
+	sess, err := session.Create(ctx, opts.Sessions, session.CreateOptions{ParentID: opts.ParentSessionID})
 	if err != nil {
 		if cancel != nil {
 			cancel()
@@ -107,11 +108,18 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 		Permissions:    opts.Permissions,
 		Hooks:          opts.Hooks,
 		MaxConcurrency: opts.MaxToolConcurrency,
-		Runtime:        tool.Runtime{SessionID: sessionID},
-		Tracer:         opts.Tracer,
+		Runtime: tool.Runtime{
+			SessionID:       sessionID,
+			ParentSessionID: opts.ParentSessionID,
+			Sessions:        opts.Sessions,
+		},
+		Tracer: opts.Tracer,
 	}
 
 	emit := func(event Event) bool {
+		if event.ParentSessionID == "" {
+			event.ParentSessionID = opts.ParentSessionID
+		}
 		select {
 		case <-ctx.Done():
 			return false
@@ -228,6 +236,7 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 				Tools:              toolSpecs,
 				SystemPrompt:       opts.SystemPrompt,
 				AppendSystemPrompt: opts.AppendSystemPrompt,
+				ParentSessionID:    opts.ParentSessionID,
 			})
 			if err != nil {
 				err = fmt.Errorf("stream model: %w", err)

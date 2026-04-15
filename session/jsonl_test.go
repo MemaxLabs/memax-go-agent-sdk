@@ -53,6 +53,35 @@ func TestJSONLStoreRoundTrip(t *testing.T) {
 	}
 }
 
+func TestJSONLStoreCreateWithParent(t *testing.T) {
+	store := NewJSONLStore(t.TempDir())
+	sess, err := store.CreateWithOptions(context.Background(), CreateOptions{
+		ParentID: "0123456789abcdef0123456789abcdef",
+	})
+	if err != nil {
+		t.Fatalf("CreateWithOptions returned error: %v", err)
+	}
+	if sess.ParentID != "0123456789abcdef0123456789abcdef" {
+		t.Fatalf("ParentID = %q, want parent id", sess.ParentID)
+	}
+	messages, err := store.Messages(context.Background(), sess.ID)
+	if err != nil {
+		t.Fatalf("Messages returned error: %v", err)
+	}
+	if len(messages) != 0 {
+		t.Fatalf("messages = %#v, want empty transcript", messages)
+	}
+}
+
+func TestJSONLStoreRejectsInvalidParentSessionID(t *testing.T) {
+	_, err := NewJSONLStore(t.TempDir()).CreateWithOptions(context.Background(), CreateOptions{
+		ParentID: "../escape",
+	})
+	if err == nil {
+		t.Fatal("CreateWithOptions returned nil, want invalid parent session id error")
+	}
+}
+
 func TestJSONLStoreRejectsInvalidSessionID(t *testing.T) {
 	store := NewJSONLStore(t.TempDir())
 	err := store.Append(context.Background(), "../escape", model.Message{})

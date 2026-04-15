@@ -13,6 +13,7 @@ type Client interface {
 
 type Request struct {
 	SessionID          string
+	ParentSessionID    string
 	Messages           []Message
 	Tools              []ToolSpec
 	SystemPrompt       string

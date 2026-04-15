@@ -21,10 +21,11 @@ const (
 
 // Event is emitted by Query as the orchestration loop progresses.
 type Event struct {
-	Kind      EventKind
-	SessionID string
-	Turn      int
-	Time      time.Time
+	Kind            EventKind
+	SessionID       string
+	ParentSessionID string
+	Turn            int
+	Time            time.Time
 
 	Message    *model.Message
 	ToolUse    *model.ToolUse

@@ -27,6 +27,7 @@ type Options struct {
 
 	SystemPrompt       string
 	AppendSystemPrompt string
+	ParentSessionID    string
 	MaxTurns           int
 	MaxToolConcurrency int
 	MaxRunDuration     time.Duration

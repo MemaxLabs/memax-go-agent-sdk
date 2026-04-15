@@ -6,7 +6,7 @@ The core SDK should not assume access to the real filesystem, shell, browser, ne
 
 ## Current Status
 
-This repository is in the early foundation phase.
+This repository is production-embeddable and moving into advanced autonomy work.
 
 Implemented foundation:
 
@@ -18,6 +18,7 @@ Implemented foundation:
 - structured permission policies with host approval callbacks
 - in-memory and append-only JSONL session stores
 - memory-backed file tools for examples and tests
+- bounded subagent tool with parent/child session correlation
 - OpenAI Responses API model adapter
 - Anthropic Messages API model adapter
 - context-window policies for recent-message limiting, token budgets, and summarizing compaction
@@ -61,6 +62,22 @@ events, err := memaxagent.Query(ctx, "Inspect the workspace.", memaxagent.Option
     Model:  client,
     Tools:  registry,
     Tracer: sdkotel.NewTracer("my-agent-service"),
+})
+```
+
+To expose bounded worker agents as a tool, import `github.com/MemaxLabs/memax-go-agent-sdk/toolkit/subagents` and register the returned tool:
+
+```go
+delegate, err := subagents.NewTool(subagents.Config{
+    Agents: []subagents.Agent{{
+        Name:        "investigator",
+        Description: "Investigates a focused question in a child session.",
+        Options: memaxagent.Options{
+            Model:    client,
+            Sessions: sessions,
+            MaxTurns: 8,
+        },
+    }},
 })
 ```
 

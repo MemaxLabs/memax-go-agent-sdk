@@ -19,17 +19,19 @@
 
 - Add hook engine. Tool-use and session lifecycle hooks exist.
 - Add structured permission modes and host approval callbacks. Ordered allow/deny/ask rules, matchers, and approval callbacks exist.
-- Add context budgeting and automatic compaction. Recent-message, token-budget, and summarizing-budget policies exist; retry-after-context-failure remains.
-- Add tool result truncation and external result storage. Per-tool truncation exists; external result storage remains.
-- Add OpenTelemetry spans and metrics. Query, turn, context, model-stream, and tool-execution spans exist; metrics remain.
+- Add context budgeting and automatic compaction. Recent-message, token-budget, and summarizing-budget policies exist.
+- Add tool result truncation. Per-tool truncation exists.
+- Add OpenTelemetry tracing. Query, turn, context, model-stream, and tool-execution spans exist.
 
 ## Phase 3: Advanced Autonomy
 
-- Add subagent tool with parent/child session correlation.
+- Add subagent tool with parent/child session correlation. Initial bounded worker tool exists.
 - Add todo/task state tools.
 - Add tool search and deferred tool loading for large registries.
 - Add checkpoint interfaces for virtual workspaces.
 - Add resumable/forkable durable sessions.
+- Add retry-after-context-failure and external result storage.
+- Add optional metrics for turns, model calls, tools, hooks, and compaction.
 - Add performance benchmarks for long sessions and high tool concurrency.
 
 ## Phase 4: DX Polish

@@ -337,6 +337,35 @@ func TestQueryRunsLifecycleHooks(t *testing.T) {
 	}
 }
 
+func TestQueryPropagatesParentSessionID(t *testing.T) {
+	fake := &fakeModel{turns: [][]model.StreamEvent{{{Kind: model.StreamText, Text: "done"}}}}
+	events, err := Query(context.Background(), "start", Options{
+		Model:           fake,
+		ParentSessionID: "parent-session",
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+	var started Event
+	for event := range events {
+		if event.Kind == EventSessionStarted {
+			started = event
+		}
+		if event.Kind == EventError {
+			t.Fatalf("query error: %v", event.Err)
+		}
+		if event.Kind == EventResult {
+			break
+		}
+	}
+	if started.ParentSessionID != "parent-session" {
+		t.Fatalf("started event = %#v, want parent session id", started)
+	}
+	if len(fake.requests) != 1 || fake.requests[0].ParentSessionID != "parent-session" {
+		t.Fatalf("model request = %#v, want parent session id", fake.requests)
+	}
+}
+
 func TestQueryRunsContextAppliedHook(t *testing.T) {
 	var got hook.ContextAppliedInput
 	hooks := hook.NewRunner(hook.WithContextApplied(func(_ context.Context, input hook.ContextAppliedInput) error {
