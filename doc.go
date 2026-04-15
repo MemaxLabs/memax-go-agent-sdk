@@ -18,6 +18,10 @@
 // selected skills, and host instructions. The raw prompt path remains available
 // for embedders that need complete control.
 //
+// QueryAsync starts the same run shape without blocking the caller on startup
+// I/O. This is useful for HTTP and WebSocket servers that want all session,
+// hook, and prompt setup work to happen outside the request dispatch path.
+//
 // Applications provide capabilities by registering tools. The core never
 // bypasses the tool layer for files, shell commands, network calls, approvals,
 // checkpoints, task state, or delegation. This keeps policy and workspace

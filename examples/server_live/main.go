@@ -93,7 +93,7 @@ func (s *agentServer) query(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
 	defer cancel()
-	events, err := memaxagent.Query(ctx, input.Prompt, memaxagent.Options{
+	events := memaxagent.QueryAsync(ctx, input.Prompt, memaxagent.Options{
 		Model:       s.model,
 		Tools:       s.tools,
 		Sessions:    s.sessions,
@@ -102,10 +102,6 @@ func (s *agentServer) query(w http.ResponseWriter, r *http.Request) {
 		Context:     contextwindow.TokenBudget{MaxTokens: 24000},
 		MaxTurns:    12,
 	})
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
 
 	var out queryResponse
 	for event := range events {

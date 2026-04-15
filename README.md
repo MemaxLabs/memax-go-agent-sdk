@@ -159,12 +159,17 @@ Other source adapters are available:
 
 ```go
 embeddedSkills, err := skill.LoadFS(ctx, embedFS, "skills")
-source := &skill.CachedSource{
+source := &skill.PrefetchSource{
     Source: skill.MultiSource{
         skill.StaticSource(embeddedSkills),
-        skill.HTTPSource{URL: "https://example.com/skills.json"},
+        skill.TimeoutSource{
+            Source:  skill.HTTPSource{URL: "https://example.com/skills.json"},
+            Timeout: 2 * time.Second,
+        },
         skill.SourceFunc(loadSkillsFromDatabase),
     },
+    TTL:            5 * time.Minute,
+    RefreshTimeout: 2 * time.Second,
 }
 ```
 
@@ -198,3 +203,4 @@ delegate, err := subagents.NewTool(subagents.Config{
 ```
 
 Next implementation work is tracked in [docs/roadmap.md](docs/roadmap.md).
+Server embedding guidance is available in [docs/server.md](docs/server.md).

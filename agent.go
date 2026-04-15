@@ -109,6 +109,36 @@ func Query(ctx context.Context, prompt string, opts Options) (<-chan Event, erro
 	return events, nil
 }
 
+// QueryAsync starts Query in a goroutine and reports startup failures as
+// EventError values instead of returning them synchronously.
+//
+// This is useful in server handlers that need SDK startup work, such as session
+// store access or user-prompt hooks, to run outside the caller goroutine.
+func QueryAsync(ctx context.Context, prompt string, opts Options) <-chan Event {
+	out := make(chan Event)
+	go func() {
+		defer close(out)
+		events, err := Query(ctx, prompt, opts)
+		if err != nil {
+			event := newEvent(EventError, "", 0)
+			event.Err = err
+			select {
+			case <-ctx.Done():
+			case out <- event:
+			}
+			return
+		}
+		for event := range events {
+			select {
+			case <-ctx.Done():
+				return
+			case out <- event:
+			}
+		}
+	}()
+	return out
+}
+
 func startSession(ctx context.Context, opts Options) (session.Session, error) {
 	if opts.SessionID != "" {
 		return session.Get(ctx, opts.Sessions, opts.SessionID)

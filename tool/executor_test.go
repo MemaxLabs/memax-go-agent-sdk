@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/hook"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
@@ -232,6 +233,43 @@ func TestExecutorTruncatesAtUTF8Boundary(t *testing.T) {
 
 	if results[0].Content != "é" {
 		t.Fatalf("Content = %q, want é", results[0].Content)
+	}
+}
+
+func TestTimeoutToolReturnsWhenWrappedToolIgnoresContext(t *testing.T) {
+	blocked := make(chan struct{})
+	wrapped := WithTimeout(Definition{
+		ToolSpec: model.ToolSpec{Name: "slow", ConcurrencySafe: true},
+		Handler: func(context.Context, Call) (model.ToolResult, error) {
+			<-blocked
+			return model.ToolResult{Content: "late"}, nil
+		},
+	}, 10*time.Millisecond)
+
+	started := time.Now()
+	_, err := wrapped.Execute(context.Background(), Call{})
+	if err == nil || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Execute error = %v, want deadline exceeded", err)
+	}
+	if elapsed := time.Since(started); elapsed > 200*time.Millisecond {
+		t.Fatalf("Execute blocked too long: %s", elapsed)
+	}
+	close(blocked)
+}
+
+func TestTimeoutToolPreservesSpecAndConcurrency(t *testing.T) {
+	wrapped := WithTimeout(Definition{
+		ToolSpec: model.ToolSpec{Name: "read", ConcurrencySafe: true},
+		Handler: func(context.Context, Call) (model.ToolResult, error) {
+			return model.ToolResult{Content: "ok"}, nil
+		},
+	}, time.Second)
+
+	if wrapped.Spec().Name != "read" {
+		t.Fatalf("Spec = %#v, want wrapped spec", wrapped.Spec())
+	}
+	if !wrapped.CanRunConcurrently(model.ToolUse{Name: "read"}) {
+		t.Fatal("CanRunConcurrently should delegate to wrapped tool")
 	}
 }
 

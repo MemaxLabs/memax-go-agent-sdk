@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/contextwindow"
 	"github.com/MemaxLabs/memax-go-agent-sdk/hook"
@@ -58,6 +59,31 @@ func TestQueryRunsToolAndContinuesToResult(t *testing.T) {
 	}
 	if result != "done" {
 		t.Fatalf("result = %q, want %q", result, "done")
+	}
+}
+
+func TestQueryAsyncReturnsBeforeStartupIOCompletes(t *testing.T) {
+	store := &blockingCreateStore{
+		inner:   session.NewMemoryStore(),
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	startedAt := time.Now()
+	events := QueryAsync(context.Background(), "start", Options{
+		Model:    &fakeModel{turns: [][]model.StreamEvent{{{Kind: model.StreamText, Text: "done"}}}},
+		Sessions: store,
+	})
+	if elapsed := time.Since(startedAt); elapsed > 50*time.Millisecond {
+		t.Fatalf("QueryAsync blocked caller for %s", elapsed)
+	}
+	<-store.started
+	close(store.release)
+	result, err := Drain(events)
+	if err != nil {
+		t.Fatalf("Drain returned error: %v", err)
+	}
+	if result != "done" {
+		t.Fatalf("result = %q, want done", result)
 	}
 }
 
@@ -621,6 +647,31 @@ func (p replaceContextPolicy) Apply(_ context.Context, messages []model.Message)
 			},
 		},
 	}, nil
+}
+
+type blockingCreateStore struct {
+	inner   *session.MemoryStore
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (s *blockingCreateStore) Create(ctx context.Context) (session.Session, error) {
+	s.once.Do(func() { close(s.started) })
+	select {
+	case <-s.release:
+	case <-ctx.Done():
+		return session.Session{}, ctx.Err()
+	}
+	return s.inner.Create(ctx)
+}
+
+func (s *blockingCreateStore) Append(ctx context.Context, id string, msg model.Message) error {
+	return s.inner.Append(ctx, id, msg)
+}
+
+func (s *blockingCreateStore) Messages(ctx context.Context, id string) ([]model.Message, error) {
+	return s.inner.Messages(ctx, id)
 }
 
 type fakeModel struct {

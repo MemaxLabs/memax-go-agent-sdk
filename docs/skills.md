@@ -19,6 +19,8 @@ storage, config services, embedded files, or generated skills.
 - `skill.SourceFunc`: function adapter for custom loaders.
 - `skill.MultiSource`: merges multiple sources and deduplicates named skills.
 - `skill.CachedSource`: wraps another source with successful-load caching.
+- `skill.TimeoutSource`: bounds another source with a per-load timeout.
+- `skill.PrefetchSource`: serves the last successful snapshot and refreshes stale skills in the background.
 - `skill.HTTPSource`: loads skills from a JSON HTTP endpoint.
 - `skill.LoadDir`: loads `SKILL.md` files from host filesystem directories.
 - `skill.LoadFS`: loads `SKILL.md` files from any standard `fs.FS`, including `embed.FS`, `fstest.MapFS`, archives, or read-only directories.

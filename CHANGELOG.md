@@ -21,4 +21,6 @@ changes should still be called out here with migration notes.
 - Added source-neutral skill loaders for function-backed, merged, cached, HTTP,
   host filesystem, and standard `fs.FS` sources.
 - Hardened cached skill loading to deduplicate concurrent refreshes.
+- Added `QueryAsync`, `skill.TimeoutSource`, `skill.PrefetchSource`, tool
+  timeout wrappers, and server embedding guidance for HTTP/WebSocket services.
 - Added CI workflow, versioning policy, and public API compatibility guidance.

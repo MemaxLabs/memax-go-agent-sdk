@@ -3,6 +3,7 @@ package skill
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -242,5 +243,130 @@ func TestHTTPSourceLoadsWrappedSkills(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].Name != "remote" || got[0].Source != "http" {
 		t.Fatalf("skills = %#v", got)
+	}
+}
+
+func TestTimeoutSourceBoundsLoad(t *testing.T) {
+	source := TimeoutSource{
+		Timeout: 10 * time.Millisecond,
+		Source: SourceFunc(func(ctx context.Context) ([]Skill, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}),
+	}
+	_, err := source.Skills(context.Background())
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Skills error = %v, want deadline exceeded", err)
+	}
+}
+
+func TestPrefetchSourceReturnsStaleWhileRefreshing(t *testing.T) {
+	var mu sync.Mutex
+	calls := 0
+	secondStarted := make(chan struct{})
+	releaseSecond := make(chan struct{})
+	source := &PrefetchSource{
+		TTL:            20 * time.Millisecond,
+		RefreshTimeout: time.Second,
+		Source: SourceFunc(func(ctx context.Context) ([]Skill, error) {
+			mu.Lock()
+			calls++
+			call := calls
+			mu.Unlock()
+			if call == 1 {
+				return []Skill{{Name: "old"}}, nil
+			}
+			if call == 2 {
+				close(secondStarted)
+			}
+			select {
+			case <-releaseSecond:
+				return []Skill{{Name: "new"}}, nil
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}),
+	}
+
+	first, err := source.Skills(context.Background())
+	if err != nil {
+		t.Fatalf("first Skills returned error: %v", err)
+	}
+	if first[0].Name != "old" {
+		t.Fatalf("first skills = %#v, want old", first)
+	}
+	time.Sleep(25 * time.Millisecond)
+
+	started := time.Now()
+	stale, err := source.Skills(context.Background())
+	if err != nil {
+		t.Fatalf("stale Skills returned error: %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > 50*time.Millisecond {
+		t.Fatalf("stale read blocked on refresh: %s", elapsed)
+	}
+	if stale[0].Name != "old" {
+		t.Fatalf("stale skills = %#v, want old", stale)
+	}
+
+	<-secondStarted
+	close(releaseSecond)
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		updated, err := source.Skills(context.Background())
+		if err != nil {
+			t.Fatalf("updated Skills returned error: %v", err)
+		}
+		if updated[0].Name == "new" {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("prefetch source did not publish refreshed skills")
+}
+
+func TestPrefetchSourceDeduplicatesInitialLoad(t *testing.T) {
+	var mu sync.Mutex
+	calls := 0
+	started := make(chan struct{})
+	release := make(chan struct{})
+	source := &PrefetchSource{
+		TTL: time.Hour,
+		Source: SourceFunc(func(context.Context) ([]Skill, error) {
+			mu.Lock()
+			calls++
+			if calls == 1 {
+				close(started)
+			}
+			mu.Unlock()
+			<-release
+			return []Skill{{Name: "initial"}}, nil
+		}),
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			skills, err := source.Skills(context.Background())
+			if err != nil {
+				t.Errorf("Skills returned error: %v", err)
+				return
+			}
+			if len(skills) != 1 || skills[0].Name != "initial" {
+				t.Errorf("skills = %#v, want initial", skills)
+			}
+		}()
+	}
+	<-started
+	time.Sleep(10 * time.Millisecond)
+	close(release)
+	wg.Wait()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("calls = %d, want one initial load", calls)
 	}
 }

@@ -51,6 +51,7 @@ system prompt.
 - Add agent identity profiles. Initial `identity.Identity` support exists with a default Memax-native profile plus configurable role, mission, tone, autonomy level, and constraints.
 - Add deterministic prompt assembly. Initial `prompt.Builder` support exists and produces named prompt parts, a stable hash, identity guidance, tool-use guidance, selected skills, and host prompt text.
 - Add local and remote skill manifests. Initial `skill.LoadDir`, `skill.LoadFS`, `skill.StaticSource`, `skill.SourceFunc`, `skill.MultiSource`, `skill.CachedSource`, `skill.HTTPSource`, `Options.SkillSource`, and relevance selection exist for `SKILL.md` directories and source-neutral skill loading.
+- Add server-friendly async wrappers. Initial `QueryAsync`, `skill.TimeoutSource`, `skill.PrefetchSource`, and `tool.WithTimeout` support exists.
 - Add prompt snapshots and golden tests. Initial package tests cover stable prompt hashing; future tests should cover full model-request prompt compatibility.
 - Add skill discovery tools. Initial `toolkit/skilltools` search tool exists, exposing skills through the normal tool layer.
 - Add skill-scoped hooks and permissions. Skills should be able to declare policy hints that hosts can accept, deny, or rewrite.

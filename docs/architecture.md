@@ -94,6 +94,12 @@ Large registries can opt into `tool.SearchSelector` through `Options.ToolSelecto
 
 The optional `toolkit/filetools` package provides `list_files`, `read_file`, and `write_file` tools over a `FileSystem` interface. It includes `MemoryFS` for deterministic tests and examples, `OSFS` for root-confined host directories, and `ReadOnlyFS` for standard `io/fs.FS` implementations such as embedded or map-backed filesystems. `OSFS` supports optional symlink containment, read-size limits, list-entry limits, and file mode configuration. It is a DX reference, not a privileged core capability.
 
+Server embedders can wrap tools with `tool.WithTimeout` to bound individual
+tool calls. The wrapper returns when the timeout expires even if the wrapped
+tool ignores context cancellation, although the ignored work may continue in its
+own goroutine until it returns. Tool implementations should still honor
+`context.Context` for cleanup.
+
 The optional `toolkit/tasktools` package provides `list_tasks`, `upsert_task`, and `delete_task` over a `Store` interface plus a concurrency-safe memory store. Task state is deliberately tool-owned state rather than implicit model memory; hosts can persist it in a database, scope it to a workspace, or discard it for short-lived runs.
 
 The optional `toolkit/checkpointtools` package provides `create_checkpoint`, `list_checkpoints`, `restore_checkpoint`, and `delete_checkpoint` over the `checkpoint.Manager` interface. The SDK's in-memory manager stores checkpoint metadata and is useful for tests; production managers should connect these operations to a virtual workspace, filesystem snapshot service, database branch, or remote sandbox. Checkpoints are not stored inside session transcripts, but checkpoint records carry session and parent-session IDs for correlation.
@@ -138,11 +144,12 @@ instead of hiding intelligence changes inside provider adapters.
 
 `skill.Source` is the source-neutral loading contract for instruction bundles.
 Built-in helpers cover static slices, function-backed sources, merged sources,
-cached sources, HTTP JSON endpoints, host filesystem directories, and standard
-`fs.FS` implementations. `skill.LoadDir` and `skill.LoadFS` load `SKILL.md`
-manifests with simple frontmatter fields for name, description, when-to-use
-guidance, tags, and always-on behavior. Callers can pass explicit skills or a
-dynamic `Options.SkillSource`. `skill.Selector` keeps always-on skills and ranks
+cached sources, timeout-bounded sources, stale-while-revalidate prefetch
+sources, HTTP JSON endpoints, host filesystem directories, and standard `fs.FS`
+implementations. `skill.LoadDir` and `skill.LoadFS` load `SKILL.md` manifests
+with simple frontmatter fields for name, description, when-to-use guidance,
+tags, and always-on behavior. Callers can pass explicit skills or a dynamic
+`Options.SkillSource`. `skill.Selector` keeps always-on skills and ranks
 relevant skills against the current prompt and transcript. The optional
 `toolkit/skilltools` package exposes skill discovery through the normal tool
 layer. A `search_skills` tool can list relevant instructions from a
