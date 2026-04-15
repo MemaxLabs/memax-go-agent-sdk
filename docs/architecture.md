@@ -131,6 +131,17 @@ duplicate keys. A parent run's usage covers the model calls made directly by
 that run; subagent usage is available on the child run's events and tool-result
 metadata can carry child session IDs for host-side rollups.
 
+## Agent Evals
+
+`agenteval` is an optional deterministic evaluation package for SDK embedders
+and repository regression tests. It runs normal `memaxagent.Query` cases,
+captures the complete event stream, final answer, usage, session IDs, tool uses,
+and tool results, then applies caller-provided assertions. `ScriptedModel`
+implements `model.Client` with predefined stream events so evals can cover
+planning, tool recovery, structured-output repair, context retry, and session
+resume behavior without a live provider. This keeps autonomy quality executable
+while preserving the same provider-neutral core loop used in production.
+
 ## Permissions
 
 Permission checks run before execution and receive the raw tool use plus the tool spec. The permission package includes simple `AllowAll`, `ReadOnly`, and function-backed checkers plus a structured `Policy` for ordered rules. Rules can allow, deny, or ask a host application for approval. Matchers cover exact tool names, tool-name glob patterns, read-only/destructive tool metadata, top-level string fields in JSON tool input, and boolean composition with `All`, `AnyOf`, and `Not`.

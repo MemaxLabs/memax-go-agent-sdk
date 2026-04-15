@@ -28,6 +28,7 @@ Implemented foundation:
 - project, user, and session memory injection through source-neutral prompt memory sources
 - structured final-output contracts with JSON Schema validation and retry
 - provider-neutral model usage events and token telemetry
+- deterministic autonomy eval harness for scripted orchestration scenarios
 - skill discovery tools
 - OpenAI Responses API model adapter
 - Anthropic Messages API model adapter
@@ -273,6 +274,32 @@ delegate, err := subagents.NewTool(subagents.Config{
         },
     }},
 })
+```
+
+To regression-test agent behavior without a live model, use `agenteval` with a
+scripted model and assertions:
+
+```go
+report := agenteval.Runner{}.Run(ctx, agenteval.Case{
+    Name:   "tool recovery",
+    Prompt: "read the file",
+    Options: memaxagent.Options{
+        Model: agenteval.NewScriptedModel(
+            []model.StreamEvent{{Kind: model.StreamToolUse, ToolUse: model.ToolUse{
+                ID: "tool-1", Name: "read", Input: json.RawMessage(`{"path":"README.md"}`),
+            }}},
+            []model.StreamEvent{{Kind: model.StreamText, Text: "done"}},
+        ),
+        Tools: registry,
+    },
+    Assertions: []agenteval.Assertion{
+        agenteval.ToolUsed("read"),
+        agenteval.FinalEquals("done"),
+    },
+})
+if err := report.Error(); err != nil {
+    return err
+}
 ```
 
 Next implementation work is tracked in [docs/roadmap.md](docs/roadmap.md).
