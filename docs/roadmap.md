@@ -27,7 +27,7 @@
 
 - Add subagent tool with parent/child session correlation. Initial bounded worker tool exists.
 - Add todo/task state tools. Initial task toolkit exists.
-- Add tool search and deferred tool loading for large registries.
+- Add tool search and deferred tool loading for large registries. Initial selector and search toolkit exist.
 - Add checkpoint interfaces for virtual workspaces.
 - Add resumable/forkable durable sessions.
 - Add retry-after-context-failure and external result storage.

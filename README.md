@@ -20,6 +20,7 @@ Implemented foundation:
 - memory-backed file tools for examples and tests
 - bounded subagent tool with parent/child session correlation
 - task state tools for agent planning and progress tracking
+- opt-in tool selection and search for deferred tool loading
 - OpenAI Responses API model adapter
 - Anthropic Messages API model adapter
 - context-window policies for recent-message limiting, token budgets, and summarizing compaction

@@ -18,12 +18,13 @@ const defaultMaxTurns = 50
 type Options struct {
 	Model model.Client
 
-	Tools       *tool.Registry
-	Permissions permission.Checker
-	Sessions    session.Store
-	Hooks       *hook.Runner
-	Context     contextwindow.Policy
-	Tracer      telemetry.Tracer
+	Tools        *tool.Registry
+	Permissions  permission.Checker
+	Sessions     session.Store
+	Hooks        *hook.Runner
+	Context      contextwindow.Policy
+	ToolSelector tool.Selector
+	Tracer       telemetry.Tracer
 
 	SystemPrompt       string
 	AppendSystemPrompt string

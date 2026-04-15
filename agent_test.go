@@ -287,6 +287,51 @@ func TestQueryStartsTracingSpans(t *testing.T) {
 	}
 }
 
+func TestQueryAppliesToolSelectorBeforeModelRequest(t *testing.T) {
+	fake := &fakeModel{turns: [][]model.StreamEvent{{{Kind: model.StreamText, Text: "done"}}}}
+	registry := tool.NewRegistry(
+		tool.Definition{ToolSpec: model.ToolSpec{Name: "search_tools", AlwaysLoad: true}},
+		tool.Definition{ToolSpec: model.ToolSpec{Name: "read_file", SearchHint: "read workspace file", ShouldDefer: true}},
+		tool.Definition{ToolSpec: model.ToolSpec{Name: "write_file", SearchHint: "write workspace file", ShouldDefer: true}},
+	)
+
+	events, err := Query(context.Background(), "read the workspace", Options{
+		Model:        fake,
+		Tools:        registry,
+		ToolSelector: tool.SearchSelector{},
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+	if _, err := Drain(events); err != nil {
+		t.Fatalf("Drain returned error: %v", err)
+	}
+	if len(fake.requests) != 1 {
+		t.Fatalf("model requests = %d, want 1", len(fake.requests))
+	}
+	got := requestToolNames(fake.requests[0])
+	want := []string{"search_tools", "read_file"}
+	if !sameStrings(got, want) {
+		t.Fatalf("tools = %#v, want %#v", got, want)
+	}
+}
+
+func TestQueryToolSelectorErrorStopsRun(t *testing.T) {
+	selectorErr := errors.New("selector unavailable")
+	events, err := Query(context.Background(), "start", Options{
+		Model: &fakeModel{},
+		ToolSelector: tool.SelectorFunc(func(context.Context, *tool.Registry, tool.SelectRequest) ([]model.ToolSpec, error) {
+			return nil, selectorErr
+		}),
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+	if _, err := Drain(events); err == nil || !strings.Contains(err.Error(), "select tools") {
+		t.Fatalf("Drain error = %v, want select tools error", err)
+	}
+}
+
 func TestQueryRunsLifecycleHooks(t *testing.T) {
 	var calls []string
 	hooks := hook.NewRunner(
@@ -545,4 +590,12 @@ func sameStrings(a []string, b []string) bool {
 		}
 	}
 	return true
+}
+
+func requestToolNames(req model.Request) []string {
+	out := make([]string, 0, len(req.Tools))
+	for _, spec := range req.Tools {
+		out = append(out, spec.Name)
+	}
+	return out
 }

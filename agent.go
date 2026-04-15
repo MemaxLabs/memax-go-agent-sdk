@@ -223,7 +223,19 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 				return
 			}
 
-			toolSpecs := opts.Tools.Specs()
+			toolSpecs, err := selectedToolSpecs(turnCtx, opts, messages)
+			if err != nil {
+				err = fmt.Errorf("select tools: %w", err)
+				turnSpan.RecordError(err)
+				emitError(turnCtx, emit, sessionID, turn, err)
+				_ = finish(turn, hook.StopReasonError, err)
+				shouldStop = true
+				return
+			}
+			turnSpan.Set(
+				telemetry.Int("memax.tools.available", len(opts.Tools.Specs())),
+				telemetry.Int("memax.tools.selected", len(toolSpecs)),
+			)
 			modelCtx, modelSpan := opts.Tracer.Start(turnCtx, "memaxagent.model.stream",
 				telemetry.String("memax.session_id", sessionID),
 				telemetry.Int("memax.turn", turn),
@@ -327,6 +339,13 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 	err := fmt.Errorf("max turns exceeded: %d", opts.MaxTurns)
 	emitError(ctx, emit, sessionID, opts.MaxTurns, err)
 	_ = finish(opts.MaxTurns, hook.StopReasonMaxTurns, err)
+}
+
+func selectedToolSpecs(ctx context.Context, opts Options, messages []model.Message) ([]model.ToolSpec, error) {
+	if opts.ToolSelector == nil {
+		return opts.Tools.Specs(), nil
+	}
+	return opts.ToolSelector.Select(ctx, opts.Tools, tool.SelectRequest{Messages: messages})
 }
 
 func collectAssistant(

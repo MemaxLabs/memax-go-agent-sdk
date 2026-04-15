@@ -44,6 +44,7 @@ Current agent SDKs commonly expose autonomous file reading, command execution, w
 - `telemetry`: minimal SDK tracing interface used by core packages.
 - `otel`: OpenTelemetry adapter for SDK tracing.
 - `toolkit/filetools`: optional memory-backed file tools that demonstrate the tool contract without requiring real filesystem access.
+- `toolkit/toolsearch`: optional search tool for discovering deferred tool specs.
 - `toolkit/subagents`: optional delegation tool for bounded child agents with parent/child session correlation.
 - `toolkit/tasktools`: optional task-state tools for planning, progress tracking, and resumable work summaries.
 
@@ -82,6 +83,8 @@ This keeps the core neutral. A `Read` tool can read the host filesystem, a memor
 Tool input schemas are compiled when tools are registered. Model-emitted inputs are validated before permission checks and before handlers run, and validation failures are returned as tool-result errors so the model can recover in the next turn.
 
 Tools can set `MaxResultBytes` to cap the content returned to the model. Truncated results preserve UTF-8 boundaries and carry metadata for original and returned byte counts.
+
+Large registries can opt into `tool.SearchSelector` through `Options.ToolSelector`. The selector always keeps `AlwaysLoad` tools, defers unmatched `ShouldDefer` tools, ranks matches by transcript text against names, descriptions, and search hints, and sends only selected specs to the model. The optional `toolkit/toolsearch` package exposes a `search_tools` tool with `AlwaysLoad` set, so an agent can discover deferred tools and cause matching specs to be loaded on a later turn through normal transcript context.
 
 The optional `toolkit/filetools` package provides `list_files`, `read_file`, and `write_file` tools over a `FileSystem` interface plus a `MemoryFS` implementation. It is a DX reference, not a privileged core capability.
 
