@@ -35,12 +35,12 @@ Current agent SDKs commonly expose autonomous file reading, command execution, w
 - `memaxagent`: public query/session convenience API.
 - `model`: provider-neutral messages, tool-use blocks, streamed events, and model client interface.
 - `tool`: registry, tool definition contract, decoder helpers, and executor.
+- `hook`: lifecycle hooks for host policy, audit, and observability.
 - `permission`: reusable permission checkers and policy composition.
 - `session`: session persistence interface plus in-memory and append-only JSONL implementations.
 
 Expected near-term packages:
 
-- `hook`: lifecycle callbacks for prompt submit, pre-tool-use, post-tool-use, compaction, stop, and session end.
 - `contextwindow`: token budgeting, result truncation, compaction, and summary injection.
 - `workspace`: optional virtual filesystem and checkpoint abstractions.
 - `subagent`: bounded worker agents with parent/child event correlation.
@@ -56,7 +56,7 @@ The target loop is:
 4. Stream model events to the caller.
 5. Collect assistant text and tool-use blocks.
 6. Validate each tool input.
-7. Run permission and hook checks.
+7. Run hook and permission checks.
 8. Execute tools with safe concurrency.
 9. Append tool results to the session.
 10. Continue until the model returns no tool calls, a stop condition fires, or a configured limit is reached.
@@ -75,6 +75,8 @@ This keeps the core neutral. A `Read` tool can read the host filesystem, a memor
 
 Tool input schemas are compiled when tools are registered. Model-emitted inputs are validated before permission checks and before handlers run, and validation failures are returned as tool-result errors so the model can recover in the next turn.
 
+Before-tool hooks run after validation and before permission checks. They can deny execution with a model-visible reason. After-tool hooks observe completed results; observer failures are attached to result metadata and do not convert successful tool output into a model-visible failure.
+
 ## Permissions
 
 Permission checks run before execution and receive the raw tool use plus the tool spec. The first-class policy modes should include:
@@ -87,6 +89,8 @@ Permission checks run before execution and receive the raw tool use plus the too
 - non-interactive auto-deny for tools requiring user input
 
 The policy engine should eventually return structured reasons so model-visible errors, audit logs, and telemetry all agree.
+
+Hooks complement permissions. Permissions answer "may this run?" while hooks let host applications add policy, audit, tracing, and future input rewriting without changing tool implementations.
 
 ## Sessions
 

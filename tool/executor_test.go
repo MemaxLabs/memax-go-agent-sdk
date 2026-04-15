@@ -3,9 +3,11 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/MemaxLabs/memax-go-agent-sdk/hook"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 )
 
@@ -120,6 +122,72 @@ func TestRegistryRejectsInvalidInputSchema(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("Register returned nil, want schema error")
+	}
+}
+
+func TestExecutorBeforeHookDeniesBeforePermissionAndHandler(t *testing.T) {
+	reg := NewRegistry(Definition{
+		ToolSpec: model.ToolSpec{Name: "write"},
+		Handler: func(context.Context, Call) (model.ToolResult, error) {
+			t.Fatal("handler should not run")
+			return model.ToolResult{}, nil
+		},
+	})
+
+	permissionCalled := false
+	hooks := hook.NewRunner(hook.WithBeforeToolUse(func(_ context.Context, input hook.BeforeToolUseInput) (hook.BeforeToolUseResult, error) {
+		if input.SessionID != "session-1" {
+			t.Fatalf("SessionID = %q, want session-1", input.SessionID)
+		}
+		return hook.BeforeToolUseResult{DenyReason: "blocked by hook"}, nil
+	}))
+
+	results := collect(Executor{
+		Registry: reg,
+		Permissions: permissionFunc(func(context.Context, model.ToolUse, model.ToolSpec) Decision {
+			permissionCalled = true
+			return Decision{Allow: true}
+		}),
+		Hooks:   hooks,
+		Runtime: Runtime{SessionID: "session-1"},
+	}.Run(context.Background(), []model.ToolUse{{ID: "1", Name: "write"}}))
+
+	if permissionCalled {
+		t.Fatal("permission checker should not run after hook denial")
+	}
+	if got, want := len(results), 1; got != want {
+		t.Fatalf("len(results) = %d, want %d", got, want)
+	}
+	if !results[0].IsError || results[0].Content != "blocked by hook" {
+		t.Fatalf("unexpected result: %#v", results[0])
+	}
+}
+
+func TestExecutorAfterHookErrorsAttachMetadataWithoutFailingResult(t *testing.T) {
+	reg := NewRegistry(Definition{
+		ToolSpec: model.ToolSpec{Name: "read"},
+		Handler: func(context.Context, Call) (model.ToolResult, error) {
+			return model.ToolResult{Content: "ok"}, nil
+		},
+	})
+	hooks := hook.NewRunner(hook.WithAfterToolUse(func(context.Context, hook.AfterToolUseInput) error {
+		return errors.New("audit sink unavailable")
+	}))
+
+	results := collect(Executor{
+		Registry: reg,
+		Hooks:    hooks,
+	}.Run(context.Background(), []model.ToolUse{{ID: "1", Name: "read"}}))
+
+	if got, want := len(results), 1; got != want {
+		t.Fatalf("len(results) = %d, want %d", got, want)
+	}
+	if results[0].IsError || results[0].Content != "ok" {
+		t.Fatalf("unexpected result: %#v", results[0])
+	}
+	hookErrors, ok := results[0].Metadata["hook_errors"].([]string)
+	if !ok || len(hookErrors) != 1 || hookErrors[0] != "audit sink unavailable" {
+		t.Fatalf("hook_errors = %#v, want audit sink error", results[0].Metadata["hook_errors"])
 	}
 }
 

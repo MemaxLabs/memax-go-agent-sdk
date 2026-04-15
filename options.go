@@ -3,6 +3,7 @@ package memaxagent
 import (
 	"time"
 
+	"github.com/MemaxLabs/memax-go-agent-sdk/hook"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/permission"
 	"github.com/MemaxLabs/memax-go-agent-sdk/session"
@@ -18,6 +19,7 @@ type Options struct {
 	Tools       *tool.Registry
 	Permissions permission.Checker
 	Sessions    session.Store
+	Hooks       *hook.Runner
 
 	SystemPrompt       string
 	AppendSystemPrompt string

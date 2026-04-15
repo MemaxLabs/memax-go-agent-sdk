@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/MemaxLabs/memax-go-agent-sdk/hook"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 )
 
@@ -22,6 +23,7 @@ type Decision struct {
 type Executor struct {
 	Registry       *Registry
 	Permissions    PermissionChecker
+	Hooks          *hook.Runner
 	MaxConcurrency int
 	Runtime        Runtime
 }
@@ -107,6 +109,20 @@ func (e Executor) runOne(ctx context.Context, use model.ToolUse) model.ToolResul
 	}
 
 	spec := t.Spec()
+	if e.Hooks != nil {
+		result, err := e.Hooks.BeforeToolUse(ctx, hook.BeforeToolUseInput{
+			SessionID: e.Runtime.SessionID,
+			Use:       use,
+			Spec:      spec,
+		})
+		if err != nil {
+			return errorResult(use, fmt.Errorf("before tool hook failed: %w", err))
+		}
+		if result.DenyReason != "" {
+			return errorResult(use, fmt.Errorf("%s", result.DenyReason))
+		}
+	}
+
 	if e.Permissions != nil {
 		decision := e.Permissions.Check(ctx, use, spec)
 		if !decision.Allow {
@@ -123,6 +139,17 @@ func (e Executor) runOne(ctx context.Context, use model.ToolUse) model.ToolResul
 	}
 	result.ToolUseID = use.ID
 	result.Name = use.Name
+	if e.Hooks != nil {
+		errs := e.Hooks.AfterToolUse(ctx, hook.AfterToolUseInput{
+			SessionID: e.Runtime.SessionID,
+			Use:       use,
+			Spec:      spec,
+			Result:    result,
+		})
+		if len(errs) > 0 {
+			result = withHookErrors(result, errs)
+		}
+	}
 	return result
 }
 
@@ -133,6 +160,27 @@ func sendResult(ctx context.Context, out chan<- model.ToolResult, result model.T
 	case out <- result:
 		return true
 	}
+}
+
+func withHookErrors(result model.ToolResult, errs []error) model.ToolResult {
+	if len(errs) == 0 {
+		return result
+	}
+	if result.Metadata == nil {
+		result.Metadata = make(map[string]any)
+	}
+	messages := make([]string, 0, len(errs))
+	for _, err := range errs {
+		if err == nil {
+			continue
+		}
+		messages = append(messages, err.Error())
+	}
+	if len(messages) == 0 {
+		return result
+	}
+	result.Metadata["hook_errors"] = messages
+	return result
 }
 
 func errorResult(use model.ToolUse, err error) model.ToolResult {

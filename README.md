@@ -13,6 +13,7 @@ Implemented foundation:
 - provider-neutral model streaming interfaces
 - typed tool registry and executor
 - compiled JSON Schema validation before tool execution
+- before/after tool lifecycle hooks
 - permission checker seam
 - in-memory and append-only JSONL session stores
 - first autonomous query loop skeleton

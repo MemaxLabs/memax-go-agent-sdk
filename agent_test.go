@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/MemaxLabs/memax-go-agent-sdk/hook"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
 )
@@ -105,6 +106,52 @@ func TestQueryFeedsValidationErrorBackToModel(t *testing.T) {
 	last := fake.requests[1].Messages[len(fake.requests[1].Messages)-1]
 	if last.Role != model.RoleTool || last.ToolResult == nil || !last.ToolResult.IsError {
 		t.Fatalf("last message before recovery = %#v, want tool error", last)
+	}
+}
+
+func TestQueryFeedsHookDenialBackToModel(t *testing.T) {
+	registry := tool.NewRegistry(tool.Definition{
+		ToolSpec: model.ToolSpec{Name: "write"},
+		Handler: func(context.Context, tool.Call) (model.ToolResult, error) {
+			t.Fatal("handler should not run after hook denial")
+			return model.ToolResult{}, nil
+		},
+	})
+	hooks := hook.NewRunner(hook.WithBeforeToolUse(func(context.Context, hook.BeforeToolUseInput) (hook.BeforeToolUseResult, error) {
+		return hook.BeforeToolUseResult{DenyReason: "writes are disabled"}, nil
+	}))
+	fake := &fakeModel{turns: [][]model.StreamEvent{
+		{
+			{
+				Kind: model.StreamToolUse,
+				ToolUse: model.ToolUse{
+					ID:    "tool-1",
+					Name:  "write",
+					Input: json.RawMessage(`{}`),
+				},
+			},
+		},
+		{{Kind: model.StreamText, Text: "recovered"}},
+	}}
+
+	events, err := Query(context.Background(), "write the file", Options{
+		Model: fake,
+		Tools: registry,
+		Hooks: hooks,
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+	result, err := Drain(events)
+	if err != nil {
+		t.Fatalf("Drain returned error: %v", err)
+	}
+	if result != "recovered" {
+		t.Fatalf("result = %q, want recovered", result)
+	}
+	last := fake.requests[1].Messages[len(fake.requests[1].Messages)-1]
+	if last.ToolResult == nil || !last.ToolResult.IsError || last.ToolResult.Content != "writes are disabled" {
+		t.Fatalf("last message before recovery = %#v, want hook denial tool error", last)
 	}
 }
 

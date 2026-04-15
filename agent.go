@@ -50,7 +50,9 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 	executor := tool.Executor{
 		Registry:       opts.Tools,
 		Permissions:    opts.Permissions,
+		Hooks:          opts.Hooks,
 		MaxConcurrency: opts.MaxToolConcurrency,
+		Runtime:        tool.Runtime{SessionID: sessionID},
 	}
 
 	emit := func(event Event) bool {

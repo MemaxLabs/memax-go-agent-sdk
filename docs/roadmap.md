@@ -17,7 +17,7 @@
 
 ## Phase 2: Production Orchestration
 
-- Add hook engine: session start/end, user prompt submit, pre-tool-use, post-tool-use, stop, compaction.
+- Add hook engine: before/after tool-use hooks exist; session start/end, user prompt submit, stop, and compaction hooks remain.
 - Add structured permission modes and host approval callbacks.
 - Add context budgeting and automatic compaction.
 - Add tool result truncation and external result storage.
