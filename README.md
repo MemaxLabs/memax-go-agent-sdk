@@ -18,6 +18,7 @@ Implemented foundation:
 - permission checker seam
 - in-memory and append-only JSONL session stores
 - memory-backed file tools for examples and tests
+- OpenAI Responses API model adapter
 - first autonomous query loop skeleton
 
 ## Try It
@@ -29,5 +30,15 @@ go run ./examples/memory_tools
 ```
 
 It uses a scripted model and in-memory `list_files`, `read_file`, and `write_file` tools, so it does not require network access or model-provider credentials.
+
+To use the OpenAI adapter:
+
+```go
+client := openai.NewFromEnv("gpt-5")
+events, err := memaxagent.Query(ctx, "Inspect the workspace.", memaxagent.Options{
+    Model: client,
+    Tools: registry,
+})
+```
 
 Next implementation work is tracked in [docs/roadmap.md](docs/roadmap.md).

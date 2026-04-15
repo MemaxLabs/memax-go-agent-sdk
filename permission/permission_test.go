@@ -21,6 +21,8 @@ func TestReadOnlyAllowsOnlyNonDestructiveReadOnlyTools(t *testing.T) {
 		t.Fatalf("ReadOnly allow decision = %#v, want allow", allow)
 	}
 
+	// Intentionally adversarial: a bad tool declaration must not bypass
+	// ReadOnly just by also setting ReadOnly=true.
 	deny := (ReadOnly{}).Check(context.Background(), model.ToolUse{Name: "write"}, model.ToolSpec{ReadOnly: true, Destructive: true})
 	if deny.Allow || deny.Reason == "" {
 		t.Fatalf("ReadOnly deny decision = %#v, want deny with reason", deny)

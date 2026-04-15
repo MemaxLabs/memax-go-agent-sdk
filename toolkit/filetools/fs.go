@@ -41,7 +41,7 @@ func (fs *MemoryFS) ReadFile(_ context.Context, name string) (string, error) {
 
 func (fs *MemoryFS) WriteFile(_ context.Context, name string, content string) error {
 	name = cleanPath(name)
-	if name == "." || name == "/" {
+	if isInvalidWritePath(name) {
 		return fmt.Errorf("invalid file path: %s", name)
 	}
 	fs.mu.Lock()
@@ -71,6 +71,10 @@ func cleanPath(name string) string {
 		return "."
 	}
 	return path.Clean(name)
+}
+
+func isInvalidWritePath(name string) bool {
+	return cleanPath(name) == "."
 }
 
 func cleanPrefix(prefix string) string {

@@ -37,6 +37,7 @@ Current agent SDKs commonly expose autonomous file reading, command execution, w
 - `tool`: registry, tool definition contract, decoder helpers, and executor.
 - `hook`: lifecycle hooks for host policy, audit, and observability.
 - `permission`: reusable permission checkers and policy composition.
+- `providers/openai`: optional Responses API adapter for hosted model streaming and function calls.
 - `session`: session persistence interface plus in-memory and append-only JSONL implementations.
 - `toolkit/filetools`: optional memory-backed file tools that demonstrate the tool contract without requiring real filesystem access.
 

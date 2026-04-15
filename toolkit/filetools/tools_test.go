@@ -3,6 +3,7 @@ package filetools
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
@@ -41,6 +42,37 @@ func TestMemoryFileTools(t *testing.T) {
 	})
 	if list.Content != "docs/guide.md\ndocs/new.md\ndocs/notes.txt" {
 		t.Fatalf("list content = %q", list.Content)
+	}
+}
+
+func TestMemoryFSReadMissingFile(t *testing.T) {
+	fs := NewMemoryFS(nil)
+	_, err := fs.ReadFile(context.Background(), "missing.txt")
+	if err == nil {
+		t.Fatal("ReadFile returned nil, want missing file error")
+	}
+}
+
+func TestMemoryFSRejectsInvalidWritePath(t *testing.T) {
+	fs := NewMemoryFS(nil)
+	err := fs.WriteFile(context.Background(), "/", "content")
+	if err == nil {
+		t.Fatal("WriteFile returned nil, want invalid path error")
+	}
+}
+
+func TestListToolEmptyPrefixListsAllFiles(t *testing.T) {
+	fs := NewMemoryFS(map[string]string{
+		"b.txt": "b",
+		"a.txt": "a",
+	})
+	result := mustRunTool(t, NewListTool(fs), model.ToolUse{
+		ID:    "list-1",
+		Name:  ListToolName,
+		Input: json.RawMessage(`{}`),
+	})
+	if got, want := strings.Split(result.Content, "\n"), []string{"a.txt", "b.txt"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("listed files = %#v, want %#v", got, want)
 	}
 }
 

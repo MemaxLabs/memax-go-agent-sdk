@@ -2,6 +2,7 @@ package filetools
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
@@ -80,6 +81,9 @@ func NewWriteTool(fs FileSystem) tool.Tool {
 			if err != nil {
 				return model.ToolResult{}, err
 			}
+			if isInvalidWritePath(input.Path) {
+				return model.ToolResult{}, errInvalidPath(input.Path)
+			}
 			if err := fs.WriteFile(ctx, input.Path, input.Content); err != nil {
 				return model.ToolResult{}, err
 			}
@@ -133,4 +137,8 @@ type writeInput struct {
 
 type listInput struct {
 	Prefix string `json:"prefix"`
+}
+
+func errInvalidPath(name string) error {
+	return fmt.Errorf("invalid file path: %s", name)
 }
