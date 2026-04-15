@@ -26,7 +26,7 @@
 ## Phase 3: Advanced Autonomy
 
 - Add subagent tool with parent/child session correlation. Initial bounded worker tool exists.
-- Add todo/task state tools.
+- Add todo/task state tools. Initial task toolkit exists.
 - Add tool search and deferred tool loading for large registries.
 - Add checkpoint interfaces for virtual workspaces.
 - Add resumable/forkable durable sessions.

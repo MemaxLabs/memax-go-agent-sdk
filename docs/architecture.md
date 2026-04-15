@@ -45,6 +45,7 @@ Current agent SDKs commonly expose autonomous file reading, command execution, w
 - `otel`: OpenTelemetry adapter for SDK tracing.
 - `toolkit/filetools`: optional memory-backed file tools that demonstrate the tool contract without requiring real filesystem access.
 - `toolkit/subagents`: optional delegation tool for bounded child agents with parent/child session correlation.
+- `toolkit/tasktools`: optional task-state tools for planning, progress tracking, and resumable work summaries.
 
 Expected near-term packages:
 
@@ -83,6 +84,8 @@ Tool input schemas are compiled when tools are registered. Model-emitted inputs 
 Tools can set `MaxResultBytes` to cap the content returned to the model. Truncated results preserve UTF-8 boundaries and carry metadata for original and returned byte counts.
 
 The optional `toolkit/filetools` package provides `list_files`, `read_file`, and `write_file` tools over a `FileSystem` interface plus a `MemoryFS` implementation. It is a DX reference, not a privileged core capability.
+
+The optional `toolkit/tasktools` package provides `list_tasks`, `upsert_task`, and `delete_task` over a `Store` interface plus a concurrency-safe memory store. Task state is deliberately tool-owned state rather than implicit model memory; hosts can persist it in a database, scope it to a workspace, or discard it for short-lived runs.
 
 Before-tool hooks run after validation and before permission checks. They can deny execution with a model-visible reason. After-tool hooks observe completed results; observer failures are attached to result metadata and do not convert successful tool output into a model-visible failure.
 
