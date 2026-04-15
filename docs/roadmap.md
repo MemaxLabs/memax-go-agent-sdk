@@ -10,7 +10,7 @@
 ## Phase 1: Useful Local Agent
 
 - Add hosted model provider adapters behind `model.Client`.
-- Add SDK examples for custom in-memory `Read`, `Write`, `Glob`, and `Grep` tools.
+- Add SDK examples for custom in-memory file tools. Initial `list_files`, `read_file`, and `write_file` toolkit plus runnable example exist.
 - Add JSON schema validation before tool execution. Done in the initial Phase 1 slice.
 - Add durable JSONL session store. Done in the initial Phase 1 slice.
 - Add integration tests with a fake model stream that calls tools across multiple turns. Initial coverage exists.

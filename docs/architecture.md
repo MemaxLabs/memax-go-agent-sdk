@@ -38,6 +38,7 @@ Current agent SDKs commonly expose autonomous file reading, command execution, w
 - `hook`: lifecycle hooks for host policy, audit, and observability.
 - `permission`: reusable permission checkers and policy composition.
 - `session`: session persistence interface plus in-memory and append-only JSONL implementations.
+- `toolkit/filetools`: optional memory-backed file tools that demonstrate the tool contract without requiring real filesystem access.
 
 Expected near-term packages:
 
@@ -76,6 +77,8 @@ This keeps the core neutral. A `Read` tool can read the host filesystem, a memor
 Tool input schemas are compiled when tools are registered. Model-emitted inputs are validated before permission checks and before handlers run, and validation failures are returned as tool-result errors so the model can recover in the next turn.
 
 Tools can set `MaxResultBytes` to cap the content returned to the model. Truncated results preserve UTF-8 boundaries and carry metadata for original and returned byte counts.
+
+The optional `toolkit/filetools` package provides `list_files`, `read_file`, and `write_file` tools over a `FileSystem` interface plus a `MemoryFS` implementation. It is a DX reference, not a privileged core capability.
 
 Before-tool hooks run after validation and before permission checks. They can deny execution with a model-visible reason. After-tool hooks observe completed results; observer failures are attached to result metadata and do not convert successful tool output into a model-visible failure.
 

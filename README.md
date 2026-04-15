@@ -6,7 +6,7 @@ The core SDK should not assume access to the real filesystem, shell, browser, ne
 
 ## Current Status
 
-This repository is in the planning and scaffold phase.
+This repository is in the early foundation phase.
 
 Implemented foundation:
 
@@ -17,6 +17,17 @@ Implemented foundation:
 - before/after tool lifecycle hooks
 - permission checker seam
 - in-memory and append-only JSONL session stores
+- memory-backed file tools for examples and tests
 - first autonomous query loop skeleton
+
+## Try It
+
+Run the deterministic memory-workspace example:
+
+```sh
+go run ./examples/memory_tools
+```
+
+It uses a scripted model and in-memory `list_files`, `read_file`, and `write_file` tools, so it does not require network access or model-provider credentials.
 
 Next implementation work is tracked in [docs/roadmap.md](docs/roadmap.md).
