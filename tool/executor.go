@@ -7,6 +7,7 @@ import (
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/hook"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
+	"github.com/MemaxLabs/memax-go-agent-sdk/telemetry"
 )
 
 const DefaultMaxConcurrency = 10
@@ -26,6 +27,7 @@ type Executor struct {
 	Hooks          *hook.Runner
 	MaxConcurrency int
 	Runtime        Runtime
+	Tracer         telemetry.Tracer
 }
 
 func (e Executor) Run(ctx context.Context, uses []model.ToolUse) <-chan model.ToolResult {
@@ -99,16 +101,38 @@ func (e Executor) runConcurrent(ctx context.Context, uses []model.ToolUse, out c
 }
 
 func (e Executor) runOne(ctx context.Context, use model.ToolUse) model.ToolResult {
-	t, ok := e.Registry.Get(use.Name)
-	if !ok {
-		return errorResult(use, fmt.Errorf("no such tool: %s", use.Name))
+	tracer := e.Tracer
+	if tracer == nil {
+		tracer = telemetry.NoopTracer{}
 	}
-	schema, _ := e.Registry.InputSchema(use.Name)
-	if err := validateInput(use, schema); err != nil {
+	ctx, span := tracer.Start(ctx, "memaxagent.tool.execute",
+		telemetry.String("memax.session_id", e.Runtime.SessionID),
+		telemetry.String("memax.tool.id", use.ID),
+		telemetry.String("memax.tool.name", use.Name),
+		telemetry.Int("memax.tool.input_bytes", len(use.Input)),
+	)
+	defer span.End()
+	fail := func(err error) model.ToolResult {
+		span.RecordError(err)
+		span.Set(telemetry.Bool("memax.tool.error", true))
 		return errorResult(use, err)
 	}
 
+	t, ok := e.Registry.Get(use.Name)
+	if !ok {
+		return fail(fmt.Errorf("no such tool: %s", use.Name))
+	}
+	schema, _ := e.Registry.InputSchema(use.Name)
+	if err := validateInput(use, schema); err != nil {
+		return fail(err)
+	}
+
 	spec := t.Spec()
+	span.Set(
+		telemetry.Bool("memax.tool.read_only", spec.ReadOnly),
+		telemetry.Bool("memax.tool.destructive", spec.Destructive),
+		telemetry.Bool("memax.tool.concurrency_safe", spec.ConcurrencySafe),
+	)
 	if e.Hooks != nil {
 		result, err := e.Hooks.BeforeToolUse(ctx, hook.BeforeToolUseInput{
 			SessionID: e.Runtime.SessionID,
@@ -116,10 +140,10 @@ func (e Executor) runOne(ctx context.Context, use model.ToolUse) model.ToolResul
 			Spec:      spec,
 		})
 		if err != nil {
-			return errorResult(use, fmt.Errorf("before tool hook failed: %w", err))
+			return fail(fmt.Errorf("before tool hook failed: %w", err))
 		}
 		if result.DenyReason != "" {
-			return errorResult(use, fmt.Errorf("%s", result.DenyReason))
+			return fail(fmt.Errorf("%s", result.DenyReason))
 		}
 	}
 
@@ -129,17 +153,24 @@ func (e Executor) runOne(ctx context.Context, use model.ToolUse) model.ToolResul
 			if decision.Reason == "" {
 				decision.Reason = "permission denied"
 			}
-			return errorResult(use, fmt.Errorf("%s", decision.Reason))
+			return fail(fmt.Errorf("%s", decision.Reason))
 		}
 	}
 
 	result, err := t.Execute(ctx, Call{Use: use, Runtime: e.Runtime})
 	if err != nil {
-		return errorResult(use, err)
+		return fail(err)
 	}
 	result.ToolUseID = use.ID
 	result.Name = use.Name
 	result = enforceResultLimit(result, spec.MaxResultBytes)
+	span.Set(
+		telemetry.Bool("memax.tool.error", result.IsError),
+		telemetry.Int("memax.tool.result_bytes", len(result.Content)),
+	)
+	if result.IsError {
+		span.RecordError(fmt.Errorf("%s", result.Content))
+	}
 	if e.Hooks != nil {
 		errs := e.Hooks.AfterToolUse(ctx, hook.AfterToolUseInput{
 			SessionID: e.Runtime.SessionID,

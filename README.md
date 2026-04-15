@@ -21,6 +21,7 @@ Implemented foundation:
 - OpenAI Responses API model adapter
 - Anthropic Messages API model adapter
 - context-window policies for recent-message limiting, token budgets, and summarizing compaction
+- optional OpenTelemetry tracing adapter
 - first autonomous query loop skeleton
 
 ## Try It
@@ -50,6 +51,16 @@ client := anthropic.NewFromEnv("your-anthropic-model")
 events, err := memaxagent.Query(ctx, "Inspect the workspace.", memaxagent.Options{
     Model: client,
     Tools: registry,
+})
+```
+
+To emit OpenTelemetry spans, import `github.com/MemaxLabs/memax-go-agent-sdk/otel` as `sdkotel`:
+
+```go
+events, err := memaxagent.Query(ctx, "Inspect the workspace.", memaxagent.Options{
+    Model:  client,
+    Tools:  registry,
+    Tracer: sdkotel.NewTracer("my-agent-service"),
 })
 ```
 

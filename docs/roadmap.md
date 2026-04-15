@@ -21,7 +21,7 @@
 - Add structured permission modes and host approval callbacks.
 - Add context budgeting and automatic compaction. Recent-message, token-budget, and summarizing-budget policies exist; retry-after-context-failure remains.
 - Add tool result truncation and external result storage. Per-tool truncation exists; external result storage remains.
-- Add OpenTelemetry spans and metrics.
+- Add OpenTelemetry spans and metrics. Query, turn, context, model-stream, and tool-execution spans exist; metrics remain.
 
 ## Phase 3: Advanced Autonomy
 

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
+	"github.com/MemaxLabs/memax-go-agent-sdk/telemetry"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
 )
 
@@ -23,14 +24,22 @@ func Query(ctx context.Context, prompt string, opts Options) (<-chan Event, erro
 	if opts.MaxRunDuration > 0 {
 		ctx, cancel = context.WithTimeout(ctx, opts.MaxRunDuration)
 	}
+	ctx, querySpan := opts.Tracer.Start(ctx, "memaxagent.query",
+		telemetry.Int("memax.max_turns", opts.MaxTurns),
+		telemetry.Int("memax.max_tool_concurrency", opts.MaxToolConcurrency),
+	)
 
 	sess, err := opts.Sessions.Create(ctx)
 	if err != nil {
 		if cancel != nil {
 			cancel()
 		}
-		return nil, fmt.Errorf("create session: %w", err)
+		err = fmt.Errorf("create session: %w", err)
+		querySpan.RecordError(err)
+		querySpan.End()
+		return nil, err
 	}
+	querySpan.Set(telemetry.String("memax.session_id", sess.ID))
 	if err := opts.Sessions.Append(ctx, sess.ID, model.Message{
 		Role:    model.RoleUser,
 		Content: []model.ContentBlock{{Type: model.ContentText, Text: prompt}},
@@ -38,12 +47,16 @@ func Query(ctx context.Context, prompt string, opts Options) (<-chan Event, erro
 		if cancel != nil {
 			cancel()
 		}
-		return nil, fmt.Errorf("append user prompt: %w", err)
+		err = fmt.Errorf("append user prompt: %w", err)
+		querySpan.RecordError(err)
+		querySpan.End()
+		return nil, err
 	}
 
 	events := make(chan Event)
 	go func() {
 		defer close(events)
+		defer querySpan.End()
 		if cancel != nil {
 			defer cancel()
 		}
@@ -60,6 +73,7 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 		Hooks:          opts.Hooks,
 		MaxConcurrency: opts.MaxToolConcurrency,
 		Runtime:        tool.Runtime{SessionID: sessionID},
+		Tracer:         opts.Tracer,
 	}
 
 	emit := func(event Event) bool {
@@ -76,89 +90,148 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 	}
 
 	for turn := 1; turn <= opts.MaxTurns; turn++ {
-		messages, err := opts.Sessions.Messages(ctx, sessionID)
-		if err != nil {
-			emitError(ctx, emit, sessionID, turn, fmt.Errorf("load session messages: %w", err))
-			return
-		}
-		if opts.Context != nil {
-			originalMessages := messages
-			originalCount := len(messages)
-			messages, err = opts.Context.Apply(ctx, messages)
+		turnCtx, turnSpan := opts.Tracer.Start(ctx, "memaxagent.turn",
+			telemetry.String("memax.session_id", sessionID),
+			telemetry.Int("memax.turn", turn),
+		)
+		shouldStop := false
+		func() {
+			defer turnSpan.End()
+
+			messages, err := opts.Sessions.Messages(turnCtx, sessionID)
 			if err != nil {
-				emitError(ctx, emit, sessionID, turn, fmt.Errorf("apply context policy: %w", err))
+				err = fmt.Errorf("load session messages: %w", err)
+				turnSpan.RecordError(err)
+				emitError(turnCtx, emit, sessionID, turn, err)
+				shouldStop = true
 				return
 			}
-			if !reflect.DeepEqual(messages, originalMessages) {
-				event := newEvent(EventContextApplied, sessionID, turn)
-				event.Context = &ContextEvent{
-					OriginalMessages: originalCount,
-					SentMessages:     len(messages),
+			if opts.Context != nil {
+				originalMessages := messages
+				originalCount := len(messages)
+				contextCtx, contextSpan := opts.Tracer.Start(turnCtx, "memaxagent.context.apply",
+					telemetry.String("memax.session_id", sessionID),
+					telemetry.Int("memax.turn", turn),
+					telemetry.Int("memax.context.original_messages", originalCount),
+				)
+				messages, err = opts.Context.Apply(contextCtx, messages)
+				if err != nil {
+					err = fmt.Errorf("apply context policy: %w", err)
+					contextSpan.RecordError(err)
+					contextSpan.End()
+					turnSpan.RecordError(err)
+					emitError(turnCtx, emit, sessionID, turn, err)
+					shouldStop = true
+					return
 				}
-				if !emit(event) {
+				contextSpan.Set(telemetry.Int("memax.context.sent_messages", len(messages)))
+				contextSpan.End()
+				if !reflect.DeepEqual(messages, originalMessages) {
+					event := newEvent(EventContextApplied, sessionID, turn)
+					event.Context = &ContextEvent{
+						OriginalMessages: originalCount,
+						SentMessages:     len(messages),
+					}
+					if !emit(event) {
+						shouldStop = true
+						return
+					}
+				}
+			}
+			turnSpan.Set(telemetry.Int("memax.model.messages", len(messages)))
+
+			if !emit(newEvent(EventModelRequest, sessionID, turn)) {
+				shouldStop = true
+				return
+			}
+
+			toolSpecs := opts.Tools.Specs()
+			modelCtx, modelSpan := opts.Tracer.Start(turnCtx, "memaxagent.model.stream",
+				telemetry.String("memax.session_id", sessionID),
+				telemetry.Int("memax.turn", turn),
+				telemetry.Int("memax.model.messages", len(messages)),
+				telemetry.Int("memax.model.tools", len(toolSpecs)),
+			)
+			stream, err := opts.Model.Stream(modelCtx, model.Request{
+				SessionID:          sessionID,
+				Messages:           messages,
+				Tools:              toolSpecs,
+				SystemPrompt:       opts.SystemPrompt,
+				AppendSystemPrompt: opts.AppendSystemPrompt,
+			})
+			if err != nil {
+				err = fmt.Errorf("stream model: %w", err)
+				modelSpan.RecordError(err)
+				modelSpan.End()
+				turnSpan.RecordError(err)
+				emitError(turnCtx, emit, sessionID, turn, err)
+				shouldStop = true
+				return
+			}
+
+			assistant, uses, err := collectAssistant(modelCtx, emit, stream, sessionID, turn)
+			if closeErr := stream.Close(); closeErr != nil && err == nil {
+				err = closeErr
+			}
+			modelSpan.Set(
+				telemetry.Int("memax.model.tool_uses", len(uses)),
+				telemetry.Int("memax.model.assistant_blocks", len(assistant.Content)),
+			)
+			if err != nil {
+				modelSpan.RecordError(err)
+				modelSpan.End()
+				turnSpan.RecordError(err)
+				emitError(turnCtx, emit, sessionID, turn, err)
+				shouldStop = true
+				return
+			}
+			modelSpan.End()
+			if len(assistant.Content) > 0 {
+				if err := opts.Sessions.Append(turnCtx, sessionID, assistant); err != nil {
+					err = fmt.Errorf("append assistant message: %w", err)
+					turnSpan.RecordError(err)
+					emitError(turnCtx, emit, sessionID, turn, err)
+					shouldStop = true
 					return
 				}
 			}
-		}
-
-		if !emit(newEvent(EventModelRequest, sessionID, turn)) {
-			return
-		}
-
-		stream, err := opts.Model.Stream(ctx, model.Request{
-			SessionID:          sessionID,
-			Messages:           messages,
-			Tools:              opts.Tools.Specs(),
-			SystemPrompt:       opts.SystemPrompt,
-			AppendSystemPrompt: opts.AppendSystemPrompt,
-		})
-		if err != nil {
-			emitError(ctx, emit, sessionID, turn, fmt.Errorf("stream model: %w", err))
-			return
-		}
-
-		assistant, uses, err := collectAssistant(ctx, emit, stream, sessionID, turn)
-		if closeErr := stream.Close(); closeErr != nil && err == nil {
-			err = closeErr
-		}
-		if err != nil {
-			emitError(ctx, emit, sessionID, turn, err)
-			return
-		}
-		if len(assistant.Content) > 0 {
-			if err := opts.Sessions.Append(ctx, sessionID, assistant); err != nil {
-				emitError(ctx, emit, sessionID, turn, fmt.Errorf("append assistant message: %w", err))
+			if len(uses) == 0 {
+				result := assistant.PlainText()
+				event := newEvent(EventResult, sessionID, turn)
+				event.Result = result
+				emit(event)
+				shouldStop = true
 				return
 			}
-		}
-		if len(uses) == 0 {
-			result := assistant.PlainText()
-			event := newEvent(EventResult, sessionID, turn)
-			event.Result = result
-			emit(event)
-			return
-		}
 
-		results := executor.Run(ctx, uses)
-		for result := range results {
-			event := newEvent(EventToolResult, sessionID, turn)
-			event.ToolResult = &result
-			if !emit(event) {
-				return
+			results := executor.Run(turnCtx, uses)
+			for result := range results {
+				event := newEvent(EventToolResult, sessionID, turn)
+				event.ToolResult = &result
+				if !emit(event) {
+					shouldStop = true
+					return
+				}
+				if err := opts.Sessions.Append(turnCtx, sessionID, model.Message{
+					Role: model.RoleTool,
+					ToolResult: &model.ToolResult{
+						ToolUseID: result.ToolUseID,
+						Name:      result.Name,
+						Content:   result.Content,
+						IsError:   result.IsError,
+						Metadata:  result.Metadata,
+					},
+				}); err != nil {
+					err = fmt.Errorf("append tool result: %w", err)
+					turnSpan.RecordError(err)
+					emitError(turnCtx, emit, sessionID, turn, err)
+					shouldStop = true
+					return
+				}
 			}
-			if err := opts.Sessions.Append(ctx, sessionID, model.Message{
-				Role: model.RoleTool,
-				ToolResult: &model.ToolResult{
-					ToolUseID: result.ToolUseID,
-					Name:      result.Name,
-					Content:   result.Content,
-					IsError:   result.IsError,
-					Metadata:  result.Metadata,
-				},
-			}); err != nil {
-				emitError(ctx, emit, sessionID, turn, fmt.Errorf("append tool result: %w", err))
-				return
-			}
+		}()
+		if shouldStop {
+			return
 		}
 	}
 

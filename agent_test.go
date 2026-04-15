@@ -3,11 +3,13 @@ package memaxagent
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"testing"
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/contextwindow"
 	"github.com/MemaxLabs/memax-go-agent-sdk/hook"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
+	"github.com/MemaxLabs/memax-go-agent-sdk/telemetry"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
 )
 
@@ -261,6 +263,28 @@ func TestQueryEmitsContextAppliedEventWhenMessageCountIsUnchanged(t *testing.T) 
 	}
 }
 
+func TestQueryStartsTracingSpans(t *testing.T) {
+	tracer := &recordingTracer{}
+	events, err := Query(context.Background(), "start", Options{
+		Model: &fakeModel{turns: [][]model.StreamEvent{
+			{{Kind: model.StreamText, Text: "done"}},
+		}},
+		Tracer: tracer,
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+	if _, err := Drain(events); err != nil {
+		t.Fatalf("Drain returned error: %v", err)
+	}
+
+	for _, name := range []string{"memaxagent.query", "memaxagent.turn", "memaxagent.model.stream"} {
+		if !tracer.hasSpan(name) {
+			t.Fatalf("missing span %q in %#v", name, tracer.names())
+		}
+	}
+}
+
 type replaceContextPolicy struct {
 	text string
 }
@@ -311,4 +335,59 @@ func (s *fakeStream) Recv() (model.StreamEvent, error) {
 
 func (s *fakeStream) Close() error {
 	return nil
+}
+
+type recordingTracer struct {
+	mu    sync.Mutex
+	spans []*recordingSpan
+}
+
+func (t *recordingTracer) Start(ctx context.Context, name string, attrs ...telemetry.Attribute) (context.Context, telemetry.Span) {
+	span := &recordingSpan{name: name, attrs: append([]telemetry.Attribute(nil), attrs...)}
+	t.mu.Lock()
+	t.spans = append(t.spans, span)
+	t.mu.Unlock()
+	return ctx, span
+}
+
+func (t *recordingTracer) hasSpan(name string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, span := range t.spans {
+		if span.name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func (t *recordingTracer) names() []string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	names := make([]string, 0, len(t.spans))
+	for _, span := range t.spans {
+		names = append(names, span.name)
+	}
+	return names
+}
+
+type recordingSpan struct {
+	name   string
+	attrs  []telemetry.Attribute
+	ended  bool
+	errors []error
+}
+
+func (s *recordingSpan) Set(attrs ...telemetry.Attribute) {
+	s.attrs = append(s.attrs, attrs...)
+}
+
+func (s *recordingSpan) RecordError(err error) {
+	if err != nil {
+		s.errors = append(s.errors, err)
+	}
+}
+
+func (s *recordingSpan) End() {
+	s.ended = true
 }

@@ -8,6 +8,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/permission"
 	"github.com/MemaxLabs/memax-go-agent-sdk/session"
+	"github.com/MemaxLabs/memax-go-agent-sdk/telemetry"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
 )
 
@@ -22,6 +23,7 @@ type Options struct {
 	Sessions    session.Store
 	Hooks       *hook.Runner
 	Context     contextwindow.Policy
+	Tracer      telemetry.Tracer
 
 	SystemPrompt       string
 	AppendSystemPrompt string
@@ -45,6 +47,9 @@ func (o Options) withDefaults() Options {
 	}
 	if o.Sessions == nil {
 		o.Sessions = session.NewMemoryStore()
+	}
+	if o.Tracer == nil {
+		o.Tracer = telemetry.NoopTracer{}
 	}
 	return o
 }

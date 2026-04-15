@@ -41,14 +41,15 @@ Current agent SDKs commonly expose autonomous file reading, command execution, w
 - `providers/anthropic`: optional Messages API adapter for hosted model streaming and tool-use blocks.
 - `session`: session persistence interface plus in-memory and append-only JSONL implementations.
 - `contextwindow`: deterministic message-window policies used before model requests.
+- `telemetry`: minimal SDK tracing interface used by core packages.
+- `otel`: OpenTelemetry adapter for SDK tracing.
 - `toolkit/filetools`: optional memory-backed file tools that demonstrate the tool contract without requiring real filesystem access.
 
 Expected near-term packages:
 
-- `contextwindow`: token budgeting, result truncation, compaction, and summary injection.
 - `workspace`: optional virtual filesystem and checkpoint abstractions.
 - `subagent`: bounded worker agents with parent/child event correlation.
-- `otel`: OpenTelemetry spans and metrics around turns, model calls, tools, hooks, and compaction.
+- `metrics`: optional counters and histograms around turns, model calls, tools, hooks, and compaction.
 
 ## Core Loop
 
@@ -111,6 +112,10 @@ The SDK includes an in-memory store for tests and short-lived agents, plus an ap
 Context-window policies transform session messages before each model request without mutating the durable session transcript. `RecentMessages` keeps a bounded suffix. `TokenBudget` keeps the newest messages under a caller-defined estimate budget. Both drop leading orphan tool-result messages after trimming.
 
 `SummarizingBudget` adds model-backed compaction behind the same `Policy` interface. It checks whether the full transcript fits, reserves part of the configured budget for a synthetic summary, asks a pluggable `Summarizer` to compact the older prefix, and prepends that summary to the newest structurally valid suffix. `ModelSummarizer` is the default model-client adapter; applications can provide their own summarizer for deterministic summaries, hosted summarization, cached summaries, or domain-specific compression.
+
+## Observability
+
+Tracing is optional and uses a small SDK-owned `telemetry.Tracer` interface so the core can be tested without a real exporter. The `otel` package adapts that interface to OpenTelemetry. Current spans cover full query runs, turns, context policy application, model streaming, and individual tool executions. Spans carry stable attributes for session IDs, turn numbers, message counts, tool IDs, tool names, tool input/result byte counts, and tool policy flags.
 
 Durable session stores should support:
 

@@ -9,6 +9,7 @@ import (
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/hook"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
+	"github.com/MemaxLabs/memax-go-agent-sdk/telemetry"
 )
 
 func TestExecutorRunsConcurrentBatchInInputOrder(t *testing.T) {
@@ -234,6 +235,35 @@ func TestExecutorTruncatesAtUTF8Boundary(t *testing.T) {
 	}
 }
 
+func TestExecutorStartsToolSpan(t *testing.T) {
+	tracer := &toolTracer{}
+	reg := NewRegistry(Definition{
+		ToolSpec: model.ToolSpec{Name: "read", ReadOnly: true},
+		Handler: func(context.Context, Call) (model.ToolResult, error) {
+			return model.ToolResult{Content: "ok"}, nil
+		},
+	})
+
+	results := collect(Executor{
+		Registry: reg,
+		Runtime:  Runtime{SessionID: "session-1"},
+		Tracer:   tracer,
+	}.Run(context.Background(), []model.ToolUse{{ID: "toolu_1", Name: "read", Input: json.RawMessage(`{}`)}}))
+
+	if len(results) != 1 || results[0].Content != "ok" {
+		t.Fatalf("results = %#v", results)
+	}
+	if tracer.name != "memaxagent.tool.execute" {
+		t.Fatalf("span name = %q", tracer.name)
+	}
+	if !tracer.ended {
+		t.Fatal("tool span was not ended")
+	}
+	if !hasAttr(tracer.attrs, "memax.tool.name", "read") || !hasAttr(tracer.attrs, "memax.session_id", "session-1") {
+		t.Fatalf("span attrs = %#v", tracer.attrs)
+	}
+}
+
 type permissionFunc func(context.Context, model.ToolUse, model.ToolSpec) Decision
 
 func (f permissionFunc) Check(ctx context.Context, use model.ToolUse, spec model.ToolSpec) Decision {
@@ -246,4 +276,35 @@ func collect(ch <-chan model.ToolResult) []model.ToolResult {
 		out = append(out, item)
 	}
 	return out
+}
+
+type toolTracer struct {
+	name  string
+	attrs []telemetry.Attribute
+	ended bool
+}
+
+func (t *toolTracer) Start(ctx context.Context, name string, attrs ...telemetry.Attribute) (context.Context, telemetry.Span) {
+	t.name = name
+	t.attrs = append(t.attrs, attrs...)
+	return ctx, t
+}
+
+func (t *toolTracer) Set(attrs ...telemetry.Attribute) {
+	t.attrs = append(t.attrs, attrs...)
+}
+
+func (t *toolTracer) RecordError(error) {}
+
+func (t *toolTracer) End() {
+	t.ended = true
+}
+
+func hasAttr(attrs []telemetry.Attribute, key string, value any) bool {
+	for _, attr := range attrs {
+		if attr.Key == key && attr.Value == value {
+			return true
+		}
+	}
+	return false
 }
