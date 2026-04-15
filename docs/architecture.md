@@ -40,10 +40,12 @@ Current agent SDKs commonly expose autonomous file reading, command execution, w
 - `providers/openai`: optional Responses API adapter for hosted model streaming and function calls.
 - `providers/anthropic`: optional Messages API adapter for hosted model streaming and tool-use blocks.
 - `session`: session persistence interface plus in-memory and append-only JSONL implementations.
+- `checkpoint`: checkpoint metadata, manager interface, and in-memory checkpoint manager.
 - `contextwindow`: deterministic message-window policies used before model requests.
 - `telemetry`: minimal SDK tracing interface used by core packages.
 - `otel`: OpenTelemetry adapter for SDK tracing.
 - `toolkit/filetools`: optional memory-backed file tools that demonstrate the tool contract without requiring real filesystem access.
+- `toolkit/checkpointtools`: optional checkpoint tools over a checkpoint manager.
 - `toolkit/toolsearch`: optional search tool for discovering deferred tool specs.
 - `toolkit/subagents`: optional delegation tool for bounded child agents with parent/child session correlation.
 - `toolkit/tasktools`: optional task-state tools for planning, progress tracking, and resumable work summaries.
@@ -89,6 +91,8 @@ Large registries can opt into `tool.SearchSelector` through `Options.ToolSelecto
 The optional `toolkit/filetools` package provides `list_files`, `read_file`, and `write_file` tools over a `FileSystem` interface plus a `MemoryFS` implementation. It is a DX reference, not a privileged core capability.
 
 The optional `toolkit/tasktools` package provides `list_tasks`, `upsert_task`, and `delete_task` over a `Store` interface plus a concurrency-safe memory store. Task state is deliberately tool-owned state rather than implicit model memory; hosts can persist it in a database, scope it to a workspace, or discard it for short-lived runs.
+
+The optional `toolkit/checkpointtools` package provides `create_checkpoint`, `list_checkpoints`, `restore_checkpoint`, and `delete_checkpoint` over the `checkpoint.Manager` interface. The SDK's in-memory manager stores checkpoint metadata and is useful for tests; production managers should connect these operations to a virtual workspace, filesystem snapshot service, database branch, or remote sandbox. Checkpoints are not stored inside session transcripts, but checkpoint records carry session and parent-session IDs for correlation.
 
 Before-tool hooks run after validation and before permission checks. They can deny execution with a model-visible reason. After-tool hooks observe completed results; observer failures are attached to result metadata and do not convert successful tool output into a model-visible failure.
 

@@ -18,6 +18,7 @@ Implemented foundation:
 - structured permission policies with host approval callbacks
 - in-memory and append-only JSONL session stores
 - resumable and forkable sessions
+- checkpoint manager interfaces and checkpoint tools
 - memory-backed file tools for examples and tests
 - bounded subagent tool with parent/child session correlation
 - task state tools for agent planning and progress tracking
