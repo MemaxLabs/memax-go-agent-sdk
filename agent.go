@@ -229,6 +229,8 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 		return
 	}
 
+	// Output repair attempts are scoped to the whole Query run so a contract
+	// cannot consume unbounded turns by repeatedly producing invalid finals.
 	outputRetries := 0
 	for turn := 1; turn <= opts.MaxTurns; turn++ {
 		turnStarted := time.Now()

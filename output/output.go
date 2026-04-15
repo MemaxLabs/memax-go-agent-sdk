@@ -38,7 +38,8 @@ func (c Contract) RetryLimit() int {
 	return c.MaxRetries
 }
 
-// Validate checks text against c's JSON Schema.
+// Validate checks text against c's JSON Schema. It compiles the schema on each
+// call; callers validating repeatedly should use Compile and reuse Validator.
 func (c Contract) Validate(ctx context.Context, text string) error {
 	validator, err := c.Compile(ctx)
 	if err != nil {

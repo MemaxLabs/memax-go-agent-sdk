@@ -568,6 +568,36 @@ func TestQueryRetriesInvalidStructuredOutput(t *testing.T) {
 	}
 }
 
+func TestQueryStructuredOutputRetryUsesDefaultSessionStore(t *testing.T) {
+	fake := &fakeModel{turns: [][]model.StreamEvent{
+		{{Kind: model.StreamText, Text: `not json`}},
+		{{Kind: model.StreamText, Text: `{"answer":"fixed"}`}},
+	}}
+	events, err := Query(context.Background(), "start", Options{
+		Model:  fake,
+		Output: answerOutputContract(),
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+	if _, err := Drain(events); err != nil {
+		t.Fatalf("Drain returned error: %v", err)
+	}
+	if len(fake.requests) != 2 {
+		t.Fatalf("model requests = %d, want retry", len(fake.requests))
+	}
+	retryMessages := fake.requests[1].Messages
+	if len(retryMessages) < 3 {
+		t.Fatalf("retry messages = %#v, want user, invalid assistant, repair prompt", retryMessages)
+	}
+	if retryMessages[1].Role != model.RoleAssistant || retryMessages[1].PlainText() != "not json" {
+		t.Fatalf("retry assistant message = %#v, want invalid assistant persisted", retryMessages[1])
+	}
+	if retryMessages[2].Role != model.RoleUser || !strings.Contains(retryMessages[2].PlainText(), "not valid JSON") {
+		t.Fatalf("retry prompt message = %#v, want validation repair prompt", retryMessages[2])
+	}
+}
+
 func TestQueryStructuredOutputExhaustionStopsRun(t *testing.T) {
 	fake := &fakeModel{turns: [][]model.StreamEvent{{{Kind: model.StreamText, Text: `not json`}}}}
 	events, err := Query(context.Background(), "start", Options{
