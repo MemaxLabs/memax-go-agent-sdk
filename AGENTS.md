@@ -146,7 +146,7 @@ When evaluating design decisions, apply these standards drawn from Go ecosystem 
 **Backward compatibility**
 - New features must be opt-in. Existing code that sets no new fields must behave identically.
 - New optional interfaces must have helper functions with graceful fallbacks (see `session.Create`, `session.Fork`).
-- New `Options` fields must be handled in `withDefaults()` and in subagent `mergeOptions()`.
+- New `Options` fields must be handled in `withDefaults()` and `Options.Merge()`.
 
 ## Reference Notes
 

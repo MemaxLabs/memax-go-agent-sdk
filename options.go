@@ -52,6 +52,92 @@ type Options struct {
 	MaxRunDuration     time.Duration
 }
 
+// Merge returns a copy of o with non-zero fields from override applied.
+// Slice fields replace the base when override provides a non-nil slice,
+// including an explicitly empty slice. This is used by composed agents and
+// evals to share the same option override semantics as new fields are added.
+func (o Options) Merge(override Options) Options {
+	if override.Model != nil {
+		o.Model = override.Model
+	}
+	if override.Tools != nil {
+		o.Tools = override.Tools
+	}
+	if override.Permissions != nil {
+		o.Permissions = override.Permissions
+	}
+	if override.Sessions != nil {
+		o.Sessions = override.Sessions
+	}
+	if override.Hooks != nil {
+		o.Hooks = override.Hooks
+	}
+	if override.Context != nil {
+		o.Context = override.Context
+	}
+	if override.ContextRetry != nil {
+		o.ContextRetry = override.ContextRetry
+	}
+	if override.ToolSelector != nil {
+		o.ToolSelector = override.ToolSelector
+	}
+	if override.ResultStore != nil {
+		o.ResultStore = override.ResultStore
+	}
+	if override.Output.Enabled() || override.Output.MaxRetries != 0 {
+		o.Output = override.Output
+	}
+	if override.Tracer != nil {
+		o.Tracer = override.Tracer
+	}
+	if override.Meter != nil {
+		o.Meter = override.Meter
+	}
+	if override.PromptBuilder != nil {
+		o.PromptBuilder = override.PromptBuilder
+	}
+	if override.PromptProfile != "" {
+		o.PromptProfile = override.PromptProfile
+	}
+	if !override.Identity.IsZero() {
+		o.Identity = override.Identity
+	}
+	if override.MemorySource != nil {
+		o.MemorySource = override.MemorySource
+	}
+	if override.Memories != nil {
+		o.Memories = append([]memory.Memory(nil), override.Memories...)
+	}
+	if override.SkillSource != nil {
+		o.SkillSource = override.SkillSource
+	}
+	if override.Skills != nil {
+		o.Skills = append([]skill.Skill(nil), override.Skills...)
+	}
+	if override.SystemPrompt != "" {
+		o.SystemPrompt = override.SystemPrompt
+	}
+	if override.AppendSystemPrompt != "" {
+		o.AppendSystemPrompt = override.AppendSystemPrompt
+	}
+	if override.SessionID != "" {
+		o.SessionID = override.SessionID
+	}
+	if override.ParentSessionID != "" {
+		o.ParentSessionID = override.ParentSessionID
+	}
+	if override.MaxTurns != 0 {
+		o.MaxTurns = override.MaxTurns
+	}
+	if override.MaxToolConcurrency != 0 {
+		o.MaxToolConcurrency = override.MaxToolConcurrency
+	}
+	if override.MaxRunDuration != 0 {
+		o.MaxRunDuration = override.MaxRunDuration
+	}
+	return o
+}
+
 func (o Options) withDefaults() Options {
 	if o.MaxTurns <= 0 {
 		o.MaxTurns = defaultMaxTurns

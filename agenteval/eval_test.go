@@ -102,13 +102,66 @@ func TestReportErrorListsFailedCases(t *testing.T) {
 		Options: memaxagent.Options{
 			Model: NewScriptedModel([]model.StreamEvent{{Kind: model.StreamText, Text: "actual"}}),
 		},
-		Assertions: []Assertion{FinalEquals("expected")},
+		Assertions: []Assertion{
+			FinalEquals("expected"),
+			FinalContains("missing-substring"),
+		},
 	})
 	if report.Passed() {
 		t.Fatal("report passed, want failure")
 	}
 	err := report.Error()
-	if err == nil || !strings.Contains(err.Error(), "mismatch") || !strings.Contains(err.Error(), "expected") {
-		t.Fatalf("report error = %v, want case and assertion details", err)
+	if err == nil ||
+		!strings.Contains(err.Error(), "mismatch") ||
+		!strings.Contains(err.Error(), "expected") ||
+		!strings.Contains(err.Error(), "missing-substring") {
+		t.Fatalf("report error = %v, want all assertion details", err)
+	}
+}
+
+func TestRunnerUsesResultUsageWithoutDoubleCounting(t *testing.T) {
+	report := Runner{}.Run(context.Background(), Case{
+		Name:   "usage",
+		Prompt: "answer",
+		Options: memaxagent.Options{
+			Model: NewScriptedModel([]model.StreamEvent{
+				{Kind: model.StreamUsage, Usage: &model.Usage{InputTokens: 3, OutputTokens: 4, TotalTokens: 7}},
+				{Kind: model.StreamText, Text: "done"},
+			}),
+		},
+	})
+	if err := report.Error(); err != nil {
+		t.Fatalf("report error = %v", err)
+	}
+	if got := report.Results[0].Usage.TotalTokens; got != 7 {
+		t.Fatalf("usage total = %d, want final aggregate without double count", got)
+	}
+}
+
+func TestScriptedModelReturnsDefensiveRequestCopies(t *testing.T) {
+	client := NewScriptedModel([]model.StreamEvent{{Kind: model.StreamText, Text: "done"}})
+	_, err := client.Stream(context.Background(), model.Request{
+		Messages: []model.Message{{
+			Role:    model.RoleUser,
+			Content: []model.ContentBlock{{Type: model.ContentText, Text: "hello"}},
+		}},
+		Tools: []model.ToolSpec{{
+			Name:        "read",
+			InputSchema: map[string]any{"properties": map[string]any{"path": map[string]any{"type": "string"}}},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	requests := client.Requests()
+	requests[0].Messages[0].Content[0].Text = "mutated"
+	requests[0].Tools[0].InputSchema["properties"].(map[string]any)["path"] = "mutated"
+
+	requests = client.Requests()
+	if got := requests[0].Messages[0].Content[0].Text; got != "hello" {
+		t.Fatalf("captured message text = %q, want defensive copy", got)
+	}
+	if got := requests[0].Tools[0].InputSchema["properties"].(map[string]any)["path"]; got == "mutated" {
+		t.Fatalf("captured schema was mutated through Requests")
 	}
 }

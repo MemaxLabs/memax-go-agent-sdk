@@ -6,9 +6,7 @@ import (
 	"time"
 
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
-	"github.com/MemaxLabs/memax-go-agent-sdk/memory"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
-	"github.com/MemaxLabs/memax-go-agent-sdk/skill"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
 )
 
@@ -119,7 +117,7 @@ func (t *subagentTool) Execute(ctx context.Context, call tool.Call) (model.ToolR
 		return model.ToolResult{}, err
 	}
 
-	opts := mergeOptions(t.defaultOptions, agent.Options)
+	opts := t.defaultOptions.Merge(agent.Options)
 	if opts.Sessions == nil {
 		opts.Sessions = call.Runtime.Sessions
 	}
@@ -176,89 +174,6 @@ func (t *subagentTool) agent(name string) (Agent, error) {
 		return Agent{}, fmt.Errorf("subagents: unknown agent %q", name)
 	}
 	return agent, nil
-}
-
-func mergeOptions(base memaxagent.Options, override memaxagent.Options) memaxagent.Options {
-	out := base
-	if override.Model != nil {
-		out.Model = override.Model
-	}
-	if override.Tools != nil {
-		out.Tools = override.Tools
-	}
-	if override.Permissions != nil {
-		out.Permissions = override.Permissions
-	}
-	if override.Sessions != nil {
-		out.Sessions = override.Sessions
-	}
-	if override.Hooks != nil {
-		out.Hooks = override.Hooks
-	}
-	if override.Context != nil {
-		out.Context = override.Context
-	}
-	if override.ContextRetry != nil {
-		out.ContextRetry = override.ContextRetry
-	}
-	if override.ToolSelector != nil {
-		out.ToolSelector = override.ToolSelector
-	}
-	if override.ResultStore != nil {
-		out.ResultStore = override.ResultStore
-	}
-	if override.Output.Enabled() || override.Output.MaxRetries != 0 {
-		out.Output = override.Output
-	}
-	if override.Tracer != nil {
-		out.Tracer = override.Tracer
-	}
-	if override.Meter != nil {
-		out.Meter = override.Meter
-	}
-	if override.PromptBuilder != nil {
-		out.PromptBuilder = override.PromptBuilder
-	}
-	if override.PromptProfile != "" {
-		out.PromptProfile = override.PromptProfile
-	}
-	if !override.Identity.IsZero() {
-		out.Identity = override.Identity
-	}
-	if override.MemorySource != nil {
-		out.MemorySource = override.MemorySource
-	}
-	if len(override.Memories) != 0 {
-		out.Memories = append([]memory.Memory(nil), override.Memories...)
-	}
-	if override.SkillSource != nil {
-		out.SkillSource = override.SkillSource
-	}
-	if len(override.Skills) != 0 {
-		out.Skills = append([]skill.Skill(nil), override.Skills...)
-	}
-	if override.SystemPrompt != "" {
-		out.SystemPrompt = override.SystemPrompt
-	}
-	if override.AppendSystemPrompt != "" {
-		out.AppendSystemPrompt = override.AppendSystemPrompt
-	}
-	if override.SessionID != "" {
-		out.SessionID = override.SessionID
-	}
-	if override.ParentSessionID != "" {
-		out.ParentSessionID = override.ParentSessionID
-	}
-	if override.MaxTurns != 0 {
-		out.MaxTurns = override.MaxTurns
-	}
-	if override.MaxToolConcurrency != 0 {
-		out.MaxToolConcurrency = override.MaxToolConcurrency
-	}
-	if override.MaxRunDuration != 0 {
-		out.MaxRunDuration = override.MaxRunDuration
-	}
-	return out
 }
 
 func metadata(agent string, parentSessionID string, childSessionID string) map[string]any {

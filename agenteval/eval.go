@@ -143,11 +143,13 @@ func (r Runner) runCase(ctx context.Context, c Case) (result Result) {
 		defer cancel()
 	}
 
-	events, err := memaxagent.Query(ctx, c.Prompt, mergeOptions(r.Options, c.Options))
+	events, err := memaxagent.Query(ctx, c.Prompt, r.Options.Merge(c.Options))
 	if err != nil {
 		result.Err = err
 		return result
 	}
+	var eventUsage model.Usage
+	resultUsage := false
 	for event := range events {
 		result.Events = append(result.Events, event)
 		if event.SessionID != "" {
@@ -165,16 +167,21 @@ func (r Runner) runCase(ctx context.Context, c Case) (result Result) {
 			result.Final = event.Result
 			if event.Usage != nil {
 				result.Usage = *event.Usage
+				resultUsage = true
 			}
 		case memaxagent.EventUsage:
 			if event.Usage != nil {
-				result.Usage = result.Usage.Add(*event.Usage)
+				eventUsage = eventUsage.Add(*event.Usage)
 			}
 		}
+	}
+	if !resultUsage {
+		result.Usage = eventUsage
 	}
 	if result.Err != nil {
 		return result
 	}
+	var assertionErrors []error
 	for _, assertion := range c.Assertions {
 		if assertion.Check == nil {
 			continue
@@ -182,94 +189,12 @@ func (r Runner) runCase(ctx context.Context, c Case) (result Result) {
 		if err := assertion.Check(result); err != nil {
 			name := strings.TrimSpace(assertion.Name)
 			if name == "" {
-				result.Err = err
+				assertionErrors = append(assertionErrors, err)
 			} else {
-				result.Err = fmt.Errorf("%s: %w", name, err)
+				assertionErrors = append(assertionErrors, fmt.Errorf("%s: %w", name, err))
 			}
-			return result
 		}
 	}
+	result.Err = errors.Join(assertionErrors...)
 	return result
-}
-
-func mergeOptions(base memaxagent.Options, override memaxagent.Options) memaxagent.Options {
-	if override.Model != nil {
-		base.Model = override.Model
-	}
-	if override.Tools != nil {
-		base.Tools = override.Tools
-	}
-	if override.Permissions != nil {
-		base.Permissions = override.Permissions
-	}
-	if override.Sessions != nil {
-		base.Sessions = override.Sessions
-	}
-	if override.Hooks != nil {
-		base.Hooks = override.Hooks
-	}
-	if override.Context != nil {
-		base.Context = override.Context
-	}
-	if override.ContextRetry != nil {
-		base.ContextRetry = override.ContextRetry
-	}
-	if override.ToolSelector != nil {
-		base.ToolSelector = override.ToolSelector
-	}
-	if override.ResultStore != nil {
-		base.ResultStore = override.ResultStore
-	}
-	if override.Output.Enabled() || override.Output.MaxRetries != 0 {
-		base.Output = override.Output
-	}
-	if override.Tracer != nil {
-		base.Tracer = override.Tracer
-	}
-	if override.Meter != nil {
-		base.Meter = override.Meter
-	}
-	if override.PromptBuilder != nil {
-		base.PromptBuilder = override.PromptBuilder
-	}
-	if override.PromptProfile != "" {
-		base.PromptProfile = override.PromptProfile
-	}
-	if !override.Identity.IsZero() {
-		base.Identity = override.Identity
-	}
-	if override.MemorySource != nil {
-		base.MemorySource = override.MemorySource
-	}
-	if override.Memories != nil {
-		base.Memories = override.Memories
-	}
-	if override.SkillSource != nil {
-		base.SkillSource = override.SkillSource
-	}
-	if override.Skills != nil {
-		base.Skills = override.Skills
-	}
-	if override.SystemPrompt != "" {
-		base.SystemPrompt = override.SystemPrompt
-	}
-	if override.AppendSystemPrompt != "" {
-		base.AppendSystemPrompt = override.AppendSystemPrompt
-	}
-	if override.SessionID != "" {
-		base.SessionID = override.SessionID
-	}
-	if override.ParentSessionID != "" {
-		base.ParentSessionID = override.ParentSessionID
-	}
-	if override.MaxTurns != 0 {
-		base.MaxTurns = override.MaxTurns
-	}
-	if override.MaxToolConcurrency != 0 {
-		base.MaxToolConcurrency = override.MaxToolConcurrency
-	}
-	if override.MaxRunDuration != 0 {
-		base.MaxRunDuration = override.MaxRunDuration
-	}
-	return base
 }
