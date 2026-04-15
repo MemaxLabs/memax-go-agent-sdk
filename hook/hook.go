@@ -37,11 +37,69 @@ type AfterToolUseInput struct {
 // changed external state.
 type AfterToolUseFunc func(context.Context, AfterToolUseInput) error
 
+type SessionStartedInput struct {
+	SessionID string
+}
+
+type SessionStartedFunc func(context.Context, SessionStartedInput) error
+
+type SessionEndedInput struct {
+	SessionID string
+	Reason    StopReason
+	Err       error
+}
+
+type SessionEndedFunc func(context.Context, SessionEndedInput) error
+
+type UserPromptInput struct {
+	SessionID string
+	Prompt    string
+}
+
+type UserPromptResult struct {
+	Prompt     string
+	DenyReason string
+}
+
+type UserPromptFunc func(context.Context, UserPromptInput) (UserPromptResult, error)
+
+type StopReason string
+
+const (
+	StopReasonResult   StopReason = "result"
+	StopReasonError    StopReason = "error"
+	StopReasonMaxTurns StopReason = "max_turns"
+	StopReasonCanceled StopReason = "canceled"
+)
+
+type StopInput struct {
+	SessionID string
+	Turn      int
+	Reason    StopReason
+	Err       error
+}
+
+type StopFunc func(context.Context, StopInput) error
+
+type ContextAppliedInput struct {
+	SessionID        string
+	Turn             int
+	OriginalMessages int
+	SentMessages     int
+}
+
+type ContextAppliedFunc func(context.Context, ContextAppliedInput) error
+
 // Runner executes lifecycle hooks in registration order.
 type Runner struct {
-	mu     sync.RWMutex
-	before []BeforeToolUseFunc
-	after  []AfterToolUseFunc
+	mu             sync.RWMutex
+	before         []BeforeToolUseFunc
+	after          []AfterToolUseFunc
+	sessionStarted []SessionStartedFunc
+	sessionEnded   []SessionEndedFunc
+	userPrompt     []UserPromptFunc
+	stop           []StopFunc
+	contextApplied []ContextAppliedFunc
 }
 
 // NewRunner creates a hook runner.
@@ -69,6 +127,41 @@ func WithAfterToolUse(fn AfterToolUseFunc) Option {
 	}
 }
 
+// WithSessionStarted registers a session-start hook.
+func WithSessionStarted(fn SessionStartedFunc) Option {
+	return func(r *Runner) {
+		r.AddSessionStarted(fn)
+	}
+}
+
+// WithSessionEnded registers a session-end hook.
+func WithSessionEnded(fn SessionEndedFunc) Option {
+	return func(r *Runner) {
+		r.AddSessionEnded(fn)
+	}
+}
+
+// WithUserPrompt registers a user-prompt hook.
+func WithUserPrompt(fn UserPromptFunc) Option {
+	return func(r *Runner) {
+		r.AddUserPrompt(fn)
+	}
+}
+
+// WithStop registers a stop hook.
+func WithStop(fn StopFunc) Option {
+	return func(r *Runner) {
+		r.AddStop(fn)
+	}
+}
+
+// WithContextApplied registers a context-applied hook.
+func WithContextApplied(fn ContextAppliedFunc) Option {
+	return func(r *Runner) {
+		r.AddContextApplied(fn)
+	}
+}
+
 // AddBeforeToolUse appends a before-tool hook.
 func (r *Runner) AddBeforeToolUse(fn BeforeToolUseFunc) {
 	if r == nil || fn == nil {
@@ -87,6 +180,56 @@ func (r *Runner) AddAfterToolUse(fn AfterToolUseFunc) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.after = append(r.after, fn)
+}
+
+// AddSessionStarted appends a session-start hook.
+func (r *Runner) AddSessionStarted(fn SessionStartedFunc) {
+	if r == nil || fn == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.sessionStarted = append(r.sessionStarted, fn)
+}
+
+// AddSessionEnded appends a session-end hook.
+func (r *Runner) AddSessionEnded(fn SessionEndedFunc) {
+	if r == nil || fn == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.sessionEnded = append(r.sessionEnded, fn)
+}
+
+// AddUserPrompt appends a user-prompt hook.
+func (r *Runner) AddUserPrompt(fn UserPromptFunc) {
+	if r == nil || fn == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.userPrompt = append(r.userPrompt, fn)
+}
+
+// AddStop appends a stop hook.
+func (r *Runner) AddStop(fn StopFunc) {
+	if r == nil || fn == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.stop = append(r.stop, fn)
+}
+
+// AddContextApplied appends a context-applied hook.
+func (r *Runner) AddContextApplied(fn ContextAppliedFunc) {
+	if r == nil || fn == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.contextApplied = append(r.contextApplied, fn)
 }
 
 // BeforeToolUse runs before-tool hooks until one denies or fails.
@@ -114,6 +257,69 @@ func (r *Runner) AfterToolUse(ctx context.Context, input AfterToolUseInput) []er
 	return errs
 }
 
+// SessionStarted runs session-start hooks and returns observer errors.
+func (r *Runner) SessionStarted(ctx context.Context, input SessionStartedInput) []error {
+	var errs []error
+	for _, fn := range r.sessionStartedSnapshot() {
+		if err := fn(ctx, input); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errs
+}
+
+// SessionEnded runs session-end hooks and returns observer errors.
+func (r *Runner) SessionEnded(ctx context.Context, input SessionEndedInput) []error {
+	var errs []error
+	for _, fn := range r.sessionEndedSnapshot() {
+		if err := fn(ctx, input); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errs
+}
+
+// UserPrompt runs user-prompt hooks in order. Hooks can deny or rewrite the
+// prompt before it is persisted.
+func (r *Runner) UserPrompt(ctx context.Context, input UserPromptInput) (UserPromptResult, error) {
+	result := UserPromptResult{Prompt: input.Prompt}
+	for _, fn := range r.userPromptSnapshot() {
+		next, err := fn(ctx, UserPromptInput{SessionID: input.SessionID, Prompt: result.Prompt})
+		if err != nil {
+			return UserPromptResult{}, err
+		}
+		if next.DenyReason != "" {
+			return next, nil
+		}
+		if next.Prompt != "" {
+			result.Prompt = next.Prompt
+		}
+	}
+	return result, nil
+}
+
+// Stop runs stop hooks and returns observer errors.
+func (r *Runner) Stop(ctx context.Context, input StopInput) []error {
+	var errs []error
+	for _, fn := range r.stopSnapshot() {
+		if err := fn(ctx, input); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errs
+}
+
+// ContextApplied runs context-applied hooks and returns observer errors.
+func (r *Runner) ContextApplied(ctx context.Context, input ContextAppliedInput) []error {
+	var errs []error
+	for _, fn := range r.contextAppliedSnapshot() {
+		if err := fn(ctx, input); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errs
+}
+
 func (r *Runner) beforeSnapshot() []BeforeToolUseFunc {
 	if r == nil {
 		return nil
@@ -130,4 +336,49 @@ func (r *Runner) afterSnapshot() []AfterToolUseFunc {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return append([]AfterToolUseFunc(nil), r.after...)
+}
+
+func (r *Runner) sessionStartedSnapshot() []SessionStartedFunc {
+	if r == nil {
+		return nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return append([]SessionStartedFunc(nil), r.sessionStarted...)
+}
+
+func (r *Runner) sessionEndedSnapshot() []SessionEndedFunc {
+	if r == nil {
+		return nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return append([]SessionEndedFunc(nil), r.sessionEnded...)
+}
+
+func (r *Runner) userPromptSnapshot() []UserPromptFunc {
+	if r == nil {
+		return nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return append([]UserPromptFunc(nil), r.userPrompt...)
+}
+
+func (r *Runner) stopSnapshot() []StopFunc {
+	if r == nil {
+		return nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return append([]StopFunc(nil), r.stop...)
+}
+
+func (r *Runner) contextAppliedSnapshot() []ContextAppliedFunc {
+	if r == nil {
+		return nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return append([]ContextAppliedFunc(nil), r.contextApplied...)
 }

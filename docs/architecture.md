@@ -86,6 +86,8 @@ The optional `toolkit/filetools` package provides `list_files`, `read_file`, and
 
 Before-tool hooks run after validation and before permission checks. They can deny execution with a model-visible reason. After-tool hooks observe completed results; observer failures are attached to result metadata and do not convert successful tool output into a model-visible failure.
 
+Session lifecycle hooks cover session start/end, user prompt submission, stop events, and context-window application. User prompt hooks may rewrite or deny the prompt before it is persisted. Session start/end, stop, and context-applied hooks are observational; their errors are surfaced as agent errors at stable lifecycle boundaries.
+
 ## Permissions
 
 Permission checks run before execution and receive the raw tool use plus the tool spec. The permission package includes simple `AllowAll`, `ReadOnly`, and function-backed checkers plus a structured `Policy` for ordered rules. Rules can allow, deny, or ask a host application for approval. Matchers cover exact tool names, tool-name glob patterns, read-only/destructive tool metadata, top-level string fields in JSON tool input, and boolean composition with `All`, `AnyOf`, and `Not`.

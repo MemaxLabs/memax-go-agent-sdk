@@ -17,7 +17,7 @@
 
 ## Phase 2: Production Orchestration
 
-- Add hook engine: before/after tool-use hooks exist; session start/end, user prompt submit, stop, and compaction hooks remain.
+- Add hook engine. Tool-use and session lifecycle hooks exist.
 - Add structured permission modes and host approval callbacks. Ordered allow/deny/ask rules, matchers, and approval callbacks exist.
 - Add context budgeting and automatic compaction. Recent-message, token-budget, and summarizing-budget policies exist; retry-after-context-failure remains.
 - Add tool result truncation and external result storage. Per-tool truncation exists; external result storage remains.

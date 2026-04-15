@@ -3,6 +3,8 @@ package memaxagent
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"strings"
 	"sync"
 	"testing"
 
@@ -285,6 +287,118 @@ func TestQueryStartsTracingSpans(t *testing.T) {
 	}
 }
 
+func TestQueryRunsLifecycleHooks(t *testing.T) {
+	var calls []string
+	hooks := hook.NewRunner(
+		hook.WithSessionStarted(func(_ context.Context, input hook.SessionStartedInput) error {
+			if input.SessionID == "" {
+				t.Fatal("missing session id")
+			}
+			calls = append(calls, "session_started")
+			return nil
+		}),
+		hook.WithUserPrompt(func(_ context.Context, input hook.UserPromptInput) (hook.UserPromptResult, error) {
+			calls = append(calls, "user_prompt")
+			return hook.UserPromptResult{Prompt: input.Prompt + " rewritten"}, nil
+		}),
+		hook.WithStop(func(_ context.Context, input hook.StopInput) error {
+			if input.Reason != hook.StopReasonResult {
+				t.Fatalf("stop reason = %q, want result", input.Reason)
+			}
+			calls = append(calls, "stop")
+			return nil
+		}),
+		hook.WithSessionEnded(func(_ context.Context, input hook.SessionEndedInput) error {
+			if input.Reason != hook.StopReasonResult {
+				t.Fatalf("session ended reason = %q, want result", input.Reason)
+			}
+			calls = append(calls, "session_ended")
+			return nil
+		}),
+	)
+	fake := &fakeModel{turns: [][]model.StreamEvent{{{Kind: model.StreamText, Text: "done"}}}}
+
+	events, err := Query(context.Background(), "start", Options{
+		Model: fake,
+		Hooks: hooks,
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+	if _, err := Drain(events); err != nil {
+		t.Fatalf("Drain returned error: %v", err)
+	}
+	if len(fake.requests) != 1 || fake.requests[0].Messages[0].PlainText() != "start rewritten" {
+		t.Fatalf("model request = %#v", fake.requests)
+	}
+	want := []string{"session_started", "user_prompt", "stop", "session_ended"}
+	if !sameStrings(calls, want) {
+		t.Fatalf("calls = %#v, want %#v", calls, want)
+	}
+}
+
+func TestQueryRunsContextAppliedHook(t *testing.T) {
+	var got hook.ContextAppliedInput
+	hooks := hook.NewRunner(hook.WithContextApplied(func(_ context.Context, input hook.ContextAppliedInput) error {
+		got = input
+		return nil
+	}))
+	fake := &fakeModel{turns: [][]model.StreamEvent{
+		{{Kind: model.StreamToolUse, ToolUse: model.ToolUse{ID: "tool-1", Name: "noop", Input: json.RawMessage(`{}`)}}},
+		{{Kind: model.StreamText, Text: "done"}},
+	}}
+	registry := tool.NewRegistry(tool.Definition{
+		ToolSpec: model.ToolSpec{Name: "noop"},
+		Handler: func(context.Context, tool.Call) (model.ToolResult, error) {
+			return model.ToolResult{Content: "ok"}, nil
+		},
+	})
+
+	events, err := Query(context.Background(), "start", Options{
+		Model:   fake,
+		Tools:   registry,
+		Hooks:   hooks,
+		Context: contextwindow.RecentMessages{MaxMessages: 2},
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+	if _, err := Drain(events); err != nil {
+		t.Fatalf("Drain returned error: %v", err)
+	}
+	if got.OriginalMessages != 3 || got.SentMessages != 2 {
+		t.Fatalf("context hook input = %#v, want 3 -> 2", got)
+	}
+}
+
+func TestQueryUserPromptHookCanDeny(t *testing.T) {
+	_, err := Query(context.Background(), "start", Options{
+		Model: &fakeModel{},
+		Hooks: hook.NewRunner(hook.WithUserPrompt(func(context.Context, hook.UserPromptInput) (hook.UserPromptResult, error) {
+			return hook.UserPromptResult{DenyReason: "blocked prompt"}, nil
+		})),
+	})
+	if err == nil || err.Error() != "blocked prompt" {
+		t.Fatalf("Query error = %v, want blocked prompt", err)
+	}
+}
+
+func TestQueryStopHookErrorSurfacesBeforeResult(t *testing.T) {
+	errStop := errors.New("stop sink unavailable")
+	events, err := Query(context.Background(), "start", Options{
+		Model: &fakeModel{turns: [][]model.StreamEvent{{{Kind: model.StreamText, Text: "done"}}}},
+		Hooks: hook.NewRunner(hook.WithStop(func(context.Context, hook.StopInput) error {
+			return errStop
+		})),
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+	if _, err := Drain(events); err == nil || !strings.Contains(err.Error(), "stop hook failed") {
+		t.Fatalf("Drain error = %v, want stop hook failure", err)
+	}
+}
+
 type replaceContextPolicy struct {
 	text string
 }
@@ -390,4 +504,16 @@ func (s *recordingSpan) RecordError(err error) {
 
 func (s *recordingSpan) End() {
 	s.ended = true
+}
+
+func sameStrings(a []string, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

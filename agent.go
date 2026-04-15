@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/MemaxLabs/memax-go-agent-sdk/hook"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/telemetry"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
@@ -40,6 +41,40 @@ func Query(ctx context.Context, prompt string, opts Options) (<-chan Event, erro
 		return nil, err
 	}
 	querySpan.Set(telemetry.String("memax.session_id", sess.ID))
+	if errs := opts.Hooks.SessionStarted(ctx, hook.SessionStartedInput{SessionID: sess.ID}); len(errs) > 0 {
+		if cancel != nil {
+			cancel()
+		}
+		err = fmt.Errorf("session started hook failed: %w", errors.Join(errs...))
+		querySpan.RecordError(err)
+		querySpan.End()
+		return nil, err
+	}
+	promptResult, err := opts.Hooks.UserPrompt(ctx, hook.UserPromptInput{
+		SessionID: sess.ID,
+		Prompt:    prompt,
+	})
+	if err != nil {
+		if cancel != nil {
+			cancel()
+		}
+		err = fmt.Errorf("user prompt hook failed: %w", err)
+		querySpan.RecordError(err)
+		querySpan.End()
+		return nil, err
+	}
+	if promptResult.DenyReason != "" {
+		if cancel != nil {
+			cancel()
+		}
+		err = fmt.Errorf("%s", promptResult.DenyReason)
+		querySpan.RecordError(err)
+		querySpan.End()
+		return nil, err
+	}
+	if promptResult.Prompt != "" {
+		prompt = promptResult.Prompt
+	}
 	if err := opts.Sessions.Append(ctx, sess.ID, model.Message{
 		Role:    model.RoleUser,
 		Content: []model.ContentBlock{{Type: model.ContentText, Text: prompt}},
@@ -85,7 +120,27 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 		}
 	}
 
+	finish := func(turn int, reason hook.StopReason, err error) error {
+		if errs := opts.Hooks.Stop(ctx, hook.StopInput{
+			SessionID: sessionID,
+			Turn:      turn,
+			Reason:    reason,
+			Err:       err,
+		}); len(errs) > 0 && err == nil {
+			return fmt.Errorf("stop hook failed: %w", errors.Join(errs...))
+		}
+		if errs := opts.Hooks.SessionEnded(ctx, hook.SessionEndedInput{
+			SessionID: sessionID,
+			Reason:    reason,
+			Err:       err,
+		}); len(errs) > 0 && err == nil {
+			return fmt.Errorf("session ended hook failed: %w", errors.Join(errs...))
+		}
+		return nil
+	}
+
 	if !emit(newEvent(EventSessionStarted, sessionID, 0)) {
+		_ = finish(0, hook.StopReasonCanceled, ctx.Err())
 		return
 	}
 
@@ -103,6 +158,7 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 				err = fmt.Errorf("load session messages: %w", err)
 				turnSpan.RecordError(err)
 				emitError(turnCtx, emit, sessionID, turn, err)
+				_ = finish(turn, hook.StopReasonError, err)
 				shouldStop = true
 				return
 			}
@@ -121,6 +177,7 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 					contextSpan.End()
 					turnSpan.RecordError(err)
 					emitError(turnCtx, emit, sessionID, turn, err)
+					_ = finish(turn, hook.StopReasonError, err)
 					shouldStop = true
 					return
 				}
@@ -131,6 +188,19 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 					event.Context = &ContextEvent{
 						OriginalMessages: originalCount,
 						SentMessages:     len(messages),
+					}
+					if errs := opts.Hooks.ContextApplied(turnCtx, hook.ContextAppliedInput{
+						SessionID:        sessionID,
+						Turn:             turn,
+						OriginalMessages: originalCount,
+						SentMessages:     len(messages),
+					}); len(errs) > 0 {
+						err = fmt.Errorf("context applied hook failed: %w", errors.Join(errs...))
+						turnSpan.RecordError(err)
+						emitError(turnCtx, emit, sessionID, turn, err)
+						_ = finish(turn, hook.StopReasonError, err)
+						shouldStop = true
+						return
 					}
 					if !emit(event) {
 						shouldStop = true
@@ -165,6 +235,7 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 				modelSpan.End()
 				turnSpan.RecordError(err)
 				emitError(turnCtx, emit, sessionID, turn, err)
+				_ = finish(turn, hook.StopReasonError, err)
 				shouldStop = true
 				return
 			}
@@ -182,6 +253,7 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 				modelSpan.End()
 				turnSpan.RecordError(err)
 				emitError(turnCtx, emit, sessionID, turn, err)
+				_ = finish(turn, hook.StopReasonError, err)
 				shouldStop = true
 				return
 			}
@@ -191,11 +263,18 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 					err = fmt.Errorf("append assistant message: %w", err)
 					turnSpan.RecordError(err)
 					emitError(turnCtx, emit, sessionID, turn, err)
+					_ = finish(turn, hook.StopReasonError, err)
 					shouldStop = true
 					return
 				}
 			}
 			if len(uses) == 0 {
+				if err := finish(turn, hook.StopReasonResult, nil); err != nil {
+					turnSpan.RecordError(err)
+					emitError(turnCtx, emit, sessionID, turn, err)
+					shouldStop = true
+					return
+				}
 				result := assistant.PlainText()
 				event := newEvent(EventResult, sessionID, turn)
 				event.Result = result
@@ -225,6 +304,7 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 					err = fmt.Errorf("append tool result: %w", err)
 					turnSpan.RecordError(err)
 					emitError(turnCtx, emit, sessionID, turn, err)
+					_ = finish(turn, hook.StopReasonError, err)
 					shouldStop = true
 					return
 				}
@@ -235,7 +315,9 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 		}
 	}
 
-	emitError(ctx, emit, sessionID, opts.MaxTurns, fmt.Errorf("max turns exceeded: %d", opts.MaxTurns))
+	err := fmt.Errorf("max turns exceeded: %d", opts.MaxTurns)
+	emitError(ctx, emit, sessionID, opts.MaxTurns, err)
+	_ = finish(opts.MaxTurns, hook.StopReasonMaxTurns, err)
 }
 
 func collectAssistant(

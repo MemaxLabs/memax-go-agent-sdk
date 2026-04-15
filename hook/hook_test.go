@@ -54,3 +54,82 @@ func TestAfterToolUseRunsAllHooks(t *testing.T) {
 		t.Fatalf("len(errs) = %d, want 2", len(errs))
 	}
 }
+
+func TestUserPromptCanRewritePrompt(t *testing.T) {
+	runner := NewRunner(WithUserPrompt(func(_ context.Context, input UserPromptInput) (UserPromptResult, error) {
+		return UserPromptResult{Prompt: input.Prompt + " rewritten"}, nil
+	}))
+
+	result, err := runner.UserPrompt(context.Background(), UserPromptInput{
+		SessionID: "session-1",
+		Prompt:    "start",
+	})
+	if err != nil {
+		t.Fatalf("UserPrompt returned error: %v", err)
+	}
+	if result.Prompt != "start rewritten" {
+		t.Fatalf("Prompt = %q, want rewrite", result.Prompt)
+	}
+}
+
+func TestUserPromptCanDenyPrompt(t *testing.T) {
+	runner := NewRunner()
+	runner.AddUserPrompt(func(context.Context, UserPromptInput) (UserPromptResult, error) {
+		return UserPromptResult{DenyReason: "blocked"}, nil
+	})
+
+	result, err := runner.UserPrompt(context.Background(), UserPromptInput{
+		SessionID: "session-1",
+		Prompt:    "start",
+	})
+	if err != nil {
+		t.Fatalf("UserPrompt returned error: %v", err)
+	}
+	if result.DenyReason != "blocked" {
+		t.Fatalf("DenyReason = %q, want blocked", result.DenyReason)
+	}
+}
+
+func TestLifecycleObserverHooksRunAll(t *testing.T) {
+	runner := NewRunner()
+	var calls []string
+	runner.AddSessionStarted(func(context.Context, SessionStartedInput) error {
+		calls = append(calls, "session_started")
+		return nil
+	})
+	runner.AddSessionEnded(func(context.Context, SessionEndedInput) error {
+		calls = append(calls, "session_ended")
+		return nil
+	})
+	runner.AddStop(func(context.Context, StopInput) error {
+		calls = append(calls, "stop")
+		return nil
+	})
+	runner.AddContextApplied(func(context.Context, ContextAppliedInput) error {
+		calls = append(calls, "context_applied")
+		return nil
+	})
+
+	if errs := runner.SessionStarted(context.Background(), SessionStartedInput{SessionID: "session-1"}); len(errs) != 0 {
+		t.Fatalf("SessionStarted errs = %#v", errs)
+	}
+	if errs := runner.ContextApplied(context.Background(), ContextAppliedInput{SessionID: "session-1"}); len(errs) != 0 {
+		t.Fatalf("ContextApplied errs = %#v", errs)
+	}
+	if errs := runner.Stop(context.Background(), StopInput{SessionID: "session-1", Reason: StopReasonResult}); len(errs) != 0 {
+		t.Fatalf("Stop errs = %#v", errs)
+	}
+	if errs := runner.SessionEnded(context.Background(), SessionEndedInput{SessionID: "session-1", Reason: StopReasonResult}); len(errs) != 0 {
+		t.Fatalf("SessionEnded errs = %#v", errs)
+	}
+
+	want := []string{"session_started", "context_applied", "stop", "session_ended"}
+	if len(calls) != len(want) {
+		t.Fatalf("calls = %#v, want %#v", calls, want)
+	}
+	for i := range want {
+		if calls[i] != want[i] {
+			t.Fatalf("calls = %#v, want %#v", calls, want)
+		}
+	}
+}
