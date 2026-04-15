@@ -36,7 +36,7 @@ Current agent SDKs commonly expose autonomous file reading, command execution, w
 - `model`: provider-neutral messages, tool-use blocks, streamed events, and model client interface.
 - `tool`: registry, tool definition contract, decoder helpers, and executor.
 - `permission`: reusable permission checkers and policy composition.
-- `session`: session persistence interface plus in-memory implementation.
+- `session`: session persistence interface plus in-memory and append-only JSONL implementations.
 
 Expected near-term packages:
 
@@ -61,7 +61,7 @@ The target loop is:
 9. Append tool results to the session.
 10. Continue until the model returns no tool calls, a stop condition fires, or a configured limit is reached.
 
-The current scaffold implements the minimal version of that loop. Future work should add streaming tool execution, hook phases, compaction, structured output enforcement, subagents, resumable durable sessions, and richer cancellation semantics.
+The current scaffold implements the minimal version of that loop with JSON Schema validation before permission checks and execution. Future work should add streaming tool execution, hook phases, compaction, structured output enforcement, subagents, resumable durable sessions, and richer cancellation semantics.
 
 ## Tool Layer
 
@@ -72,6 +72,8 @@ Tools expose:
 - handler: application code that receives JSON input and returns a tool result
 
 This keeps the core neutral. A `Read` tool can read the host filesystem, a memory-backed tree, a database record, a Git blob, or a browser sandbox. The orchestrator should not know which one is in use.
+
+Tool input schemas are compiled when tools are registered. Model-emitted inputs are validated before permission checks and before handlers run, and validation failures are returned as tool-result errors so the model can recover in the next turn.
 
 ## Permissions
 
@@ -90,9 +92,11 @@ The policy engine should eventually return structured reasons so model-visible e
 
 Sessions persist the conversation trajectory: user messages, assistant messages, tool uses, tool results, compact boundaries, and metadata. They must not silently persist workspace state. Checkpoints and virtual filesystem snapshots should be separate services referenced from session metadata.
 
+The SDK includes an in-memory store for tests and short-lived agents, plus an append-only JSONL store for durable transcripts. The JSONL store validates session IDs before path construction and reports corrupt transcript lines with line numbers.
+
 Durable session stores should support:
 
-- append-only JSONL transcript
+- append-only JSONL transcript. Initial implementation exists.
 - list and inspect sessions
 - resume by ID
 - fork from message ID

@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
@@ -58,6 +59,67 @@ func TestExecutorDeniesByPermission(t *testing.T) {
 	}
 	if !results[0].IsError || results[0].Content != "blocked" {
 		t.Fatalf("unexpected result: %#v", results[0])
+	}
+}
+
+func TestExecutorValidatesInputBeforePermissionAndHandler(t *testing.T) {
+	reg := NewRegistry(Definition{
+		ToolSpec: model.ToolSpec{
+			Name: "read",
+			InputSchema: map[string]any{
+				"type":     "object",
+				"required": []any{"path"},
+				"properties": map[string]any{
+					"path": map[string]any{"type": "string"},
+				},
+				"additionalProperties": false,
+			},
+			ReadOnly: true,
+		},
+		Handler: func(context.Context, Call) (model.ToolResult, error) {
+			t.Fatal("handler should not run")
+			return model.ToolResult{}, nil
+		},
+	})
+
+	permissionCalled := false
+	results := collect(Executor{
+		Registry: reg,
+		Permissions: permissionFunc(func(context.Context, model.ToolUse, model.ToolSpec) Decision {
+			permissionCalled = true
+			return Decision{Allow: true}
+		}),
+	}.Run(context.Background(), []model.ToolUse{
+		{ID: "1", Name: "read", Input: json.RawMessage(`{"path":42}`)},
+	}))
+
+	if permissionCalled {
+		t.Fatal("permission checker should not run after validation failure")
+	}
+	if got, want := len(results), 1; got != want {
+		t.Fatalf("len(results) = %d, want %d", got, want)
+	}
+	if !results[0].IsError {
+		t.Fatalf("result should be an error: %#v", results[0])
+	}
+	if !strings.Contains(results[0].Content, "invalid input for tool") {
+		t.Fatalf("result content = %q, want validation error", results[0].Content)
+	}
+}
+
+func TestRegistryRejectsInvalidInputSchema(t *testing.T) {
+	reg := NewRegistry()
+	err := reg.Register(Definition{
+		ToolSpec: model.ToolSpec{
+			Name:        "bad",
+			InputSchema: map[string]any{"type": "not-a-json-schema-type"},
+		},
+		Handler: func(context.Context, Call) (model.ToolResult, error) {
+			return model.ToolResult{}, nil
+		},
+	})
+	if err == nil {
+		t.Fatal("Register returned nil, want schema error")
 	}
 }
 

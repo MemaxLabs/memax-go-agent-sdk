@@ -101,6 +101,10 @@ func (e Executor) runOne(ctx context.Context, use model.ToolUse) model.ToolResul
 	if !ok {
 		return errorResult(use, fmt.Errorf("no such tool: %s", use.Name))
 	}
+	schema, _ := e.Registry.InputSchema(use.Name)
+	if err := validateInput(use, schema); err != nil {
+		return errorResult(use, err)
+	}
 
 	spec := t.Spec()
 	if e.Permissions != nil {

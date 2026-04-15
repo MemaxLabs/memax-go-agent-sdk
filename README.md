@@ -12,8 +12,9 @@ Implemented foundation:
 
 - provider-neutral model streaming interfaces
 - typed tool registry and executor
+- compiled JSON Schema validation before tool execution
 - permission checker seam
-- in-memory session store
+- in-memory and append-only JSONL session stores
 - first autonomous query loop skeleton
 
 Next implementation work is tracked in [docs/roadmap.md](docs/roadmap.md).
