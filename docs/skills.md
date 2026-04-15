@@ -23,6 +23,10 @@ storage, config services, embedded files, or generated skills.
 - `skill.LoadDir`: loads `SKILL.md` files from host filesystem directories.
 - `skill.LoadFS`: loads `SKILL.md` files from any standard `fs.FS`, including `embed.FS`, `fstest.MapFS`, archives, or read-only directories.
 
+`MultiSource` resolves duplicate named skills with first-source-wins semantics.
+Unnamed skills are treated as anonymous instruction blocks and are all included;
+they are not deduplicated.
+
 ## SKILL.md Format
 
 `LoadDir` and `LoadFS` expect one skill per directory:

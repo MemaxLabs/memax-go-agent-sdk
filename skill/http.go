@@ -40,6 +40,9 @@ func (s HTTPSource) Skills(ctx context.Context) ([]Skill, error) {
 			req.Header.Add(key, value)
 		}
 	}
+	if req.Header.Get("Accept") == "" {
+		req.Header.Set("Accept", "application/json")
+	}
 
 	resp, err := client.Do(req)
 	if err != nil {

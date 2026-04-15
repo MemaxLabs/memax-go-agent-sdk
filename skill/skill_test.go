@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -155,10 +156,76 @@ func TestCachedSourceCachesSuccessfulLoads(t *testing.T) {
 	}
 }
 
+func TestCachedSourceExpires(t *testing.T) {
+	calls := 0
+	source := &CachedSource{
+		TTL: time.Millisecond,
+		Source: SourceFunc(func(context.Context) ([]Skill, error) {
+			calls++
+			return []Skill{{Name: "cached"}}, nil
+		}),
+	}
+
+	if _, err := source.Skills(context.Background()); err != nil {
+		t.Fatalf("Skills returned error: %v", err)
+	}
+	time.Sleep(5 * time.Millisecond)
+	if _, err := source.Skills(context.Background()); err != nil {
+		t.Fatalf("Skills returned error: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("calls = %d, want 2 after TTL expiry", calls)
+	}
+}
+
+func TestCachedSourceDeduplicatesConcurrentRefresh(t *testing.T) {
+	var mu sync.Mutex
+	calls := 0
+	called := make(chan struct{})
+	release := make(chan struct{})
+	source := &CachedSource{
+		TTL: time.Hour,
+		Source: SourceFunc(func(context.Context) ([]Skill, error) {
+			mu.Lock()
+			calls++
+			if calls == 1 {
+				close(called)
+			}
+			mu.Unlock()
+			<-release
+			return []Skill{{Name: "cached"}}, nil
+		}),
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := source.Skills(context.Background()); err != nil {
+				t.Errorf("Skills returned error: %v", err)
+			}
+		}()
+	}
+	<-called
+	time.Sleep(10 * time.Millisecond)
+	close(release)
+	wg.Wait()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("calls = %d, want one underlying load", calls)
+	}
+}
+
 func TestHTTPSourceLoadsWrappedSkills(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer token" {
 			t.Fatalf("Authorization header = %q", r.Header.Get("Authorization"))
+		}
+		if r.Header.Get("Accept") != "application/json" {
+			t.Fatalf("Accept header = %q", r.Header.Get("Accept"))
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"skills": []Skill{{Name: "remote", Tags: []string{"api"}}},

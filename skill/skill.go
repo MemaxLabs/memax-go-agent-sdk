@@ -47,7 +47,8 @@ func (s StaticSource) Skills(context.Context) ([]Skill, error) {
 // MultiSource merges skills from multiple sources.
 type MultiSource []Source
 
-// Skills loads each source in order and deduplicates by skill name.
+// Skills loads each source in order and deduplicates by skill name. Unnamed
+// skills are treated as anonymous instruction blocks and are not deduplicated.
 func (s MultiSource) Skills(ctx context.Context) ([]Skill, error) {
 	out := make([]Skill, 0)
 	seen := map[string]struct{}{}
@@ -83,6 +84,8 @@ type CachedSource struct {
 	mu        sync.Mutex
 	expiresAt time.Time
 	skills    []Skill
+	loading   bool
+	ready     chan struct{}
 }
 
 // Skills returns cached skills until TTL expires. Non-positive TTL means cache
@@ -91,31 +94,56 @@ func (s *CachedSource) Skills(ctx context.Context) ([]Skill, error) {
 	if s == nil || s.Source == nil {
 		return nil, fmt.Errorf("skill: cached source requires Source")
 	}
-	now := time.Now()
-	s.mu.Lock()
-	if s.skills != nil && (s.TTL <= 0 || now.Before(s.expiresAt)) {
-		out := cloneSkills(s.skills)
+
+	for {
+		s.mu.Lock()
+		if s.cacheValidLocked(time.Now()) {
+			out := cloneSkills(s.skills)
+			s.mu.Unlock()
+			return out, nil
+		}
+		if s.loading {
+			ready := s.ready
+			s.mu.Unlock()
+			select {
+			case <-ready:
+				continue
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		s.loading = true
+		s.ready = make(chan struct{})
 		s.mu.Unlock()
-		return out, nil
+		break
 	}
-	s.mu.Unlock()
 
 	loaded, err := s.Source.Skills(ctx)
-	if err != nil {
-		return nil, err
-	}
 	loaded = cloneSkills(loaded)
 
 	s.mu.Lock()
-	s.skills = loaded
-	if s.TTL > 0 {
-		s.expiresAt = now.Add(s.TTL)
-	} else {
-		s.expiresAt = time.Time{}
+	ready := s.ready
+	if err == nil {
+		s.skills = loaded
+		if s.TTL > 0 {
+			s.expiresAt = time.Now().Add(s.TTL)
+		} else {
+			s.expiresAt = time.Time{}
+		}
 	}
 	out := cloneSkills(s.skills)
+	s.loading = false
+	s.ready = nil
+	close(ready)
 	s.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
 	return out, nil
+}
+
+func (s *CachedSource) cacheValidLocked(now time.Time) bool {
+	return s.skills != nil && (s.TTL <= 0 || now.Before(s.expiresAt))
 }
 
 func cloneSkills(skills []Skill) []Skill {

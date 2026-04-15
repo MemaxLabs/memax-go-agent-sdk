@@ -20,4 +20,5 @@ changes should still be called out here with migration notes.
   manifests, and skill discovery tools.
 - Added source-neutral skill loaders for function-backed, merged, cached, HTTP,
   host filesystem, and standard `fs.FS` sources.
+- Hardened cached skill loading to deduplicate concurrent refreshes.
 - Added CI workflow, versioning policy, and public API compatibility guidance.
