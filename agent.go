@@ -10,7 +10,9 @@ import (
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/hook"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
+	promptpkg "github.com/MemaxLabs/memax-go-agent-sdk/prompt"
 	"github.com/MemaxLabs/memax-go-agent-sdk/session"
+	skillpkg "github.com/MemaxLabs/memax-go-agent-sdk/skill"
 	"github.com/MemaxLabs/memax-go-agent-sdk/telemetry"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
 )
@@ -289,6 +291,21 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 				telemetry.Int("memax.tools.available", len(opts.Tools.Specs())),
 				telemetry.Int("memax.tools.selected", len(toolSpecs)),
 			)
+			promptResult, err := buildPrompt(turnCtx, opts, messages, toolSpecs)
+			if err != nil {
+				err = fmt.Errorf("build prompt: %w", err)
+				turnSpan.RecordError(err)
+				emitError(turnCtx, emit, sessionID, turn, err)
+				_ = finish(turn, hook.StopReasonError, err)
+				shouldStop = true
+				return
+			}
+			if promptResult.Hash != "" {
+				turnSpan.Set(
+					telemetry.String("memax.prompt.hash", promptResult.Hash),
+					telemetry.Int("memax.prompt.parts", len(promptResult.Parts)),
+				)
+			}
 			modelCtx, modelSpan := opts.Tracer.Start(turnCtx, "memaxagent.model.stream",
 				telemetry.String("memax.session_id", sessionID),
 				telemetry.Int("memax.turn", turn),
@@ -306,8 +323,8 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 				SessionID:          sessionID,
 				Messages:           messages,
 				Tools:              toolSpecs,
-				SystemPrompt:       opts.SystemPrompt,
-				AppendSystemPrompt: opts.AppendSystemPrompt,
+				SystemPrompt:       promptResult.SystemPrompt,
+				AppendSystemPrompt: promptResult.AppendSystemPrompt,
 				ParentSessionID:    opts.ParentSessionID,
 			})
 			if err != nil {
@@ -428,6 +445,50 @@ func selectedToolSpecs(ctx context.Context, opts Options, messages []model.Messa
 		return opts.Tools.Specs(), nil
 	}
 	return opts.ToolSelector.Select(ctx, opts.Tools, tool.SelectRequest{Messages: messages})
+}
+
+type builtPrompt struct {
+	SystemPrompt       string
+	AppendSystemPrompt string
+	Hash               string
+	Parts              []promptpkg.Part
+}
+
+func buildPrompt(ctx context.Context, opts Options, messages []model.Message, tools []model.ToolSpec) (builtPrompt, error) {
+	if opts.PromptBuilder == nil && opts.Identity.IsZero() && opts.SkillSource == nil && len(opts.Skills) == 0 {
+		return builtPrompt{
+			SystemPrompt:       opts.SystemPrompt,
+			AppendSystemPrompt: opts.AppendSystemPrompt,
+		}, nil
+	}
+	builder := opts.PromptBuilder
+	if builder == nil {
+		builder = promptpkg.DefaultBuilder{}
+	}
+	skills := append([]skillpkg.Skill(nil), opts.Skills...)
+	if opts.SkillSource != nil {
+		loaded, err := opts.SkillSource.Skills(ctx)
+		if err != nil {
+			return builtPrompt{}, err
+		}
+		skills = append(skills, loaded...)
+	}
+	result, err := builder.Build(ctx, promptpkg.Request{
+		Identity:           opts.Identity,
+		SystemPrompt:       opts.SystemPrompt,
+		AppendSystemPrompt: opts.AppendSystemPrompt,
+		Messages:           messages,
+		Tools:              tools,
+		Skills:             skills,
+	})
+	if err != nil {
+		return builtPrompt{}, err
+	}
+	return builtPrompt{
+		SystemPrompt: result.SystemPrompt,
+		Hash:         result.Hash,
+		Parts:        result.Parts,
+	}, nil
 }
 
 func collectAssistant(

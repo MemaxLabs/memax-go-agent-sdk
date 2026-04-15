@@ -10,8 +10,10 @@ import (
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/contextwindow"
 	"github.com/MemaxLabs/memax-go-agent-sdk/hook"
+	"github.com/MemaxLabs/memax-go-agent-sdk/identity"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/session"
+	"github.com/MemaxLabs/memax-go-agent-sdk/skill"
 	"github.com/MemaxLabs/memax-go-agent-sdk/telemetry"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
 )
@@ -343,6 +345,61 @@ func TestQueryAppliesToolSelectorBeforeModelRequest(t *testing.T) {
 	want := []string{"search_tools", "read_file"}
 	if !sameStrings(got, want) {
 		t.Fatalf("tools = %#v, want %#v", got, want)
+	}
+}
+
+func TestQueryBuildsPromptFromIdentityAndSkills(t *testing.T) {
+	fake := &fakeModel{turns: [][]model.StreamEvent{{{Kind: model.StreamText, Text: "done"}}}}
+	events, err := Query(context.Background(), "review the SQL migration", Options{
+		Model: fake,
+		Identity: identity.Identity{
+			Name:    "reviewer",
+			Mission: "find correctness risks",
+		},
+		Skills: []skill.Skill{{
+			Name:        "database-review",
+			Description: "SQL migration review",
+			Content:     "Check locking and rollback behavior.",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+	if _, err := Drain(events); err != nil {
+		t.Fatalf("Drain returned error: %v", err)
+	}
+	if len(fake.requests) != 1 {
+		t.Fatalf("model requests = %d, want 1", len(fake.requests))
+	}
+	system := fake.requests[0].SystemPrompt
+	for _, want := range []string{"reviewer", "find correctness risks", "database-review", "Check locking"} {
+		if !strings.Contains(system, want) {
+			t.Fatalf("system prompt missing %q:\n%s", want, system)
+		}
+	}
+	if fake.requests[0].AppendSystemPrompt != "" {
+		t.Fatalf("AppendSystemPrompt = %q, want empty after prompt assembly", fake.requests[0].AppendSystemPrompt)
+	}
+}
+
+func TestQueryLoadsSkillsFromSource(t *testing.T) {
+	fake := &fakeModel{turns: [][]model.StreamEvent{{{Kind: model.StreamText, Text: "done"}}}}
+	events, err := Query(context.Background(), "inspect auth code", Options{
+		Model: fake,
+		SkillSource: skill.StaticSource{{
+			Name:        "security-review",
+			Description: "auth and access control review",
+			Content:     "Check authorization boundaries.",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+	if _, err := Drain(events); err != nil {
+		t.Fatalf("Drain returned error: %v", err)
+	}
+	if len(fake.requests) != 1 || !strings.Contains(fake.requests[0].SystemPrompt, "security-review") {
+		t.Fatalf("system prompt = %q, want loaded skill", fake.requests[0].SystemPrompt)
 	}
 }
 

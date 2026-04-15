@@ -36,11 +36,14 @@ Current agent SDKs commonly expose autonomous file reading, command execution, w
 - `model`: provider-neutral messages, tool-use blocks, streamed events, and model client interface.
 - `tool`: registry, tool definition contract, decoder helpers, and executor.
 - `hook`: lifecycle hooks for host policy, audit, and observability.
+- `identity`: reusable agent identity profiles for role, mission, tone, autonomy, and constraints.
 - `permission`: reusable permission checkers and policy composition.
+- `prompt`: deterministic system prompt assembly from named parts, identity, tools, skills, and host guidance.
 - `providers/openai`: optional Responses API adapter for hosted model streaming and function calls.
 - `providers/anthropic`: optional Messages API adapter for hosted model streaming and tool-use blocks.
 - `session`: session persistence interface plus in-memory and append-only JSONL implementations.
 - `session/sqlitestore`: optional SQLite-backed session store for embedded durable agents.
+- `skill`: local skill manifests, loaders, and relevance selection.
 - `checkpoint`: checkpoint metadata, manager interface, and in-memory checkpoint manager.
 - `contextwindow`: deterministic message-window policies used before model requests.
 - `telemetry`: minimal SDK tracing and metrics interfaces used by core packages.
@@ -50,6 +53,7 @@ Current agent SDKs commonly expose autonomous file reading, command execution, w
 - `toolkit/toolsearch`: optional search tool for discovering deferred tool specs.
 - `toolkit/subagents`: optional delegation tool for bounded child agents with parent/child session correlation.
 - `toolkit/tasktools`: optional task-state tools for planning, progress tracking, and resumable work summaries.
+- `toolkit/skilltools`: optional skill discovery tools over `skill.Source`.
 
 Expected near-term packages:
 
@@ -61,7 +65,7 @@ The target loop is:
 
 1. Create or resume a session.
 2. Normalize user input into session messages.
-3. Build system prompt, user context, active tool specs, and model request.
+3. Select active tool specs, build system prompt, user context, active skills, and model request.
 4. Stream model events to the caller.
 5. Collect assistant text and tool-use blocks.
 6. Validate each tool input.
@@ -105,6 +109,43 @@ Permission checks run before execution and receive the raw tool use plus the too
 If no structured rule matches, `Policy` denies by default unless an explicit default decision is configured. This keeps production policies conservative while preserving `AllowAll` as the SDK's default option for simple embedding.
 
 Hooks complement permissions. Permissions answer "may this run?" while hooks let host applications add policy, audit, tracing, and future input rewriting without changing tool implementations.
+
+## Prompt, Identity, and Skills
+
+The prompt layer is a first-class part of the orchestration contract. Applications
+can keep using raw `SystemPrompt` and `AppendSystemPrompt` fields for full
+control. When an identity, skills, or a custom prompt builder are configured,
+the SDK builds a deterministic system prompt from named parts and passes that
+assembled prompt to the provider adapter.
+
+`identity.Identity` captures stable agent behavior without requiring callers to
+copy a long prompt: name, role, mission, tone, autonomy level, and constraints.
+The default identity is deliberately tool-bounded: it tells the model to operate
+only through host-provided tools and to prefer observable progress.
+
+`prompt.Builder` receives the identity, selected model-visible tools, session
+messages, configured skills, and host prompt text. The default builder emits:
+
+- core Memax runtime instructions
+- identity and constraints
+- tool-use guidance based on active tool count
+- relevant skills
+- host system and append-system prompt text
+
+The builder returns named prompt parts and a stable hash so embedders can log,
+test, snapshot, and compare prompt changes. This keeps prompt evolution visible
+instead of hiding intelligence changes inside provider adapters.
+
+`skill.LoadDir` loads local `SKILL.md` manifests from skill directories. The
+initial loader supports simple frontmatter fields for name, description,
+when-to-use guidance, tags, and always-on behavior. Callers can pass explicit
+skills or a dynamic `Options.SkillSource`. `skill.Selector` keeps always-on
+skills and ranks relevant skills against the current prompt and transcript.
+The optional `toolkit/skilltools` package exposes skill discovery through the
+normal tool layer. A `search_skills` tool can list relevant instructions from a
+`skill.Source`, while the prompt builder can inject selected skills as named
+prompt parts. This keeps skills inspectable and governable by the same registry,
+permission, hook, and telemetry machinery as every other capability.
 
 ## Sessions
 

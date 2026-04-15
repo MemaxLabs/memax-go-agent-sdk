@@ -40,3 +40,32 @@
 - Publish stable API docs.
 - Add golden tests for event streams and transcript compatibility. Initial golden coverage protects the public query event sequence for a tool-using run.
 - Add adapters for common virtual filesystem and memory store implementations. Initial file workspace adapters cover in-memory maps, root-confined host directories, and read-only `io/fs.FS` sources. Initial durable session adapters cover memory, JSONL, and SQLite.
+
+## Phase 5: Intelligence Layer
+
+The SDK has strong orchestration, but top-tier agent behavior also depends on
+how the model is briefed. This phase makes prompt and skill assembly explicit,
+testable, and reusable instead of leaving every embedder to hand-write a large
+system prompt.
+
+- Add agent identity profiles. Initial `identity.Identity` support exists with a default Memax-native profile plus configurable role, mission, tone, autonomy level, and constraints.
+- Add deterministic prompt assembly. Initial `prompt.Builder` support exists and produces named prompt parts, a stable hash, identity guidance, tool-use guidance, selected skills, and host prompt text.
+- Add local skill manifests. Initial `skill.LoadDir`, `skill.StaticSource`, `Options.SkillSource`, and relevance selection exist for `SKILL.md` directories with simple frontmatter.
+- Add prompt snapshots and golden tests. Initial package tests cover stable prompt hashing; future tests should cover full model-request prompt compatibility.
+- Add skill discovery tools. Initial `toolkit/skilltools` search tool exists, exposing skills through the normal tool layer.
+- Add skill-scoped hooks and permissions. Skills should be able to declare policy hints that hosts can accept, deny, or rewrite.
+- Add agent identity propagation for subagents. Child agents can already receive full `Options`; future examples should define dedicated reviewer, explorer, implementer, and verifier identities.
+- Add provider-specific prompt profiles. Some providers prefer different placement for summaries, tool instructions, and system context; the prompt layer should make those differences explicit.
+- Add project/user memory injection. Persistent project rules and user preferences should be injected as named prompt parts through the same builder rather than concatenated ad hoc.
+- Add reactive context-failure recovery. If a provider returns a prompt-too-long error, the loop should compact or summarize and retry once under a clear policy.
+- Add external large-result storage. Very large tool outputs should be stored by a host-provided blob/result store and returned to the model as handles plus previews.
+- Add structured output contracts. Hosts should be able to request final answers in typed JSON schemas and receive validation/retry behavior.
+- Add cost and token accounting. Provider adapters should surface usage when available, and the SDK should emit usage metrics and events.
+- Add autonomy eval harness. Build deterministic and live evals for planning, tool recovery, subagent delegation, session resume, compaction quality, and final-answer correctness.
+
+## Phase 6: Ecosystem and Hardening
+
+- Add more durable stores and workspace adapters, starting with production SQLite examples, object-store checkpoint managers, and git-backed workspace checkpoints.
+- Add MCP/tool bridge examples while keeping the core tool contract provider-neutral.
+- Add release automation, API compatibility checks, and generated reference docs.
+- Add security hardening guides for filesystem adapters, approval flows, credentials, and multi-tenant server embedding.

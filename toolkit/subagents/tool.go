@@ -7,6 +7,7 @@ import (
 
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
+	"github.com/MemaxLabs/memax-go-agent-sdk/skill"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
 )
 
@@ -196,8 +197,26 @@ func mergeOptions(base memaxagent.Options, override memaxagent.Options) memaxage
 	if override.Context != nil {
 		out.Context = override.Context
 	}
+	if override.ToolSelector != nil {
+		out.ToolSelector = override.ToolSelector
+	}
 	if override.Tracer != nil {
 		out.Tracer = override.Tracer
+	}
+	if override.Meter != nil {
+		out.Meter = override.Meter
+	}
+	if override.PromptBuilder != nil {
+		out.PromptBuilder = override.PromptBuilder
+	}
+	if !override.Identity.IsZero() {
+		out.Identity = override.Identity
+	}
+	if override.SkillSource != nil {
+		out.SkillSource = override.SkillSource
+	}
+	if len(override.Skills) != 0 {
+		out.Skills = append([]skill.Skill(nil), override.Skills...)
 	}
 	if override.SystemPrompt != "" {
 		out.SystemPrompt = override.SystemPrompt

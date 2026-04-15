@@ -16,4 +16,6 @@ changes should still be called out here with migration notes.
   list-entry limits, and file/directory modes.
 - Added SDK-owned metrics interfaces with optional OpenTelemetry adaptation.
 - Added SQLite-backed session store adapter.
+- Added agent identity profiles, deterministic prompt assembly, local skill
+  manifests, and skill discovery tools.
 - Added CI workflow, versioning policy, and public API compatibility guidance.

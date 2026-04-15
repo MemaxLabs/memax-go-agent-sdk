@@ -5,9 +5,12 @@ import (
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/contextwindow"
 	"github.com/MemaxLabs/memax-go-agent-sdk/hook"
+	"github.com/MemaxLabs/memax-go-agent-sdk/identity"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/permission"
+	"github.com/MemaxLabs/memax-go-agent-sdk/prompt"
 	"github.com/MemaxLabs/memax-go-agent-sdk/session"
+	"github.com/MemaxLabs/memax-go-agent-sdk/skill"
 	"github.com/MemaxLabs/memax-go-agent-sdk/telemetry"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
 )
@@ -18,14 +21,18 @@ const defaultMaxTurns = 50
 type Options struct {
 	Model model.Client
 
-	Tools        *tool.Registry
-	Permissions  permission.Checker
-	Sessions     session.Store
-	Hooks        *hook.Runner
-	Context      contextwindow.Policy
-	ToolSelector tool.Selector
-	Tracer       telemetry.Tracer
-	Meter        telemetry.Meter
+	Tools         *tool.Registry
+	Permissions   permission.Checker
+	Sessions      session.Store
+	Hooks         *hook.Runner
+	Context       contextwindow.Policy
+	ToolSelector  tool.Selector
+	Tracer        telemetry.Tracer
+	Meter         telemetry.Meter
+	PromptBuilder prompt.Builder
+	Identity      identity.Identity
+	SkillSource   skill.Source
+	Skills        []skill.Skill
 
 	SystemPrompt       string
 	AppendSystemPrompt string

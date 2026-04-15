@@ -13,6 +13,11 @@
 // reached. Callers consume the returned Event channel to drive CLIs, servers,
 // tests, logs, traces, or custom UIs.
 //
+// Callers can supply raw system prompts or use the prompt and identity packages
+// to assemble deterministic prompt parts from an agent profile, active tools,
+// selected skills, and host instructions. The raw prompt path remains available
+// for embedders that need complete control.
+//
 // Applications provide capabilities by registering tools. The core never
 // bypasses the tool layer for files, shell commands, network calls, approvals,
 // checkpoints, task state, or delegation. This keeps policy and workspace

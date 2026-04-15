@@ -23,6 +23,8 @@ Implemented foundation:
 - bounded subagent tool with parent/child session correlation
 - task state tools for agent planning and progress tracking
 - opt-in tool selection and search for deferred tool loading
+- agent identity profiles, deterministic prompt assembly, and local skill manifests
+- skill discovery tools
 - OpenAI Responses API model adapter
 - Anthropic Messages API model adapter
 - context-window policies for recent-message limiting, token budgets, and summarizing compaction
@@ -58,9 +60,10 @@ Additional deterministic examples:
 go run ./examples/session_resume
 go run ./examples/advanced_stack
 go run ./examples/ci_embedding
+go run ./examples/skills_identity
 ```
 
-`session_resume` shows how to continue a durable transcript by passing `Options.SessionID`. `advanced_stack` composes task state, checkpointing, context budgeting, tool search, and memory-backed file tools in one run. `ci_embedding` shows a bounded, read-only agent run shaped for CI jobs.
+`session_resume` shows how to continue a durable transcript by passing `Options.SessionID`. `advanced_stack` composes task state, checkpointing, context budgeting, tool search, and memory-backed file tools in one run. `ci_embedding` shows a bounded, read-only agent run shaped for CI jobs. `skills_identity` shows how an agent profile and relevant skills become deterministic prompt guidance.
 
 To try the embeddable HTTP shape:
 
@@ -119,6 +122,46 @@ To persist sessions in SQLite, use `session/sqlitestore` with any `database/sql`
 ```go
 db, err := sql.Open("sqlite", "file:memax.db")
 sessions, err := sqlitestore.New(ctx, db)
+```
+
+To configure agent identity and skills:
+
+```go
+events, err := memaxagent.Query(ctx, "Review the migration plan.", memaxagent.Options{
+    Model: client,
+    Identity: identity.Identity{
+        Name:    "Migration Reviewer",
+        Role:    "database change reviewer",
+        Mission: "identify correctness, rollback, and operational risks",
+    },
+    Skills: []skill.Skill{{
+        Name:        "database-review",
+        Description: "Review schema and data migration plans.",
+        WhenToUse:   "The task involves SQL, migrations, indexes, or rollback plans.",
+        Content:     "Check lock behavior, rollback path, data safety, and observability.",
+    }},
+})
+```
+
+Local `SKILL.md` directories can be loaded up front or exposed through
+`Options.SkillSource`:
+
+```go
+skills, err := skill.LoadDir(ctx, ".agents/skills")
+events, err := memaxagent.Query(ctx, "Review the migration plan.", memaxagent.Options{
+    Model:       client,
+    SkillSource: skill.StaticSource(skills),
+})
+```
+
+To let the model discover skills through the normal tool layer, register
+`toolkit/skilltools`:
+
+```go
+searchSkills, err := skilltools.NewSearchTool(skilltools.Config{
+    Source: skill.StaticSource(skills),
+})
+registry := tool.NewRegistry(searchSkills)
 ```
 
 To expose bounded worker agents as a tool, import `github.com/MemaxLabs/memax-go-agent-sdk/toolkit/subagents` and register the returned tool:
