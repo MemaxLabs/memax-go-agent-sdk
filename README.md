@@ -26,6 +26,7 @@ Implemented foundation:
 - opt-in tool selection and search for deferred tool loading
 - agent identity profiles, deterministic prompt assembly, and local skill manifests
 - project, user, and session memory injection through source-neutral prompt memory sources
+- opt-in memory search/save/delete tools for host-owned durable memory backends
 - structured final-output contracts with JSON Schema validation and retry
 - provider-neutral model usage events and token telemetry
 - deterministic autonomy eval harness for scripted orchestration scenarios
@@ -259,6 +260,25 @@ events, err := memaxagent.Query(ctx, "Review the billing change.", memaxagent.Op
     }),
 })
 ```
+
+To let the model explicitly search or request updates to host-owned durable
+memory, register `toolkit/memorytools` against a backend that implements the
+capabilities you want to expose:
+
+```go
+memories := memory.NewMemoryStore(nil)
+memoryTools, err := memorytools.NewTools(memorytools.Config{
+    Source:  memories,
+    Writer:  memories,
+    Deleter: memories,
+})
+registry := tool.NewRegistry(memoryTools...)
+```
+
+Cloud memory systems can implement `memory.Source`, `memory.Writer`, and
+`memory.Deleter` directly. Only registered tools are available to the model, so
+hosts can expose search-only memory, save-with-approval memory, or full
+read/write/delete memory through normal tool permissions.
 
 To expose bounded worker agents as a tool, import `github.com/MemaxLabs/memax-go-agent-sdk/toolkit/subagents` and register the returned tool:
 

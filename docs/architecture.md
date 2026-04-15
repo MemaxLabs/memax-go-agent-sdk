@@ -206,6 +206,16 @@ the current prompt and recent user-message text. Memory injection is prompt
 context only; it does not grant filesystem, network, workspace, or OS
 capabilities.
 
+Memory mutation remains an explicit tool capability. Backends can optionally
+implement `memory.Writer` and `memory.Deleter` in addition to `memory.Source`.
+The optional `toolkit/memorytools` package exposes `search_memories`,
+`save_memory`, and `delete_memory` only for configured capabilities, so hosts
+can choose search-only, append-only, approval-gated, or full read/write/delete
+memory behavior through the normal registry, permission, hook, and telemetry
+layers. This is the intended integration point for cloud memory systems such as
+Memax: implement the small memory interfaces, then register the tools and/or
+configure `Options.MemorySource`.
+
 `skill.Source` is the source-neutral loading contract for instruction bundles.
 Built-in helpers cover static slices, function-backed sources, merged sources,
 policy-filtered sources,

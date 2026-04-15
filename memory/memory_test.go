@@ -101,3 +101,46 @@ func TestSelectorRanksAndLimitsMemories(t *testing.T) {
 		t.Fatalf("second memory = %q, want priority tie-break", got[1].Name)
 	}
 }
+
+func TestMemoryStorePutSearchDelete(t *testing.T) {
+	store := NewMemoryStore([]Memory{{
+		ID:      "memory-7",
+		Name:    "billing",
+		Scope:   ScopeProject,
+		Content: "audit invoices",
+		Tags:    []string{"billing"},
+	}})
+
+	updated, err := store.PutMemory(context.Background(), PutRequest{Memory: Memory{
+		Name:     "billing",
+		Scope:    ScopeProject,
+		Content:  "audit invoices and rollback",
+		Metadata: map[string]any{"owner": "host"},
+	}})
+	if err != nil {
+		t.Fatalf("PutMemory returned error: %v", err)
+	}
+	if updated.ID != "memory-7" {
+		t.Fatalf("updated ID = %q, want memory-7", updated.ID)
+	}
+	updated.Metadata["owner"] = "mutated"
+
+	memories, err := store.Memories(context.Background(), Request{})
+	if err != nil {
+		t.Fatalf("Memories returned error: %v", err)
+	}
+	if len(memories) != 1 || memories[0].Content != "audit invoices and rollback" || memories[0].Metadata["owner"] != "host" {
+		t.Fatalf("memories = %#v, want updated defensive copy", memories)
+	}
+
+	if err := store.DeleteMemory(context.Background(), DeleteRequest{Name: "billing", Scope: ScopeProject}); err != nil {
+		t.Fatalf("DeleteMemory returned error: %v", err)
+	}
+	memories, err = store.Memories(context.Background(), Request{})
+	if err != nil {
+		t.Fatalf("Memories returned error: %v", err)
+	}
+	if len(memories) != 0 {
+		t.Fatalf("memories = %#v, want deleted", memories)
+	}
+}
