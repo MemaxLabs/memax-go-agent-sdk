@@ -267,38 +267,17 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 				contextSpan.Set(telemetry.Int("memax.context.sent_messages", len(messages)))
 				contextSpan.End()
 				if !reflect.DeepEqual(messages, originalMessages) {
-					event := newEvent(EventContextApplied, sessionID, turn)
-					event.Context = &ContextEvent{
-						OriginalMessages: originalCount,
-						SentMessages:     len(messages),
-					}
-					if errs := opts.Hooks.ContextApplied(turnCtx, hook.ContextAppliedInput{
-						SessionID:        sessionID,
-						Turn:             turn,
-						OriginalMessages: originalCount,
-						SentMessages:     len(messages),
-					}); len(errs) > 0 {
-						opts.Meter.Add(turnCtx, "memax.hook.errors", int64(len(errs)),
-							telemetry.String("memax.session_id", sessionID),
-							telemetry.String("memax.hook", "context_applied"),
-						)
-						err = fmt.Errorf("context applied hook failed: %w", errors.Join(errs...))
+					if ok, applyErr := emitContextApplied(turnCtx, emit, opts, sessionID, turn, originalCount, len(messages)); applyErr != nil {
+						err = applyErr
 						turnSpan.RecordError(err)
 						emitError(turnCtx, emit, sessionID, turn, err)
 						_ = finish(turn, hook.StopReasonError, err)
 						shouldStop = true
 						return
-					}
-					if !emit(event) {
+					} else if !ok {
 						shouldStop = true
 						return
 					}
-					opts.Meter.Add(turnCtx, "memax.context.applied", 1,
-						telemetry.String("memax.session_id", sessionID),
-						telemetry.Int("memax.turn", turn),
-						telemetry.Int("memax.context.original_messages", originalCount),
-						telemetry.Int("memax.context.sent_messages", len(messages)),
-					)
 				}
 			}
 			turnSpan.Set(telemetry.Int("memax.model.messages", len(messages)))
@@ -357,6 +336,42 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 				AppendSystemPrompt: promptResult.AppendSystemPrompt,
 				ParentSessionID:    opts.ParentSessionID,
 			})
+			if err != nil {
+				if opts.ContextRetry != nil && model.IsContextWindowExceeded(err) {
+					retryMessages, retryPrompt, retryErr := retryContextWindow(modelCtx, opts, messages, toolSpecs)
+					if retryErr == nil {
+						if !reflect.DeepEqual(retryMessages, messages) {
+							if ok, applyErr := emitContextApplied(turnCtx, emit, opts, sessionID, turn, len(messages), len(retryMessages)); applyErr != nil {
+								err = applyErr
+								modelSpan.RecordError(err)
+								modelSpan.End()
+								turnSpan.RecordError(err)
+								emitError(turnCtx, emit, sessionID, turn, err)
+								_ = finish(turn, hook.StopReasonError, err)
+								shouldStop = true
+								return
+							} else if !ok {
+								modelSpan.End()
+								shouldStop = true
+								return
+							}
+						}
+						messages = retryMessages
+						promptResult = retryPrompt
+						stream, err = opts.Model.Stream(modelCtx, model.Request{
+							SessionID:          sessionID,
+							Messages:           messages,
+							Tools:              toolSpecs,
+							SystemPrompt:       promptResult.SystemPrompt,
+							AppendSystemPrompt: promptResult.AppendSystemPrompt,
+							ParentSessionID:    opts.ParentSessionID,
+						})
+					}
+					if retryErr != nil {
+						err = errors.Join(err, fmt.Errorf("context retry failed: %w", retryErr))
+					}
+				}
+			}
 			if err != nil {
 				err = fmt.Errorf("stream model: %w", err)
 				modelSpan.RecordError(err)
@@ -485,7 +500,7 @@ type builtPrompt struct {
 }
 
 func buildPrompt(ctx context.Context, opts Options, messages []model.Message, tools []model.ToolSpec) (builtPrompt, error) {
-	if opts.PromptBuilder == nil && opts.Identity.IsZero() && opts.SkillSource == nil && len(opts.Skills) == 0 {
+	if opts.PromptBuilder == nil && opts.PromptProfile == "" && opts.Identity.IsZero() && opts.SkillSource == nil && len(opts.Skills) == 0 {
 		return builtPrompt{
 			SystemPrompt:       opts.SystemPrompt,
 			AppendSystemPrompt: opts.AppendSystemPrompt,
@@ -493,7 +508,7 @@ func buildPrompt(ctx context.Context, opts Options, messages []model.Message, to
 	}
 	builder := opts.PromptBuilder
 	if builder == nil {
-		builder = promptpkg.DefaultBuilder{}
+		builder = promptpkg.DefaultBuilder{Profile: opts.PromptProfile}
 	}
 	skills := append([]skillpkg.Skill(nil), opts.Skills...)
 	if opts.SkillSource != nil {
@@ -519,6 +534,56 @@ func buildPrompt(ctx context.Context, opts Options, messages []model.Message, to
 		Hash:         result.Hash,
 		Parts:        result.Parts,
 	}, nil
+}
+
+func retryContextWindow(ctx context.Context, opts Options, messages []model.Message, tools []model.ToolSpec) ([]model.Message, builtPrompt, error) {
+	retryMessages, err := opts.ContextRetry.Apply(ctx, messages)
+	if err != nil {
+		return nil, builtPrompt{}, err
+	}
+	retryPrompt, err := buildPrompt(ctx, opts, retryMessages, tools)
+	if err != nil {
+		return nil, builtPrompt{}, err
+	}
+	return retryMessages, retryPrompt, nil
+}
+
+func emitContextApplied(
+	ctx context.Context,
+	emit func(Event) bool,
+	opts Options,
+	sessionID string,
+	turn int,
+	originalCount int,
+	sentCount int,
+) (bool, error) {
+	event := newEvent(EventContextApplied, sessionID, turn)
+	event.Context = &ContextEvent{
+		OriginalMessages: originalCount,
+		SentMessages:     sentCount,
+	}
+	if errs := opts.Hooks.ContextApplied(ctx, hook.ContextAppliedInput{
+		SessionID:        sessionID,
+		Turn:             turn,
+		OriginalMessages: originalCount,
+		SentMessages:     sentCount,
+	}); len(errs) > 0 {
+		opts.Meter.Add(ctx, "memax.hook.errors", int64(len(errs)),
+			telemetry.String("memax.session_id", sessionID),
+			telemetry.String("memax.hook", "context_applied"),
+		)
+		return true, fmt.Errorf("context applied hook failed: %w", errors.Join(errs...))
+	}
+	if !emit(event) {
+		return false, nil
+	}
+	opts.Meter.Add(ctx, "memax.context.applied", 1,
+		telemetry.String("memax.session_id", sessionID),
+		telemetry.Int("memax.turn", turn),
+		telemetry.Int("memax.context.original_messages", originalCount),
+		telemetry.Int("memax.context.sent_messages", sentCount),
+	)
+	return true, nil
 }
 
 func collectAssistant(

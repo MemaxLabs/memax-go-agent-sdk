@@ -23,4 +23,6 @@ changes should still be called out here with migration notes.
 - Hardened cached skill loading to deduplicate concurrent refreshes.
 - Added `QueryAsync`, `skill.TimeoutSource`, `skill.PrefetchSource`, tool
   timeout wrappers, and server embedding guidance for HTTP/WebSocket services.
+- Added prompt golden tests, prompt/skill/server benchmarks, provider prompt
+  profiles, skill policy filtering, and one-shot context-window retry support.
 - Added CI workflow, versioning policy, and public API compatibility guidance.

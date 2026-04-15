@@ -141,21 +141,32 @@ messages, configured skills, and host prompt text. The default builder emits:
 The builder returns named prompt parts and a stable hash so embedders can log,
 test, snapshot, and compare prompt changes. This keeps prompt evolution visible
 instead of hiding intelligence changes inside provider adapters.
+`prompt.DefaultBuilder` also supports provider-family profiles for OpenAI and
+Anthropic. Profiles add small provider-oriented guidance without importing
+provider request types into core prompt assembly.
 
 `skill.Source` is the source-neutral loading contract for instruction bundles.
 Built-in helpers cover static slices, function-backed sources, merged sources,
+policy-filtered sources,
 cached sources, timeout-bounded sources, stale-while-revalidate prefetch
 sources, HTTP JSON endpoints, host filesystem directories, and standard `fs.FS`
 implementations. `skill.LoadDir` and `skill.LoadFS` load `SKILL.md` manifests
 with simple frontmatter fields for name, description, when-to-use guidance,
-tags, and always-on behavior. Callers can pass explicit skills or a dynamic
-`Options.SkillSource`. `skill.Selector` keeps always-on skills and ranks
+tags, policy hints, and always-on behavior. Callers can pass explicit skills or
+a dynamic `Options.SkillSource`. `skill.Selector` keeps always-on skills and ranks
 relevant skills against the current prompt and transcript. The optional
 `toolkit/skilltools` package exposes skill discovery through the normal tool
 layer. A `search_skills` tool can list relevant instructions from a
 `skill.Source`, while the prompt builder can inject selected skills as named
 prompt parts. This keeps skills inspectable and governable by the same registry,
 permission, hook, and telemetry machinery as every other capability.
+
+If a provider rejects a model request because the context window is too large,
+adapters can mark the error with `model.ErrContextWindowExceeded`. `Query` can
+then apply `Options.ContextRetry` once and retry the model request without
+mutating the durable session transcript. This is intended for emergency
+compaction after an underestimated budget, not as a replacement for normal
+context-window policy.
 
 ## Sessions
 

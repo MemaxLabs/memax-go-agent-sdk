@@ -225,6 +225,51 @@ func TestQueryAppliesContextPolicyBeforeModelRequest(t *testing.T) {
 	}
 }
 
+func TestQueryRetriesContextWindowErrorWithRetryPolicy(t *testing.T) {
+	fake := &fakeModel{
+		turns: [][]model.StreamEvent{{{Kind: model.StreamText, Text: "done"}}},
+	}
+	retryModel := &contextRetryModel{fake: fake}
+	events, err := Query(context.Background(), "start", Options{
+		Model:        retryModel,
+		ContextRetry: replaceContextPolicy{text: "compact"},
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+	var contextEvent *ContextEvent
+	result, err := drainWithContextEvent(events, &contextEvent)
+	if err != nil {
+		t.Fatalf("Drain returned error: %v", err)
+	}
+	if result != "done" {
+		t.Fatalf("result = %q, want done", result)
+	}
+	if len(retryModel.requests) != 2 {
+		t.Fatalf("model requests = %d, want retry", len(retryModel.requests))
+	}
+	if contextEvent == nil || contextEvent.OriginalMessages != 1 || contextEvent.SentMessages != 1 {
+		t.Fatalf("context event = %#v, want retry context event", contextEvent)
+	}
+	if retryModel.requests[1].Messages[0].PlainText() != "compact" {
+		t.Fatalf("retry messages = %#v, want compacted prompt", retryModel.requests[1].Messages)
+	}
+}
+
+func drainWithContextEvent(events <-chan Event, contextEvent **ContextEvent) (string, error) {
+	for event := range events {
+		switch event.Kind {
+		case EventContextApplied:
+			*contextEvent = event.Context
+		case EventResult:
+			return event.Result, nil
+		case EventError:
+			return "", event.Err
+		}
+	}
+	return "", nil
+}
+
 func TestQueryEmitsContextAppliedEvent(t *testing.T) {
 	fake := &fakeModel{turns: [][]model.StreamEvent{
 		{{Kind: model.StreamToolUse, ToolUse: model.ToolUse{ID: "tool-1", Name: "noop", Input: json.RawMessage(`{}`)}}},
@@ -688,6 +733,22 @@ func (f *fakeModel) Stream(_ context.Context, req model.Request) (model.Stream, 
 	stream := &fakeStream{events: f.turns[f.calls]}
 	f.calls++
 	return stream, nil
+}
+
+type contextRetryModel struct {
+	fake     *fakeModel
+	requests []model.Request
+	calls    int
+}
+
+func (m *contextRetryModel) Stream(ctx context.Context, req model.Request) (model.Stream, error) {
+	m.requests = append(m.requests, req)
+	if m.calls == 0 {
+		m.calls++
+		return nil, model.ErrContextWindowExceeded
+	}
+	m.calls++
+	return m.fake.Stream(ctx, req)
 }
 
 type fakeStream struct {

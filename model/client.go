@@ -6,6 +6,13 @@ import (
 )
 
 var ErrEndOfStream = errors.New("model stream ended")
+var ErrContextWindowExceeded = errors.New("model context window exceeded")
+
+// IsContextWindowExceeded reports whether err means the provider rejected the
+// request because the prompt/context window was too large.
+func IsContextWindowExceeded(err error) bool {
+	return errors.Is(err, ErrContextWindowExceeded)
+}
 
 type Client interface {
 	Stream(context.Context, Request) (Stream, error)

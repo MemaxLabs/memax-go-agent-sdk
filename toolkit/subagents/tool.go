@@ -197,6 +197,9 @@ func mergeOptions(base memaxagent.Options, override memaxagent.Options) memaxage
 	if override.Context != nil {
 		out.Context = override.Context
 	}
+	if override.ContextRetry != nil {
+		out.ContextRetry = override.ContextRetry
+	}
 	if override.ToolSelector != nil {
 		out.ToolSelector = override.ToolSelector
 	}
@@ -208,6 +211,9 @@ func mergeOptions(base memaxagent.Options, override memaxagent.Options) memaxage
 	}
 	if override.PromptBuilder != nil {
 		out.PromptBuilder = override.PromptBuilder
+	}
+	if override.PromptProfile != "" {
+		out.PromptProfile = override.PromptProfile
 	}
 	if !override.Identity.IsZero() {
 		out.Identity = override.Identity

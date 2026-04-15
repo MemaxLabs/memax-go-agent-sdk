@@ -26,10 +26,12 @@ type Options struct {
 	Sessions      session.Store
 	Hooks         *hook.Runner
 	Context       contextwindow.Policy
+	ContextRetry  contextwindow.Policy
 	ToolSelector  tool.Selector
 	Tracer        telemetry.Tracer
 	Meter         telemetry.Meter
 	PromptBuilder prompt.Builder
+	PromptProfile prompt.Profile
 	Identity      identity.Identity
 	SkillSource   skill.Source
 	Skills        []skill.Skill

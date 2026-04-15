@@ -52,13 +52,13 @@ system prompt.
 - Add deterministic prompt assembly. Initial `prompt.Builder` support exists and produces named prompt parts, a stable hash, identity guidance, tool-use guidance, selected skills, and host prompt text.
 - Add local and remote skill manifests. Initial `skill.LoadDir`, `skill.LoadFS`, `skill.StaticSource`, `skill.SourceFunc`, `skill.MultiSource`, `skill.CachedSource`, `skill.HTTPSource`, `Options.SkillSource`, and relevance selection exist for `SKILL.md` directories and source-neutral skill loading.
 - Add server-friendly async wrappers. Initial `QueryAsync`, `skill.TimeoutSource`, `skill.PrefetchSource`, and `tool.WithTimeout` support exists.
-- Add prompt snapshots and golden tests. Initial package tests cover stable prompt hashing; future tests should cover full model-request prompt compatibility.
+- Add prompt snapshots and golden tests. Initial prompt golden tests cover identity, tools, skills, provider profiles, and host prompt composition.
 - Add skill discovery tools. Initial `toolkit/skilltools` search tool exists, exposing skills through the normal tool layer.
-- Add skill-scoped hooks and permissions. Skills should be able to declare policy hints that hosts can accept, deny, or rewrite.
+- Add skill-scoped hooks and permissions. Initial `skill.PolicySource` support exists for host accept/deny/rewrite policy over loaded skills.
 - Add agent identity propagation for subagents. Child agents can already receive full `Options`; future examples should define dedicated reviewer, explorer, implementer, and verifier identities.
-- Add provider-specific prompt profiles. Some providers prefer different placement for summaries, tool instructions, and system context; the prompt layer should make those differences explicit.
+- Add provider-specific prompt profiles. Initial `prompt.ProfileOpenAI` and `prompt.ProfileAnthropic` guidance exists.
 - Add project/user memory injection. Persistent project rules and user preferences should be injected as named prompt parts through the same builder rather than concatenated ad hoc.
-- Add reactive context-failure recovery. If a provider returns a prompt-too-long error, the loop should compact or summarize and retry once under a clear policy.
+- Add reactive context-failure recovery. Initial `Options.ContextRetry` support retries once when providers return a recognized context-window error.
 - Add external large-result storage. Very large tool outputs should be stored by a host-provided blob/result store and returned to the model as handles plus previews.
 - Add structured output contracts. Hosts should be able to request final answers in typed JSON schemas and receive validation/retry behavior.
 - Add cost and token accounting. Provider adapters should surface usage when available, and the SDK should emit usage metrics and events.

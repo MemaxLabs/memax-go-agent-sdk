@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
+
+	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 )
 
 type apiError struct {
@@ -24,6 +27,26 @@ func (e *apiError) Error() string {
 		return fmt.Sprintf("openai: %s (%s)", e.Message, e.Type)
 	}
 	return "openai: " + e.Message
+}
+
+func (e *apiError) Is(target error) bool {
+	return target == model.ErrContextWindowExceeded && e.contextWindowExceeded()
+}
+
+func (e *apiError) contextWindowExceeded() bool {
+	if e == nil {
+		return false
+	}
+	code := strings.ToLower(e.Code)
+	typ := strings.ToLower(e.Type)
+	message := strings.ToLower(e.Message)
+	return strings.Contains(code, "context_length") ||
+		strings.Contains(code, "context_window") ||
+		strings.Contains(typ, "context_length") ||
+		strings.Contains(message, "context length") ||
+		strings.Contains(message, "context window") ||
+		strings.Contains(message, "maximum context") ||
+		strings.Contains(message, "too many tokens")
 }
 
 func decodeError(resp *http.Response) error {

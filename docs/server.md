@@ -18,6 +18,9 @@ channel while the rest of the agent loop runs in a goroutine.
 
 Use `QueryAsync` when even startup work should not block the caller goroutine.
 Startup failures are emitted as `EventError` values on the returned channel.
+If startup fails before a session is created, that error event has an empty
+`SessionID`; multiplexed WebSocket/SSE servers should route that case through
+their request-local state rather than session ID.
 
 For request/response HTTP APIs, it is fine for the request handler to drain the
 event channel. That blocks only that request goroutine. For WebSockets or SSE,

@@ -3,6 +3,7 @@ package anthropic
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -107,6 +108,13 @@ data: {"type":"message_stop"}
 	}
 	if gotRequest.Temperature == nil || *gotRequest.Temperature != temperature {
 		t.Fatalf("temperature = %#v", gotRequest.Temperature)
+	}
+}
+
+func TestAPIErrorMarksContextWindowExceeded(t *testing.T) {
+	err := &apiError{Message: "prompt is too long"}
+	if !errors.Is(err, model.ErrContextWindowExceeded) {
+		t.Fatalf("errors.Is(%v, ErrContextWindowExceeded) = false", err)
 	}
 }
 

@@ -101,6 +101,7 @@ func parseSkillFile(defaultName string, path string, source string, data string)
 		Source:      source,
 		Path:        path,
 		Tags:        splitList(meta["tags"]),
+		PolicyHints: splitList(firstNonEmpty(meta["policy_hints"], meta["policy"])),
 	}
 	if value := meta["always_on"]; value != "" {
 		parsed, err := strconv.ParseBool(value)

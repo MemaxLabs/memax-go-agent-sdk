@@ -18,6 +18,7 @@ type Skill struct {
 	Path        string
 	AlwaysOn    bool
 	Tags        []string
+	PolicyHints []string
 }
 
 // Source provides skills to the prompt layer.
@@ -156,5 +157,6 @@ func cloneSkills(skills []Skill) []Skill {
 
 func clone(in Skill) Skill {
 	in.Tags = append([]string(nil), in.Tags...)
+	in.PolicyHints = append([]string(nil), in.PolicyHints...)
 	return in
 }

@@ -18,6 +18,7 @@ storage, config services, embedded files, or generated skills.
 - `skill.StaticSource`: in-memory skills, useful for tests and programmatic configuration.
 - `skill.SourceFunc`: function adapter for custom loaders.
 - `skill.MultiSource`: merges multiple sources and deduplicates named skills.
+- `skill.PolicySource`: filters or rewrites skills through host policy.
 - `skill.CachedSource`: wraps another source with successful-load caching.
 - `skill.TimeoutSource`: bounds another source with a per-load timeout.
 - `skill.PrefetchSource`: serves the last successful snapshot and refreshes stale skills in the background.
@@ -62,6 +63,7 @@ Supported frontmatter fields:
 - `when` or `when_to_use`
 - `always_on`
 - `tags`
+- `policy` or `policy_hints`
 
 The parser intentionally supports only simple `key: value` metadata and
 comma-separated tags. It is not a full YAML parser.

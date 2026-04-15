@@ -130,6 +130,46 @@ func TestMultiSourceDeduplicatesByName(t *testing.T) {
 	}
 }
 
+func TestPolicySourceFiltersAndRewritesSkills(t *testing.T) {
+	source := PolicySource{
+		Source: StaticSource{
+			{Name: "allow", Content: "original"},
+			{Name: "deny"},
+		},
+		Policy: PolicyFunc(func(_ context.Context, item Skill) Decision {
+			if item.Name == "deny" {
+				return Decision{Allow: false, Reason: "blocked"}
+			}
+			rewritten := item
+			rewritten.Content = "rewritten"
+			return Decision{Allow: true, Rewrite: &rewritten}
+		}),
+	}
+
+	got, err := source.Skills(context.Background())
+	if err != nil {
+		t.Fatalf("Skills returned error: %v", err)
+	}
+	if len(got) != 1 || got[0].Name != "allow" || got[0].Content != "rewritten" {
+		t.Fatalf("skills = %#v, want rewritten allow only", got)
+	}
+}
+
+func TestPolicySourceCanReturnDeniedSkillAsError(t *testing.T) {
+	source := PolicySource{
+		Source:      StaticSource{{Name: "deny"}},
+		DenyAsError: true,
+		Policy: PolicyFunc(func(context.Context, Skill) Decision {
+			return Decision{Allow: false, Reason: "skill blocked"}
+		}),
+	}
+
+	_, err := source.Skills(context.Background())
+	if err == nil || err.Error() != "skill blocked" {
+		t.Fatalf("Skills error = %v, want skill blocked", err)
+	}
+}
+
 func TestCachedSourceCachesSuccessfulLoads(t *testing.T) {
 	calls := 0
 	source := &CachedSource{

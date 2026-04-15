@@ -52,6 +52,7 @@ type Result struct {
 // DefaultBuilder is the SDK's default Memax-native prompt assembler.
 type DefaultBuilder struct {
 	SkillSelector skill.Selector
+	Profile       Profile
 }
 
 // Build assembles ordered prompt parts from identity, tools, skills, and host
@@ -67,6 +68,9 @@ func (b DefaultBuilder) Build(ctx context.Context, req Request) (Result, error) 
 	if len(req.Tools) > 0 {
 		parts = append(parts, Part{Name: "memax.tool_guidance", Content: formatToolGuidance(req.Tools)})
 	}
+	if profile := b.Profile.WithDefault(); profile != ProfileGeneric {
+		parts = append(parts, Part{Name: "memax.provider_profile", Content: formatProfile(profile)})
+	}
 	if selected := b.SkillSelector.Select(req.Skills, requestQuery(req)); len(selected) > 0 {
 		parts = append(parts, Part{Name: "memax.skills", Content: formatSkills(selected)})
 	}
@@ -81,6 +85,24 @@ func (b DefaultBuilder) Build(ctx context.Context, req Request) (Result, error) 
 	result.SystemPrompt = joinParts(parts)
 	result.Hash = hashParts(parts)
 	return result, nil
+}
+
+// Profile tunes prompt guidance for a provider family without leaking provider
+// request types into the SDK core.
+type Profile string
+
+const (
+	ProfileGeneric   Profile = "generic"
+	ProfileOpenAI    Profile = "openai"
+	ProfileAnthropic Profile = "anthropic"
+)
+
+// WithDefault returns ProfileGeneric when p is empty.
+func (p Profile) WithDefault() Profile {
+	if p == "" {
+		return ProfileGeneric
+	}
+	return p
 }
 
 func requestQuery(req Request) string {
@@ -134,6 +156,17 @@ func formatToolGuidance(tools []model.ToolSpec) string {
 	b.WriteString("\nAvailable tool count: ")
 	fmt.Fprintf(&b, "%d", len(tools))
 	return b.String()
+}
+
+func formatProfile(profile Profile) string {
+	switch profile {
+	case ProfileOpenAI:
+		return "Provider profile: use available function tools with complete JSON arguments when tool use is needed. Prefer tool calls over describing an action that a provided tool can perform."
+	case ProfileAnthropic:
+		return "Provider profile: use available tool-use blocks with complete JSON inputs when tool use is needed. Keep text concise around tool calls so tool results can drive the next turn."
+	default:
+		return ""
+	}
 }
 
 func formatSkills(skills []skill.Skill) string {

@@ -3,6 +3,7 @@ package openai
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -99,6 +100,13 @@ data: {"type":"response.completed"}
 	}
 	if len(gotRequest.Tools) != 1 || gotRequest.Tools[0].Name != "read_file" {
 		t.Fatalf("tools = %#v", gotRequest.Tools)
+	}
+}
+
+func TestAPIErrorMarksContextWindowExceeded(t *testing.T) {
+	err := &apiError{Code: "context_length_exceeded", Message: "maximum context length reached"}
+	if !errors.Is(err, model.ErrContextWindowExceeded) {
+		t.Fatalf("errors.Is(%v, ErrContextWindowExceeded) = false", err)
 	}
 }
 
