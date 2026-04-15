@@ -73,6 +73,82 @@ func TestJSONLStoreCreateWithParent(t *testing.T) {
 	}
 }
 
+func TestJSONLStoreGetListAndFork(t *testing.T) {
+	store := NewJSONLStore(t.TempDir())
+	sess, err := store.Create(context.Background())
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	messages := []model.Message{
+		{ID: "m1", Role: model.RoleUser, Content: []model.ContentBlock{{Type: model.ContentText, Text: "one"}}},
+		{ID: "m2", Role: model.RoleAssistant, Content: []model.ContentBlock{{Type: model.ContentText, Text: "two"}}},
+	}
+	for _, msg := range messages {
+		if err := store.Append(context.Background(), sess.ID, msg); err != nil {
+			t.Fatalf("Append returned error: %v", err)
+		}
+	}
+
+	got, err := store.Get(context.Background(), sess.ID)
+	if err != nil {
+		t.Fatalf("Get returned error: %v", err)
+	}
+	if got.ID != sess.ID || got.CreatedAt.IsZero() {
+		t.Fatalf("Get = %#v, want persisted session metadata", got)
+	}
+
+	sessions, err := store.List(context.Background())
+	if err != nil {
+		t.Fatalf("List returned error: %v", err)
+	}
+	if len(sessions) != 1 || sessions[0].ID != sess.ID {
+		t.Fatalf("List = %#v, want source session", sessions)
+	}
+
+	forked, err := store.Fork(context.Background(), sess.ID, ForkOptions{ThroughMessageID: "m1"})
+	if err != nil {
+		t.Fatalf("Fork returned error: %v", err)
+	}
+	if forked.ParentID != sess.ID {
+		t.Fatalf("fork ParentID = %q, want source id", forked.ParentID)
+	}
+	forkMessages, err := store.Messages(context.Background(), forked.ID)
+	if err != nil {
+		t.Fatalf("Messages returned error: %v", err)
+	}
+	if len(forkMessages) != 1 || forkMessages[0].ID != "m1" {
+		t.Fatalf("fork messages = %#v, want through m1", forkMessages)
+	}
+}
+
+func TestJSONLStoreAssignsMessageID(t *testing.T) {
+	store := NewJSONLStore(t.TempDir())
+	sess, err := store.Create(context.Background())
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	if err := store.Append(context.Background(), sess.ID, model.Message{Role: model.RoleUser}); err != nil {
+		t.Fatalf("Append returned error: %v", err)
+	}
+	messages, err := store.Messages(context.Background(), sess.ID)
+	if err != nil {
+		t.Fatalf("Messages returned error: %v", err)
+	}
+	if len(messages) != 1 || messages[0].ID == "" {
+		t.Fatalf("messages = %#v, want generated message id", messages)
+	}
+}
+
+func TestJSONLStoreListMissingDirectory(t *testing.T) {
+	sessions, err := NewJSONLStore(filepath.Join(t.TempDir(), "missing")).List(context.Background())
+	if err != nil {
+		t.Fatalf("List returned error: %v", err)
+	}
+	if len(sessions) != 0 {
+		t.Fatalf("sessions = %#v, want empty list", sessions)
+	}
+}
+
 func TestJSONLStoreRejectsInvalidParentSessionID(t *testing.T) {
 	_, err := NewJSONLStore(t.TempDir()).CreateWithOptions(context.Background(), CreateOptions{
 		ParentID: "../escape",

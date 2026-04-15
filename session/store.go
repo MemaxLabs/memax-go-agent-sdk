@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -29,6 +30,23 @@ type CreateOptions struct {
 
 type StoreWithCreateOptions interface {
 	CreateWithOptions(context.Context, CreateOptions) (Session, error)
+}
+
+type StoreWithGet interface {
+	Get(context.Context, string) (Session, error)
+}
+
+type StoreWithList interface {
+	List(context.Context) ([]Session, error)
+}
+
+type ForkOptions struct {
+	ParentID         string
+	ThroughMessageID string
+}
+
+type StoreWithFork interface {
+	Fork(context.Context, string, ForkOptions) (Session, error)
 }
 
 type MemoryStore struct {
@@ -62,6 +80,13 @@ func (s *MemoryStore) CreateWithOptions(_ context.Context, opts CreateOptions) (
 }
 
 func (s *MemoryStore) Append(_ context.Context, id string, msg model.Message) error {
+	if msg.ID == "" {
+		var err error
+		msg.ID, err = newID()
+		if err != nil {
+			return err
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	record, ok := s.sessions[id]
@@ -85,6 +110,54 @@ func (s *MemoryStore) Messages(_ context.Context, id string) ([]model.Message, e
 	return out, nil
 }
 
+func (s *MemoryStore) Get(_ context.Context, id string) (Session, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	record, ok := s.sessions[id]
+	if !ok {
+		return Session{}, fmt.Errorf("unknown session: %s", id)
+	}
+	return record.session, nil
+}
+
+func (s *MemoryStore) List(context.Context) ([]Session, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]Session, 0, len(s.sessions))
+	for _, record := range s.sessions {
+		out = append(out, record.session)
+	}
+	sortSessions(out)
+	return out, nil
+}
+
+func (s *MemoryStore) Fork(_ context.Context, id string, opts ForkOptions) (Session, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	source, ok := s.sessions[id]
+	if !ok {
+		return Session{}, fmt.Errorf("unknown session: %s", id)
+	}
+	messages, err := forkMessages(source.messages, opts.ThroughMessageID)
+	if err != nil {
+		return Session{}, err
+	}
+	newID, err := newID()
+	if err != nil {
+		return Session{}, err
+	}
+	parentID := opts.ParentID
+	if parentID == "" {
+		parentID = id
+	}
+	session := Session{ID: newID, ParentID: parentID, CreatedAt: time.Now().UTC()}
+	s.sessions[newID] = memorySession{
+		session:  session,
+		messages: messages,
+	}
+	return session, nil
+}
+
 func Create(ctx context.Context, store Store, opts CreateOptions) (Session, error) {
 	if store == nil {
 		return Session{}, fmt.Errorf("session store is required")
@@ -93,6 +166,69 @@ func Create(ctx context.Context, store Store, opts CreateOptions) (Session, erro
 		return extended.CreateWithOptions(ctx, opts)
 	}
 	return store.Create(ctx)
+}
+
+func Get(ctx context.Context, store Store, id string) (Session, error) {
+	if store == nil {
+		return Session{}, fmt.Errorf("session store is required")
+	}
+	if extended, ok := store.(StoreWithGet); ok {
+		return extended.Get(ctx, id)
+	}
+	if _, err := store.Messages(ctx, id); err != nil {
+		return Session{}, err
+	}
+	return Session{ID: id}, nil
+}
+
+func List(ctx context.Context, store Store) ([]Session, error) {
+	if store == nil {
+		return nil, fmt.Errorf("session store is required")
+	}
+	if extended, ok := store.(StoreWithList); ok {
+		return extended.List(ctx)
+	}
+	return nil, fmt.Errorf("session store does not support listing")
+}
+
+func Fork(ctx context.Context, store Store, id string, opts ForkOptions) (Session, error) {
+	if store == nil {
+		return Session{}, fmt.Errorf("session store is required")
+	}
+	if extended, ok := store.(StoreWithFork); ok {
+		return extended.Fork(ctx, id, opts)
+	}
+	return Session{}, fmt.Errorf("session store does not support forking")
+}
+
+func forkMessages(messages []model.Message, throughMessageID string) ([]model.Message, error) {
+	limit := len(messages)
+	if throughMessageID != "" {
+		limit = -1
+		for i, msg := range messages {
+			if msg.ID == throughMessageID {
+				limit = i + 1
+				break
+			}
+		}
+		if limit < 0 {
+			return nil, fmt.Errorf("message not found: %s", throughMessageID)
+		}
+	}
+	out := make([]model.Message, limit)
+	copy(out, messages[:limit])
+	return out, nil
+}
+
+func sortSessions(sessions []Session) {
+	sort.SliceStable(sessions, func(i int, j int) bool {
+		left := sessions[i]
+		right := sessions[j]
+		if !left.CreatedAt.Equal(right.CreatedAt) {
+			return left.CreatedAt.Before(right.CreatedAt)
+		}
+		return left.ID < right.ID
+	})
 }
 
 func newID() (string, error) {

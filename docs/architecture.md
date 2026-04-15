@@ -108,7 +108,7 @@ Sessions persist the conversation trajectory: user messages, assistant messages,
 
 The SDK includes an in-memory store for tests and short-lived agents, plus an append-only JSONL store for durable transcripts. The JSONL store validates session IDs before path construction and reports corrupt transcript lines with line numbers.
 
-Stores can optionally implement `CreateWithOptions` to preserve parent session IDs. `Query` uses that extension when `Options.ParentSessionID` is set, and otherwise falls back to the base `Store` contract for backward compatibility. Events, model requests, and tool runtime values all carry parent session IDs so subagent runs can be correlated without requiring a specific storage backend.
+Stores can optionally implement `CreateWithOptions` to preserve parent session IDs, `Get` and `List` to inspect existing sessions, and `Fork` to create a child transcript from a source session through a message ID. The built-in stores assign IDs to appended messages that do not already have one, while preserving caller-provided IDs. Helper functions in the `session` package use optional store interfaces when present and return clear unsupported-operation errors otherwise. `Query` resumes an existing transcript when `Options.SessionID` is set; otherwise it creates a new session. Events, model requests, and tool runtime values all carry parent session IDs so subagent and forked runs can be correlated without requiring a specific storage backend.
 
 ## Subagents
 
@@ -129,9 +129,9 @@ Tracing is optional and uses a small SDK-owned `telemetry.Tracer` interface so t
 Durable session stores should support:
 
 - append-only JSONL transcript. Initial implementation exists.
-- list and inspect sessions
-- resume by ID
-- fork from message ID
+- list and inspect sessions. Initial implementations exist.
+- resume by ID. Initial `Options.SessionID` support exists.
+- fork from message ID. Initial implementations exist.
 - compact boundary records
 - parent tool-use ID for subagent messages
 

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
@@ -80,6 +81,12 @@ func (s *JSONLStore) Append(_ context.Context, id string, msg model.Message) err
 	if err != nil {
 		return err
 	}
+	if msg.ID == "" {
+		msg.ID, err = newID()
+		if err != nil {
+			return err
+		}
+	}
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
 	if err != nil {
 		return fmt.Errorf("open transcript for append: %w", err)
@@ -97,20 +104,86 @@ func (s *JSONLStore) Append(_ context.Context, id string, msg model.Message) err
 	return nil
 }
 
-func (s *JSONLStore) Messages(_ context.Context, id string) ([]model.Message, error) {
+func (s *JSONLStore) Messages(ctx context.Context, id string) ([]model.Message, error) {
+	_, messages, err := s.readTranscript(ctx, id)
+	return messages, err
+}
+
+func (s *JSONLStore) Get(ctx context.Context, id string) (Session, error) {
+	session, _, err := s.readTranscript(ctx, id)
+	return session, err
+}
+
+func (s *JSONLStore) List(ctx context.Context) ([]Session, error) {
+	if s.dir == "" {
+		return nil, fmt.Errorf("session jsonl store directory is required")
+	}
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("list session directory: %w", err)
+	}
+	var sessions []Session
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != transcriptExt {
+			continue
+		}
+		id := strings.TrimSuffix(entry.Name(), transcriptExt)
+		if !sessionIDPattern.MatchString(id) {
+			continue
+		}
+		session, err := s.Get(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		sessions = append(sessions, session)
+	}
+	sortSessions(sessions)
+	return sessions, nil
+}
+
+func (s *JSONLStore) Fork(ctx context.Context, id string, opts ForkOptions) (Session, error) {
+	_, messages, err := s.readTranscript(ctx, id)
+	if err != nil {
+		return Session{}, err
+	}
+	messages, err = forkMessages(messages, opts.ThroughMessageID)
+	if err != nil {
+		return Session{}, err
+	}
+	parentID := opts.ParentID
+	if parentID == "" {
+		parentID = id
+	}
+	session, err := s.CreateWithOptions(ctx, CreateOptions{ParentID: parentID})
+	if err != nil {
+		return Session{}, err
+	}
+	for _, msg := range messages {
+		if err := s.Append(ctx, session.ID, msg); err != nil {
+			return Session{}, err
+		}
+	}
+	return session, nil
+}
+
+func (s *JSONLStore) readTranscript(_ context.Context, id string) (Session, []model.Message, error) {
 	path, err := s.path(id)
 	if err != nil {
-		return nil, err
+		return Session{}, nil, err
 	}
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, fmt.Errorf("open transcript: %w", err)
+		return Session{}, nil, fmt.Errorf("open transcript: %w", err)
 	}
 	defer file.Close()
 
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 64*1024), 64*1024*1024)
 
+	session := Session{ID: id}
 	var messages []model.Message
 	line := 0
 	for scanner.Scan() {
@@ -121,7 +194,14 @@ func (s *JSONLStore) Messages(_ context.Context, id string) ([]model.Message, er
 		}
 		var entry transcriptEntry
 		if err := json.Unmarshal(data, &entry); err != nil {
-			return nil, fmt.Errorf("decode transcript line %d: %w", line, err)
+			return Session{}, nil, fmt.Errorf("decode transcript line %d: %w", line, err)
+		}
+		if entry.Type == "session" && entry.Session != nil {
+			session = *entry.Session
+			if session.ID == "" {
+				session.ID = id
+			}
+			continue
 		}
 		if entry.Type != "message" || entry.Message == nil {
 			continue
@@ -129,9 +209,9 @@ func (s *JSONLStore) Messages(_ context.Context, id string) ([]model.Message, er
 		messages = append(messages, *entry.Message)
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("scan transcript: %w", err)
+		return Session{}, nil, fmt.Errorf("scan transcript: %w", err)
 	}
-	return messages, nil
+	return session, messages, nil
 }
 
 func (s *JSONLStore) path(id string) (string, error) {

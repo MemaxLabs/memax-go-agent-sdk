@@ -31,15 +31,18 @@ func Query(ctx context.Context, prompt string, opts Options) (<-chan Event, erro
 		telemetry.Int("memax.max_tool_concurrency", opts.MaxToolConcurrency),
 	)
 
-	sess, err := session.Create(ctx, opts.Sessions, session.CreateOptions{ParentID: opts.ParentSessionID})
+	sess, err := startSession(ctx, opts)
 	if err != nil {
 		if cancel != nil {
 			cancel()
 		}
-		err = fmt.Errorf("create session: %w", err)
+		err = fmt.Errorf("start session: %w", err)
 		querySpan.RecordError(err)
 		querySpan.End()
 		return nil, err
+	}
+	if opts.ParentSessionID == "" {
+		opts.ParentSessionID = sess.ParentID
 	}
 	querySpan.Set(telemetry.String("memax.session_id", sess.ID))
 	if errs := opts.Hooks.SessionStarted(ctx, hook.SessionStartedInput{SessionID: sess.ID}); len(errs) > 0 {
@@ -100,6 +103,13 @@ func Query(ctx context.Context, prompt string, opts Options) (<-chan Event, erro
 	}()
 
 	return events, nil
+}
+
+func startSession(ctx context.Context, opts Options) (session.Session, error) {
+	if opts.SessionID != "" {
+		return session.Get(ctx, opts.Sessions, opts.SessionID)
+	}
+	return session.Create(ctx, opts.Sessions, session.CreateOptions{ParentID: opts.ParentSessionID})
 }
 
 func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Options) {

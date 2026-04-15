@@ -11,6 +11,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/contextwindow"
 	"github.com/MemaxLabs/memax-go-agent-sdk/hook"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
+	"github.com/MemaxLabs/memax-go-agent-sdk/session"
 	"github.com/MemaxLabs/memax-go-agent-sdk/telemetry"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
 )
@@ -408,6 +409,51 @@ func TestQueryPropagatesParentSessionID(t *testing.T) {
 	}
 	if len(fake.requests) != 1 || fake.requests[0].ParentSessionID != "parent-session" {
 		t.Fatalf("model request = %#v, want parent session id", fake.requests)
+	}
+}
+
+func TestQueryResumesExistingSession(t *testing.T) {
+	store := session.NewMemoryStore()
+	sess, err := store.Create(context.Background())
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	if err := store.Append(context.Background(), sess.ID, model.Message{
+		Role:    model.RoleUser,
+		Content: []model.ContentBlock{{Type: model.ContentText, Text: "previous"}},
+	}); err != nil {
+		t.Fatalf("Append returned error: %v", err)
+	}
+	fake := &fakeModel{turns: [][]model.StreamEvent{{{Kind: model.StreamText, Text: "done"}}}}
+
+	events, err := Query(context.Background(), "next", Options{
+		Model:     fake,
+		Sessions:  store,
+		SessionID: sess.ID,
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+	var started Event
+	for event := range events {
+		if event.Kind == EventSessionStarted {
+			started = event
+		}
+		if event.Kind == EventError {
+			t.Fatalf("query error: %v", event.Err)
+		}
+		if event.Kind == EventResult {
+			break
+		}
+	}
+	if started.SessionID != sess.ID {
+		t.Fatalf("started event session = %q, want resumed session %q", started.SessionID, sess.ID)
+	}
+	if len(fake.requests) != 1 || len(fake.requests[0].Messages) != 2 {
+		t.Fatalf("model request = %#v, want previous + next messages", fake.requests)
+	}
+	if fake.requests[0].Messages[0].PlainText() != "previous" || fake.requests[0].Messages[1].PlainText() != "next" {
+		t.Fatalf("model messages = %#v, want resumed transcript", fake.requests[0].Messages)
 	}
 }
 

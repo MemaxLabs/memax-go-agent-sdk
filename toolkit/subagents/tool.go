@@ -205,6 +205,9 @@ func mergeOptions(base memaxagent.Options, override memaxagent.Options) memaxage
 	if override.AppendSystemPrompt != "" {
 		out.AppendSystemPrompt = override.AppendSystemPrompt
 	}
+	if override.SessionID != "" {
+		out.SessionID = override.SessionID
+	}
 	if override.ParentSessionID != "" {
 		out.ParentSessionID = override.ParentSessionID
 	}

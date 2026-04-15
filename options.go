@@ -28,6 +28,7 @@ type Options struct {
 
 	SystemPrompt       string
 	AppendSystemPrompt string
+	SessionID          string
 	ParentSessionID    string
 	MaxTurns           int
 	MaxToolConcurrency int
