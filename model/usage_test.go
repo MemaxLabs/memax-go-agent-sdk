@@ -8,6 +8,10 @@ func TestUsageAddAggregatesTokenCounts(t *testing.T) {
 		Model:        "claude",
 		OutputTokens: 2,
 		TotalTokens:  3,
+		Metadata: map[string]any{
+			"source":        "second",
+			"cache_created": 4,
+		},
 	})
 	if total.Provider != "openai" || total.Model != "gpt" {
 		t.Fatalf("identity = %q/%q, want first non-empty provider/model", total.Provider, total.Model)
@@ -17,5 +21,8 @@ func TestUsageAddAggregatesTokenCounts(t *testing.T) {
 	}
 	if total.Metadata["source"] != "first" {
 		t.Fatalf("metadata = %#v, want first metadata", total.Metadata)
+	}
+	if total.Metadata["cache_created"] != 4 {
+		t.Fatalf("metadata = %#v, want merged metadata", total.Metadata)
 	}
 }

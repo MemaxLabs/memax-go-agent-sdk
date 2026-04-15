@@ -118,6 +118,9 @@ func (s *stream) handleData(eventName string, data []byte) (model.StreamEvent, e
 		if envelope.Message.Usage.empty() {
 			return model.StreamEvent{}, nil
 		}
+		// Anthropic sends one message_start followed by cumulative message_delta
+		// usage updates for the same stream. Track the last seen values so SDK
+		// usage events are additive deltas for aggregation.
 		usage := envelope.Message.Usage
 		inputDelta := usage.InputTokens - s.inputTokens
 		if inputDelta < 0 {

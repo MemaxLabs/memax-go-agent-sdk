@@ -126,6 +126,10 @@ the configured meter, and attaches the aggregate usage to the final
 `EventResult`. Usage is optional: providers that do not report token counts
 continue to behave as before. The OpenAI Responses and Anthropic Messages
 adapters map provider usage payloads into SDK usage events where available.
+Usage metadata is merged across events with first-value-wins behavior for
+duplicate keys. A parent run's usage covers the model calls made directly by
+that run; subagent usage is available on the child run's events and tool-result
+metadata can carry child session IDs for host-side rollups.
 
 ## Permissions
 

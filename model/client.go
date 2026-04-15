@@ -59,8 +59,9 @@ type Usage struct {
 	Metadata     map[string]any `json:"metadata,omitempty"`
 }
 
-// Add returns a copy of u with next's token counts added. Provider, model, and
-// metadata are kept from the first non-empty value.
+// Add returns a copy of u with next's token counts added. Provider and model
+// are kept from the first non-empty value. Metadata maps are merged with
+// first-value-wins semantics for duplicate keys.
 func (u Usage) Add(next Usage) Usage {
 	if u.Provider == "" {
 		u.Provider = next.Provider
@@ -71,10 +72,24 @@ func (u Usage) Add(next Usage) Usage {
 	u.InputTokens += next.InputTokens
 	u.OutputTokens += next.OutputTokens
 	u.TotalTokens += next.TotalTokens
-	if len(u.Metadata) == 0 && len(next.Metadata) > 0 {
-		u.Metadata = cloneUsageMetadata(next.Metadata)
+	if len(next.Metadata) > 0 {
+		u.Metadata = mergeUsageMetadata(u.Metadata, next.Metadata)
 	}
 	return u
+}
+
+func mergeUsageMetadata(first map[string]any, next map[string]any) map[string]any {
+	if len(first) == 0 {
+		return cloneUsageMetadata(next)
+	}
+	out := cloneUsageMetadata(first)
+	for key, value := range next {
+		if _, ok := out[key]; ok {
+			continue
+		}
+		out[key] = value
+	}
+	return out
 }
 
 func cloneUsageMetadata(metadata map[string]any) map[string]any {
