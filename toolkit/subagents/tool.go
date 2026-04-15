@@ -207,6 +207,9 @@ func mergeOptions(base memaxagent.Options, override memaxagent.Options) memaxage
 	if override.ResultStore != nil {
 		out.ResultStore = override.ResultStore
 	}
+	if override.Output.Enabled() || override.Output.MaxRetries != 0 {
+		out.Output = override.Output
+	}
 	if override.Tracer != nil {
 		out.Tracer = override.Tracer
 	}

@@ -8,6 +8,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/identity"
 	"github.com/MemaxLabs/memax-go-agent-sdk/memory"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
+	"github.com/MemaxLabs/memax-go-agent-sdk/output"
 	"github.com/MemaxLabs/memax-go-agent-sdk/permission"
 	"github.com/MemaxLabs/memax-go-agent-sdk/prompt"
 	"github.com/MemaxLabs/memax-go-agent-sdk/resultstore"
@@ -31,6 +32,7 @@ type Options struct {
 	ContextRetry  contextwindow.Policy
 	ToolSelector  tool.Selector
 	ResultStore   resultstore.Store
+	Output        output.Contract
 	Tracer        telemetry.Tracer
 	Meter         telemetry.Meter
 	PromptBuilder prompt.Builder

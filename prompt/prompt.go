@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -40,6 +41,7 @@ type Request struct {
 	Tools              []model.ToolSpec
 	Memories           []memory.Memory
 	Skills             []skill.Skill
+	OutputSchema       map[string]any
 }
 
 // Part is a named prompt component. Stable names make prompt snapshots and
@@ -78,6 +80,9 @@ func (b DefaultBuilder) Build(ctx context.Context, req Request) (Result, error) 
 	}
 	if profile := b.Profile.WithDefault(); profile != ProfileGeneric {
 		parts = append(parts, Part{Name: "memax.provider_profile", Content: formatProfile(profile)})
+	}
+	if len(req.OutputSchema) > 0 {
+		parts = append(parts, Part{Name: "memax.output_contract", Content: formatOutputContract(req.OutputSchema)})
 	}
 	if selected := b.MemorySelector.Select(req.Memories, requestQuery(req)); len(selected) > 0 {
 		parts = append(parts, Part{Name: "memax.memories", Content: formatMemories(selected)})
@@ -204,6 +209,16 @@ func formatProfile(profile Profile) string {
 	default:
 		return ""
 	}
+}
+
+func formatOutputContract(schema map[string]any) string {
+	var b strings.Builder
+	b.WriteString("Final answer contract: return only valid JSON that satisfies this JSON Schema. Do not wrap the JSON in markdown or add explanatory text.")
+	if data, err := json.MarshalIndent(schema, "", "  "); err == nil {
+		b.WriteString("\nSchema:\n")
+		b.Write(data)
+	}
+	return b.String()
 }
 
 func formatSkills(skills []skill.Skill) string {

@@ -139,12 +139,13 @@ The default identity is deliberately tool-bounded: it tells the model to operate
 only through host-provided tools and to prefer observable progress.
 
 `prompt.Builder` receives the identity, selected model-visible tools, session
-messages, configured memories, configured skills, and host prompt text. The
-default builder emits:
+messages, configured memories, configured skills, configured final-output
+contract, and host prompt text. The default builder emits:
 
 - core Memax runtime instructions
 - identity and constraints
 - tool-use guidance based on active tool count
+- final-output JSON Schema contract
 - durable host memory context
 - relevant skills
 - host system and append-system prompt text
@@ -155,6 +156,17 @@ instead of hiding intelligence changes inside provider adapters.
 `prompt.DefaultBuilder` also supports provider-family profiles for OpenAI and
 Anthropic. Profiles add small provider-oriented guidance without importing
 provider request types into core prompt assembly.
+
+`output.Contract` is the provider-neutral structured final-answer contract.
+Hosts can set `Options.Output` with a JSON Schema and a retry limit. The prompt
+builder includes the schema as a named `memax.output_contract` part, and the
+agent loop validates the final assistant text before emitting `EventResult`. If
+validation fails and retries remain, the SDK appends a normal user message with
+the validation error and asks the model to return only valid JSON. This keeps
+structured output repair inside the same durable transcript, context policy,
+tool-selection, hook, and telemetry flow as every other turn. Zero-value output
+contracts are a no-op; `MaxRetries` zero uses the SDK default, and negative
+values disable repair retries.
 
 `memory.Source` is the source-neutral loading contract for durable host context
 such as project rules, user preferences, session notes, or organization policy.

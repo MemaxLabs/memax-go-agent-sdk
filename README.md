@@ -26,6 +26,7 @@ Implemented foundation:
 - opt-in tool selection and search for deferred tool loading
 - agent identity profiles, deterministic prompt assembly, and local skill manifests
 - project, user, and session memory injection through source-neutral prompt memory sources
+- structured final-output contracts with JSON Schema validation and retry
 - skill discovery tools
 - OpenAI Responses API model adapter
 - Anthropic Messages API model adapter
@@ -135,6 +136,28 @@ events, err := memaxagent.Query(ctx, "Inspect the large report.", memaxagent.Opt
     Model:       client,
     Tools:       registry,
     ResultStore: largeResults,
+})
+```
+
+To require a machine-readable final answer, configure `Options.Output` with a
+JSON Schema. The default prompt builder includes the contract, and `Query`
+validates the final answer. If validation fails, the SDK appends a repair prompt
+and retries once by default:
+
+```go
+events, err := memaxagent.Query(ctx, "Summarize the deployment risk.", memaxagent.Options{
+    Model: client,
+    Output: output.Contract{
+        Schema: map[string]any{
+            "type":     "object",
+            "required": []any{"risk", "summary"},
+            "properties": map[string]any{
+                "risk":    map[string]any{"type": "string", "enum": []any{"low", "medium", "high"}},
+                "summary": map[string]any{"type": "string"},
+            },
+            "additionalProperties": false,
+        },
+    },
 })
 ```
 

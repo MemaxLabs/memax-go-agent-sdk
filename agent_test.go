@@ -14,6 +14,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/identity"
 	"github.com/MemaxLabs/memax-go-agent-sdk/memory"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
+	"github.com/MemaxLabs/memax-go-agent-sdk/output"
 	"github.com/MemaxLabs/memax-go-agent-sdk/resultstore"
 	"github.com/MemaxLabs/memax-go-agent-sdk/session"
 	"github.com/MemaxLabs/memax-go-agent-sdk/skill"
@@ -495,6 +496,119 @@ func TestQueryLoadsSkillsFromSource(t *testing.T) {
 	}
 	if len(fake.requests) != 1 || !strings.Contains(fake.requests[0].SystemPrompt, "security-review") {
 		t.Fatalf("system prompt = %q, want loaded skill", fake.requests[0].SystemPrompt)
+	}
+}
+
+func TestQueryValidatesStructuredOutput(t *testing.T) {
+	fake := &fakeModel{turns: [][]model.StreamEvent{{{Kind: model.StreamText, Text: `{"answer":"done"}`}}}}
+	events, err := Query(context.Background(), "start", Options{
+		Model:  fake,
+		Output: answerOutputContract(),
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+	result, err := Drain(events)
+	if err != nil {
+		t.Fatalf("Drain returned error: %v", err)
+	}
+	if result != `{"answer":"done"}` {
+		t.Fatalf("result = %q, want structured JSON", result)
+	}
+	if len(fake.requests) != 1 {
+		t.Fatalf("model requests = %d, want 1", len(fake.requests))
+	}
+	if !strings.Contains(fake.requests[0].SystemPrompt, "Final answer contract") {
+		t.Fatalf("system prompt = %q, want output contract guidance", fake.requests[0].SystemPrompt)
+	}
+}
+
+func TestQueryRetriesInvalidStructuredOutput(t *testing.T) {
+	store := session.NewMemoryStore()
+	fake := &fakeModel{turns: [][]model.StreamEvent{
+		{{Kind: model.StreamText, Text: `not json`}},
+		{{Kind: model.StreamText, Text: `{"answer":"fixed"}`}},
+	}}
+	events, err := Query(context.Background(), "start", Options{
+		Model:    fake,
+		Sessions: store,
+		Output:   answerOutputContract(),
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+	var sessionID string
+	var result string
+	for event := range events {
+		if event.SessionID != "" {
+			sessionID = event.SessionID
+		}
+		if event.Kind == EventError {
+			t.Fatalf("query error: %v", event.Err)
+		}
+		if event.Kind == EventResult {
+			result = event.Result
+		}
+	}
+	if result != `{"answer":"fixed"}` {
+		t.Fatalf("result = %q, want repaired JSON", result)
+	}
+	if len(fake.requests) != 2 {
+		t.Fatalf("model requests = %d, want retry", len(fake.requests))
+	}
+	if len(fake.requests[1].Messages) < 3 || !strings.Contains(fake.requests[1].Messages[len(fake.requests[1].Messages)-1].PlainText(), "structured output contract") {
+		t.Fatalf("retry messages = %#v, want validation retry prompt", fake.requests[1].Messages)
+	}
+	messages, err := store.Messages(context.Background(), sessionID)
+	if err != nil {
+		t.Fatalf("Messages returned error: %v", err)
+	}
+	if len(messages) < 3 || messages[1].PlainText() != "not json" || !strings.Contains(messages[2].PlainText(), "not valid JSON") {
+		t.Fatalf("session messages = %#v, want invalid answer and retry prompt", messages)
+	}
+}
+
+func TestQueryStructuredOutputExhaustionStopsRun(t *testing.T) {
+	fake := &fakeModel{turns: [][]model.StreamEvent{{{Kind: model.StreamText, Text: `not json`}}}}
+	events, err := Query(context.Background(), "start", Options{
+		Model:  fake,
+		Output: output.Contract{Schema: answerOutputContract().Schema, MaxRetries: -1},
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+	if _, err := Drain(events); err == nil || !strings.Contains(err.Error(), "validate structured output") {
+		t.Fatalf("Drain error = %v, want structured output validation error", err)
+	}
+	if len(fake.requests) != 1 {
+		t.Fatalf("model requests = %d, want no retry", len(fake.requests))
+	}
+}
+
+func TestQueryRejectsInvalidOutputSchema(t *testing.T) {
+	_, err := Query(context.Background(), "start", Options{
+		Model: &fakeModel{},
+		Output: output.Contract{Schema: map[string]any{
+			"type": "not-a-json-schema-type",
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "compile output contract") {
+		t.Fatalf("Query error = %v, want output schema compile error", err)
+	}
+}
+
+func TestQueryWithoutStructuredOutputAcceptsPlainText(t *testing.T) {
+	fake := &fakeModel{turns: [][]model.StreamEvent{{{Kind: model.StreamText, Text: `not json`}}}}
+	events, err := Query(context.Background(), "start", Options{Model: fake})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+	result, err := Drain(events)
+	if err != nil {
+		t.Fatalf("Drain returned error: %v", err)
+	}
+	if result != "not json" {
+		t.Fatalf("result = %q, want plain text", result)
 	}
 }
 
@@ -1082,6 +1196,17 @@ func sameStrings(a []string, b []string) bool {
 		}
 	}
 	return true
+}
+
+func answerOutputContract() output.Contract {
+	return output.Contract{Schema: map[string]any{
+		"type":     "object",
+		"required": []any{"answer"},
+		"properties": map[string]any{
+			"answer": map[string]any{"type": "string"},
+		},
+		"additionalProperties": false,
+	}}
 }
 
 func requestToolNames(req model.Request) []string {

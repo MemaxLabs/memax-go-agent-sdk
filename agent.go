@@ -11,6 +11,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/hook"
 	"github.com/MemaxLabs/memax-go-agent-sdk/memory"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
+	"github.com/MemaxLabs/memax-go-agent-sdk/output"
 	promptpkg "github.com/MemaxLabs/memax-go-agent-sdk/prompt"
 	"github.com/MemaxLabs/memax-go-agent-sdk/session"
 	skillpkg "github.com/MemaxLabs/memax-go-agent-sdk/skill"
@@ -30,6 +31,10 @@ func Query(ctx context.Context, prompt string, opts Options) (<-chan Event, erro
 	opts = opts.withDefaults()
 	if opts.Model == nil {
 		return nil, ErrMissingModelClient
+	}
+	outputValidator, err := opts.Output.Compile(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("compile output contract: %w", err)
 	}
 	var cancel context.CancelFunc
 	if opts.MaxRunDuration > 0 {
@@ -109,7 +114,7 @@ func Query(ctx context.Context, prompt string, opts Options) (<-chan Event, erro
 		if cancel != nil {
 			defer cancel()
 		}
-		runLoop(ctx, events, sess.ID, opts)
+		runLoop(ctx, events, sess.ID, opts, outputValidator)
 	}()
 
 	return events, nil
@@ -152,7 +157,7 @@ func startSession(ctx context.Context, opts Options) (session.Session, error) {
 	return session.Create(ctx, opts.Sessions, session.CreateOptions{ParentID: opts.ParentSessionID})
 }
 
-func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Options) {
+func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Options, outputValidator output.Validator) {
 	memories := memoryLoader{opts: opts, sessionID: sessionID}
 	executor := tool.Executor{
 		Registry:       opts.Tools,
@@ -224,6 +229,7 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 		return
 	}
 
+	outputRetries := 0
 	for turn := 1; turn <= opts.MaxTurns; turn++ {
 		turnStarted := time.Now()
 		turnCtx, turnSpan := opts.Tracer.Start(ctx, "memaxagent.turn",
@@ -444,13 +450,37 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 				}
 			}
 			if len(uses) == 0 {
+				result := assistant.PlainText()
+				if err := outputValidator.Validate(turnCtx, result); err != nil {
+					if outputRetries < outputValidator.RetryLimit() {
+						outputRetries++
+						if err := appendOutputRetryPrompt(turnCtx, opts.Sessions, sessionID, err); err != nil {
+							err = fmt.Errorf("append output validation retry prompt: %w", err)
+							turnSpan.RecordError(err)
+							emitError(turnCtx, emit, sessionID, turn, err)
+							_ = finish(turn, hook.StopReasonError, err)
+							shouldStop = true
+							return
+						}
+						opts.Meter.Add(turnCtx, "memax.output.validation_retries", 1,
+							telemetry.String("memax.session_id", sessionID),
+							telemetry.Int("memax.turn", turn),
+						)
+						return
+					}
+					err = fmt.Errorf("validate structured output: %w", err)
+					turnSpan.RecordError(err)
+					emitError(turnCtx, emit, sessionID, turn, err)
+					_ = finish(turn, hook.StopReasonError, err)
+					shouldStop = true
+					return
+				}
 				if err := finish(turn, hook.StopReasonResult, nil); err != nil {
 					turnSpan.RecordError(err)
 					emitError(turnCtx, emit, sessionID, turn, err)
 					shouldStop = true
 					return
 				}
-				result := assistant.PlainText()
 				event := newEvent(EventResult, sessionID, turn)
 				event.Result = result
 				emit(event)
@@ -502,6 +532,22 @@ func selectedToolSpecs(ctx context.Context, opts Options, messages []model.Messa
 	return opts.ToolSelector.Select(ctx, opts.Tools, tool.SelectRequest{Messages: messages})
 }
 
+func appendOutputRetryPrompt(ctx context.Context, store session.Store, sessionID string, err error) error {
+	message := outputRetryPrompt(err)
+	return store.Append(ctx, sessionID, model.Message{
+		Role:    model.RoleUser,
+		Content: []model.ContentBlock{{Type: model.ContentText, Text: message}},
+	})
+}
+
+func outputRetryPrompt(err error) string {
+	detail := "unknown validation error"
+	if err != nil {
+		detail = err.Error()
+	}
+	return "Your previous final answer did not satisfy the required structured output contract: " + detail + "\nReturn only valid JSON that satisfies the schema. Do not include markdown fences, prose, or any text outside the JSON value."
+}
+
 type builtPrompt struct {
 	SystemPrompt       string
 	AppendSystemPrompt string
@@ -510,7 +556,7 @@ type builtPrompt struct {
 }
 
 func buildPrompt(ctx context.Context, opts Options, memories *memoryLoader, messages []model.Message, tools []model.ToolSpec) (builtPrompt, error) {
-	if opts.PromptBuilder == nil && opts.PromptProfile == "" && opts.Identity.IsZero() && opts.MemorySource == nil && len(opts.Memories) == 0 && opts.SkillSource == nil && len(opts.Skills) == 0 {
+	if opts.PromptBuilder == nil && opts.PromptProfile == "" && opts.Identity.IsZero() && !opts.Output.Enabled() && opts.MemorySource == nil && len(opts.Memories) == 0 && opts.SkillSource == nil && len(opts.Skills) == 0 {
 		return builtPrompt{
 			SystemPrompt:       opts.SystemPrompt,
 			AppendSystemPrompt: opts.AppendSystemPrompt,
@@ -540,6 +586,7 @@ func buildPrompt(ctx context.Context, opts Options, memories *memoryLoader, mess
 		Tools:              tools,
 		Memories:           loadedMemories,
 		Skills:             skills,
+		OutputSchema:       opts.Output.Schema,
 	})
 	if err != nil {
 		return builtPrompt{}, err

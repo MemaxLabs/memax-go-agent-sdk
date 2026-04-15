@@ -154,3 +154,24 @@ func TestDefaultBuilderProviderProfile(t *testing.T) {
 		t.Fatalf("system prompt = %q, want provider profile guidance", result.SystemPrompt)
 	}
 }
+
+func TestDefaultBuilderIncludesOutputContract(t *testing.T) {
+	result, err := (DefaultBuilder{}).Build(context.Background(), Request{
+		OutputSchema: map[string]any{
+			"type":     "object",
+			"required": []any{"answer"},
+			"properties": map[string]any{
+				"answer": map[string]any{"type": "string"},
+			},
+			"additionalProperties": false,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+	for _, want := range []string{"Final answer contract", "valid JSON", `"answer"`} {
+		if !strings.Contains(result.SystemPrompt, want) {
+			t.Fatalf("system prompt missing %q:\n%s", want, result.SystemPrompt)
+		}
+	}
+}
