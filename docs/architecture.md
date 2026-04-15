@@ -88,16 +88,9 @@ Before-tool hooks run after validation and before permission checks. They can de
 
 ## Permissions
 
-Permission checks run before execution and receive the raw tool use plus the tool spec. The first-class policy modes should include:
+Permission checks run before execution and receive the raw tool use plus the tool spec. The permission package includes simple `AllowAll`, `ReadOnly`, and function-backed checkers plus a structured `Policy` for ordered rules. Rules can allow, deny, or ask a host application for approval. Matchers cover exact tool names, tool-name glob patterns, read-only/destructive tool metadata, top-level string fields in JSON tool input, and boolean composition with `All`, `AnyOf`, and `Not`.
 
-- allow all
-- read-only
-- explicit allow/deny matchers
-- ask host application
-- hook-controlled allow/deny/update
-- non-interactive auto-deny for tools requiring user input
-
-The policy engine should eventually return structured reasons so model-visible errors, audit logs, and telemetry all agree.
+If no structured rule matches, `Policy` denies by default unless an explicit default decision is configured. This keeps production policies conservative while preserving `AllowAll` as the SDK's default option for simple embedding.
 
 Hooks complement permissions. Permissions answer "may this run?" while hooks let host applications add policy, audit, tracing, and future input rewriting without changing tool implementations.
 

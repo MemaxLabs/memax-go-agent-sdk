@@ -15,7 +15,7 @@ Implemented foundation:
 - compiled JSON Schema validation before tool execution
 - per-tool result size limits with truncation metadata
 - before/after tool lifecycle hooks
-- permission checker seam
+- structured permission policies with host approval callbacks
 - in-memory and append-only JSONL session stores
 - memory-backed file tools for examples and tests
 - OpenAI Responses API model adapter
