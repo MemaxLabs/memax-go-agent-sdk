@@ -19,7 +19,7 @@ Implemented foundation:
 - in-memory and append-only JSONL session stores
 - resumable and forkable sessions
 - checkpoint manager interfaces and checkpoint tools
-- memory-backed file tools for examples and tests
+- memory-backed, OS-backed, and `io/fs`-backed file tools for examples and tests
 - bounded subagent tool with parent/child session correlation
 - task state tools for agent planning and progress tracking
 - opt-in tool selection and search for deferred tool loading
@@ -38,6 +38,14 @@ go run ./examples/memory_tools
 ```
 
 It uses a scripted model and in-memory `list_files`, `read_file`, and `write_file` tools, so it does not require network access or model-provider credentials.
+
+The same file tools can run over different workspace implementations:
+
+```go
+memory := filetools.NewMemoryFS(map[string]string{"README.md": "hello"})
+disk, err := filetools.NewOSFS("./workspace")
+readonly, err := filetools.NewReadOnlyFS(embedFS)
+```
 
 Additional deterministic examples:
 
