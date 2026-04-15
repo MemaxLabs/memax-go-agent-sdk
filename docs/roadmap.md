@@ -32,7 +32,7 @@
 - Add resumable/forkable durable sessions. Initial resume/list/get/fork support exists.
 - Add retry-after-context-failure and external result storage.
 - Add optional metrics for turns, model calls, tools, hooks, and compaction.
-- Add performance benchmarks for long sessions and high tool concurrency.
+- Add performance benchmarks for long sessions and high tool concurrency. Initial benchmark coverage exists for context windows, tool selection, concurrent tool execution, and memory sessions.
 
 ## Phase 4: DX Polish
 
