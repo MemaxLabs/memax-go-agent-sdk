@@ -7,14 +7,18 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
 	"github.com/MemaxLabs/memax-go-agent-sdk/agenteval"
+	"github.com/MemaxLabs/memax-go-agent-sdk/contextwindow"
 	"github.com/MemaxLabs/memax-go-agent-sdk/memory"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/output"
+	"github.com/MemaxLabs/memax-go-agent-sdk/session"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/memorytools"
+	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/subagents"
 )
 
 // All returns the default deterministic autonomy scenario suite. Returned cases
@@ -24,6 +28,9 @@ func All() []agenteval.Case {
 		ToolRecovery(),
 		StructuredOutputRepair(),
 		MemorySearchAndSave(),
+		SessionResume(),
+		ContextRetry(),
+		SubagentDelegation(),
 	}
 }
 
@@ -221,6 +228,188 @@ func MemorySearchAndSave() agenteval.Case {
 	}
 }
 
+// SessionResume returns a single-use scenario where a run resumes an existing
+// durable transcript and sends both previous and new user messages to the model.
+func SessionResume() agenteval.Case {
+	store := session.NewMemoryStore()
+	sess, createErr := store.Create(context.Background())
+	appendErr := error(nil)
+	if createErr == nil {
+		appendErr = store.Append(context.Background(), sess.ID, textMessage(model.RoleUser, "previous session context"))
+	}
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "resumed session"}},
+	)
+
+	return agenteval.Case{
+		Name:   "session_resume",
+		Prompt: "continue from previous context",
+		Options: memaxagent.Options{
+			Model:     modelClient,
+			Sessions:  store,
+			SessionID: sess.ID,
+		},
+		Assertions: []agenteval.Assertion{
+			toolConstructionSucceeded(createErr, appendErr),
+			agenteval.FinalEquals("resumed session"),
+			{
+				Name: "resumed session id used",
+				Check: func(result agenteval.Result) error {
+					if result.SessionID != sess.ID {
+						return fmt.Errorf("session id = %q, want %q", result.SessionID, sess.ID)
+					}
+					return nil
+				},
+			},
+			{
+				Name: "previous transcript sent",
+				Check: func(agenteval.Result) error {
+					requests := modelClient.Requests()
+					if len(requests) != 1 {
+						return fmt.Errorf("model requests = %d, want 1", len(requests))
+					}
+					messages := requests[0].Messages
+					if len(messages) != 2 {
+						return fmt.Errorf("messages = %#v, want previous and current user messages", messages)
+					}
+					if messages[0].PlainText() != "previous session context" || messages[1].PlainText() != "continue from previous context" {
+						return fmt.Errorf("messages = %#v, want resumed transcript", messages)
+					}
+					return nil
+				},
+			},
+		},
+	}
+}
+
+// ContextRetry returns a single-use scenario where a context-window rejection
+// triggers the configured retry policy and the compacted retry succeeds.
+func ContextRetry() agenteval.Case {
+	store := session.NewMemoryStore()
+	sess, createErr := store.Create(context.Background())
+	appendErr := error(nil)
+	if createErr == nil {
+		appendErr = store.Append(context.Background(), sess.ID, textMessage(model.RoleUser, "old context that should be dropped"))
+	}
+	modelClient := &contextRetryClient{events: []model.StreamEvent{{Kind: model.StreamText, Text: "retried after context pressure"}}}
+
+	return agenteval.Case{
+		Name:   "context_retry",
+		Prompt: "current context retry request",
+		Options: memaxagent.Options{
+			Model:        modelClient,
+			Sessions:     store,
+			SessionID:    sess.ID,
+			ContextRetry: contextwindow.RecentMessages{MaxMessages: 1},
+		},
+		Assertions: []agenteval.Assertion{
+			toolConstructionSucceeded(createErr, appendErr),
+			agenteval.FinalEquals("retried after context pressure"),
+			{
+				Name: "retry used compacted messages",
+				Check: func(agenteval.Result) error {
+					requests := modelClient.Requests()
+					if len(requests) != 2 {
+						return fmt.Errorf("model requests = %d, want failed request and retry", len(requests))
+					}
+					if got := len(requests[0].Messages); got != 2 {
+						return fmt.Errorf("first request messages = %d, want full resumed transcript", got)
+					}
+					retryMessages := requests[1].Messages
+					if len(retryMessages) != 1 || retryMessages[0].PlainText() != "current context retry request" {
+						return fmt.Errorf("retry messages = %#v, want compacted current request only", retryMessages)
+					}
+					return nil
+				},
+			},
+		},
+	}
+}
+
+// SubagentDelegation returns a single-use scenario where a parent agent calls a
+// bounded child agent through the normal tool layer and receives child session
+// correlation metadata.
+func SubagentDelegation() agenteval.Case {
+	store := session.NewMemoryStore()
+	childModel := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "child investigation complete"}},
+	)
+	delegate, delegateErr := subagents.NewTool(subagents.Config{
+		Agents: []subagents.Agent{{
+			Name:        "investigator",
+			Description: "Investigates a focused question.",
+			Options: memaxagent.Options{
+				Model:    childModel,
+				Sessions: store,
+			},
+		}},
+		DefaultOptions: memaxagent.Options{Sessions: store},
+	})
+	parentModel := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "tool-1",
+				Name: "run_subagent",
+				Input: json.RawMessage(`{
+					"agent":"investigator",
+					"prompt":"investigate the migration risk"
+				}`),
+			},
+		}},
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "parent received child result"}},
+	)
+
+	return agenteval.Case{
+		Name:   "subagent_delegation",
+		Prompt: "delegate a focused investigation",
+		Options: memaxagent.Options{
+			Model:    parentModel,
+			Tools:    tool.NewRegistry(delegate),
+			Sessions: store,
+		},
+		Assertions: []agenteval.Assertion{
+			toolConstructionSucceeded(delegateErr),
+			agenteval.ToolUsed("run_subagent"),
+			agenteval.FinalEquals("parent received child result"),
+			agenteval.NoToolErrors(),
+			{
+				Name: "subagent result metadata linked",
+				Check: func(result agenteval.Result) error {
+					for _, toolResult := range result.ToolResults() {
+						if toolResult.Name != "run_subagent" {
+							continue
+						}
+						if toolResult.Content != "child investigation complete" {
+							return fmt.Errorf("subagent result content = %q, want child result", toolResult.Content)
+						}
+						if toolResult.Metadata["agent"] != "investigator" {
+							return fmt.Errorf("subagent metadata = %#v, want agent", toolResult.Metadata)
+						}
+						if toolResult.Metadata["parent_session_id"] != result.SessionID {
+							return fmt.Errorf("subagent metadata = %#v, want parent session %q", toolResult.Metadata, result.SessionID)
+						}
+						if child, _ := toolResult.Metadata["child_session_id"].(string); child == "" {
+							return fmt.Errorf("subagent metadata = %#v, want child session id", toolResult.Metadata)
+						}
+						return nil
+					}
+					return fmt.Errorf("missing subagent tool result")
+				},
+			},
+			{
+				Name: "child model ran once",
+				Check: func(agenteval.Result) error {
+					if got := len(childModel.Requests()); got != 1 {
+						return fmt.Errorf("child model requests = %d, want 1", got)
+					}
+					return nil
+				},
+			},
+		},
+	}
+}
+
 func toolConstructionSucceeded(errs ...error) agenteval.Assertion {
 	return agenteval.Assertion{
 		Name: "tool construction succeeded",
@@ -244,4 +433,66 @@ func answerContract() output.Contract {
 			"answer": map[string]any{"type": "string"},
 		},
 	}}
+}
+
+func textMessage(role model.Role, text string) model.Message {
+	return model.Message{
+		Role: role,
+		Content: []model.ContentBlock{{
+			Type: model.ContentText,
+			Text: text,
+		}},
+	}
+}
+
+type contextRetryClient struct {
+	mu       sync.Mutex
+	calls    int
+	requests []model.Request
+	events   []model.StreamEvent
+}
+
+func (c *contextRetryClient) Stream(_ context.Context, req model.Request) (model.Stream, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.requests = append(c.requests, cloneRequest(req))
+	c.calls++
+	if c.calls == 1 {
+		return nil, model.ErrContextWindowExceeded
+	}
+	return &eventStream{events: append([]model.StreamEvent(nil), c.events...)}, nil
+}
+
+func (c *contextRetryClient) Requests() []model.Request {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]model.Request, len(c.requests))
+	for i, req := range c.requests {
+		out[i] = cloneRequest(req)
+	}
+	return out
+}
+
+type eventStream struct {
+	events []model.StreamEvent
+	index  int
+}
+
+func (s *eventStream) Recv() (model.StreamEvent, error) {
+	if s.index >= len(s.events) {
+		return model.StreamEvent{}, model.ErrEndOfStream
+	}
+	event := s.events[s.index]
+	s.index++
+	return event, nil
+}
+
+func (s *eventStream) Close() error {
+	return nil
+}
+
+func cloneRequest(req model.Request) model.Request {
+	req.Messages = append([]model.Message(nil), req.Messages...)
+	req.Tools = append([]model.ToolSpec(nil), req.Tools...)
+	return req
 }
