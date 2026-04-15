@@ -191,6 +191,49 @@ func TestExecutorAfterHookErrorsAttachMetadataWithoutFailingResult(t *testing.T)
 	}
 }
 
+func TestExecutorTruncatesLargeToolResults(t *testing.T) {
+	reg := NewRegistry(Definition{
+		ToolSpec: model.ToolSpec{Name: "read", MaxResultBytes: 4},
+		Handler: func(context.Context, Call) (model.ToolResult, error) {
+			return model.ToolResult{Content: "abcdef"}, nil
+		},
+	})
+
+	results := collect(Executor{
+		Registry: reg,
+	}.Run(context.Background(), []model.ToolUse{{ID: "1", Name: "read"}}))
+
+	if got, want := len(results), 1; got != want {
+		t.Fatalf("len(results) = %d, want %d", got, want)
+	}
+	if results[0].Content != "abcd" {
+		t.Fatalf("Content = %q, want abcd", results[0].Content)
+	}
+	if results[0].Metadata["truncated"] != true {
+		t.Fatalf("truncated metadata = %#v, want true", results[0].Metadata["truncated"])
+	}
+	if results[0].Metadata["original_bytes"] != 6 || results[0].Metadata["returned_bytes"] != 4 {
+		t.Fatalf("metadata = %#v, want byte counts", results[0].Metadata)
+	}
+}
+
+func TestExecutorTruncatesAtUTF8Boundary(t *testing.T) {
+	reg := NewRegistry(Definition{
+		ToolSpec: model.ToolSpec{Name: "read", MaxResultBytes: 2},
+		Handler: func(context.Context, Call) (model.ToolResult, error) {
+			return model.ToolResult{Content: "éx"}, nil
+		},
+	})
+
+	results := collect(Executor{
+		Registry: reg,
+	}.Run(context.Background(), []model.ToolUse{{ID: "1", Name: "read"}}))
+
+	if results[0].Content != "é" {
+		t.Fatalf("Content = %q, want é", results[0].Content)
+	}
+}
+
 type permissionFunc func(context.Context, model.ToolUse, model.ToolSpec) Decision
 
 func (f permissionFunc) Check(ctx context.Context, use model.ToolUse, spec model.ToolSpec) Decision {

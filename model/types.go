@@ -54,6 +54,9 @@ type ToolSpec struct {
 	Destructive     bool           `json:"destructive,omitempty"`
 	AlwaysLoad      bool           `json:"always_load,omitempty"`
 	ShouldDefer     bool           `json:"should_defer,omitempty"`
+	// MaxResultBytes bounds the result content returned to the model. Zero means
+	// unbounded. This is SDK-side execution policy, not model-facing metadata.
+	MaxResultBytes int `json:"-"`
 }
 
 type ToolUse struct {

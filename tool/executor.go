@@ -139,6 +139,7 @@ func (e Executor) runOne(ctx context.Context, use model.ToolUse) model.ToolResul
 	}
 	result.ToolUseID = use.ID
 	result.Name = use.Name
+	result = enforceResultLimit(result, spec.MaxResultBytes)
 	if e.Hooks != nil {
 		errs := e.Hooks.AfterToolUse(ctx, hook.AfterToolUseInput{
 			SessionID: e.Runtime.SessionID,
@@ -151,6 +152,44 @@ func (e Executor) runOne(ctx context.Context, use model.ToolUse) model.ToolResul
 		}
 	}
 	return result
+}
+
+func enforceResultLimit(result model.ToolResult, limit int) model.ToolResult {
+	if limit <= 0 || len(result.Content) <= limit {
+		return result
+	}
+	originalBytes := len(result.Content)
+	result.Content = truncateUTF8(result.Content, limit)
+	result.Metadata = cloneMetadata(result.Metadata)
+	result.Metadata["truncated"] = true
+	result.Metadata["original_bytes"] = originalBytes
+	result.Metadata["returned_bytes"] = len(result.Content)
+	return result
+}
+
+func truncateUTF8(s string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	if len(s) <= limit {
+		return s
+	}
+	end := 0
+	for i := range s {
+		if i > limit {
+			break
+		}
+		end = i
+	}
+	return s[:end]
+}
+
+func cloneMetadata(metadata map[string]any) map[string]any {
+	out := make(map[string]any, len(metadata)+3)
+	for k, v := range metadata {
+		out[k] = v
+	}
+	return out
 }
 
 func sendResult(ctx context.Context, out chan<- model.ToolResult, result model.ToolResult) bool {

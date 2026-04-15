@@ -68,12 +68,14 @@ The current scaffold implements the minimal version of that loop with JSON Schem
 Tools expose:
 
 - model-facing metadata: name, description, JSON input schema, search hint
-- execution policy: read-only, destructive, concurrency-safe, defer/always-load hints
+- execution policy: read-only, destructive, concurrency-safe, result limits, defer/always-load hints
 - handler: application code that receives JSON input and returns a tool result
 
 This keeps the core neutral. A `Read` tool can read the host filesystem, a memory-backed tree, a database record, a Git blob, or a browser sandbox. The orchestrator should not know which one is in use.
 
 Tool input schemas are compiled when tools are registered. Model-emitted inputs are validated before permission checks and before handlers run, and validation failures are returned as tool-result errors so the model can recover in the next turn.
+
+Tools can set `MaxResultBytes` to cap the content returned to the model. Truncated results preserve UTF-8 boundaries and carry metadata for original and returned byte counts.
 
 Before-tool hooks run after validation and before permission checks. They can deny execution with a model-visible reason. After-tool hooks observe completed results; observer failures are attached to result metadata and do not convert successful tool output into a model-visible failure.
 

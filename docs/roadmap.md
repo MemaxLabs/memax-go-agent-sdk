@@ -20,7 +20,7 @@
 - Add hook engine: before/after tool-use hooks exist; session start/end, user prompt submit, stop, and compaction hooks remain.
 - Add structured permission modes and host approval callbacks.
 - Add context budgeting and automatic compaction.
-- Add tool result truncation and external result storage.
+- Add tool result truncation and external result storage. Per-tool truncation exists; external result storage remains.
 - Add OpenTelemetry spans and metrics.
 
 ## Phase 3: Advanced Autonomy
