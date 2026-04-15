@@ -1,0 +1,36 @@
+[
+  {
+    "kind": "session_started"
+  },
+  {
+    "kind": "model_request",
+    "turn": 1
+  },
+  {
+    "kind": "tool_use",
+    "turn": 1,
+    "tool_id": "tool-1",
+    "tool_name": "read"
+  },
+  {
+    "kind": "tool_result",
+    "turn": 1,
+    "tool_id": "tool-1",
+    "tool_name": "read",
+    "tool_result": "content from README.md"
+  },
+  {
+    "kind": "model_request",
+    "turn": 2
+  },
+  {
+    "kind": "assistant",
+    "turn": 2,
+    "text": "done"
+  },
+  {
+    "kind": "result",
+    "turn": 2,
+    "result": "done"
+  }
+]

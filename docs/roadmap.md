@@ -36,7 +36,7 @@
 
 ## Phase 4: DX Polish
 
-- Provide clear examples for server embedding, CI embedding, and local CLI embedding.
+- Provide clear examples for server embedding, CI embedding, and local CLI embedding. Initial deterministic examples cover memory tools, session resume, CI embedding, advanced toolkit composition, and HTTP server embedding. Live OpenAI and Anthropic examples are available behind explicit environment variables.
 - Publish stable API docs.
-- Add golden tests for event streams and transcript compatibility.
+- Add golden tests for event streams and transcript compatibility. Initial golden coverage protects the public query event sequence for a tool-using run.
 - Add adapters for common virtual filesystem and memory store implementations.

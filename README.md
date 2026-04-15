@@ -6,7 +6,7 @@ The core SDK should not assume access to the real filesystem, shell, browser, ne
 
 ## Current Status
 
-This repository is production-embeddable and moving into advanced autonomy work.
+This repository is production-embeddable and moving through DX polish.
 
 Implemented foundation:
 
@@ -39,10 +39,27 @@ go run ./examples/memory_tools
 
 It uses a scripted model and in-memory `list_files`, `read_file`, and `write_file` tools, so it does not require network access or model-provider credentials.
 
+Additional deterministic examples:
+
+```sh
+go run ./examples/session_resume
+go run ./examples/advanced_stack
+go run ./examples/ci_embedding
+```
+
+`session_resume` shows how to continue a durable transcript by passing `Options.SessionID`. `advanced_stack` composes task state, checkpointing, context budgeting, tool search, and memory-backed file tools in one run. `ci_embedding` shows a bounded, read-only agent run shaped for CI jobs.
+
+To try the embeddable HTTP shape:
+
+```sh
+go run ./examples/server_embedding
+curl -s localhost:8080/query -d '{"prompt":"inspect workspace"}'
+```
+
 To use the OpenAI adapter:
 
 ```go
-client := openai.NewFromEnv("gpt-5")
+client := openai.New(os.Getenv("OPENAI_API_KEY"), os.Getenv("OPENAI_MODEL"))
 events, err := memaxagent.Query(ctx, "Inspect the workspace.", memaxagent.Options{
     Model: client,
     Tools: registry,
@@ -52,11 +69,18 @@ events, err := memaxagent.Query(ctx, "Inspect the workspace.", memaxagent.Option
 To use the Anthropic adapter:
 
 ```go
-client := anthropic.NewFromEnv("your-anthropic-model")
+client := anthropic.New(os.Getenv("ANTHROPIC_API_KEY"), os.Getenv("ANTHROPIC_MODEL"))
 events, err := memaxagent.Query(ctx, "Inspect the workspace.", memaxagent.Options{
     Model: client,
     Tools: registry,
 })
+```
+
+Runnable live-provider examples are available behind explicit environment variables:
+
+```sh
+OPENAI_API_KEY=... OPENAI_MODEL=... go run ./examples/live_openai
+ANTHROPIC_API_KEY=... ANTHROPIC_MODEL=... go run ./examples/live_anthropic
 ```
 
 To emit OpenTelemetry spans, import `github.com/MemaxLabs/memax-go-agent-sdk/otel` as `sdkotel`:
