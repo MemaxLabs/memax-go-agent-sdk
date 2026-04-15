@@ -8,6 +8,7 @@ import (
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/hook"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
+	"github.com/MemaxLabs/memax-go-agent-sdk/resultstore"
 	"github.com/MemaxLabs/memax-go-agent-sdk/telemetry"
 )
 
@@ -27,6 +28,7 @@ type Executor struct {
 	Permissions    PermissionChecker
 	Hooks          *hook.Runner
 	MaxConcurrency int
+	ResultStore    resultstore.Store
 	Runtime        Runtime
 	Tracer         telemetry.Tracer
 	Meter          telemetry.Meter
@@ -186,7 +188,7 @@ func (e Executor) runOne(ctx context.Context, use model.ToolUse) model.ToolResul
 	}
 	result.ToolUseID = use.ID
 	result.Name = use.Name
-	result = enforceResultLimit(result, spec.MaxResultBytes)
+	result = e.enforceResultLimit(ctx, result, use, spec.MaxResultBytes)
 	span.Set(
 		telemetry.Bool("memax.tool.error", result.IsError),
 		telemetry.Int("memax.tool.result_bytes", len(result.Content)),
@@ -213,11 +215,40 @@ func (e Executor) runOne(ctx context.Context, use model.ToolUse) model.ToolResul
 	return finish(result)
 }
 
-func enforceResultLimit(result model.ToolResult, limit int) model.ToolResult {
+func (e Executor) enforceResultLimit(ctx context.Context, result model.ToolResult, use model.ToolUse, limit int) model.ToolResult {
 	if limit <= 0 || len(result.Content) <= limit {
 		return result
 	}
 	originalBytes := len(result.Content)
+	if e.ResultStore != nil {
+		handle, err := e.ResultStore.Put(ctx, resultstore.PutRequest{
+			SessionID:       e.Runtime.SessionID,
+			ParentSessionID: e.Runtime.ParentSessionID,
+			ToolUseID:       use.ID,
+			ToolName:        use.Name,
+			Content:         result.Content,
+			Metadata:        result.Metadata,
+		})
+		result.Metadata = cloneMetadata(result.Metadata)
+		if err != nil {
+			result.Metadata["stored_result_error"] = err.Error()
+		} else {
+			if handle.ID != "" {
+				result.Metadata["stored_result_id"] = handle.ID
+			}
+			if handle.URI != "" {
+				result.Metadata["stored_result_uri"] = handle.URI
+			}
+			storedBytes := handle.Bytes
+			if storedBytes <= 0 {
+				storedBytes = originalBytes
+			}
+			result.Metadata["stored_result_bytes"] = storedBytes
+			if !handle.CreatedAt.IsZero() {
+				result.Metadata["stored_result_created_at"] = handle.CreatedAt.Format(time.RFC3339Nano)
+			}
+		}
+	}
 	result.Content = truncateUTF8(result.Content, limit)
 	result.Metadata = cloneMetadata(result.Metadata)
 	result.Metadata["truncated"] = true

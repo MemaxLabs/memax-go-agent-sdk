@@ -10,6 +10,7 @@ import (
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/hook"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
+	"github.com/MemaxLabs/memax-go-agent-sdk/resultstore"
 	"github.com/MemaxLabs/memax-go-agent-sdk/telemetry"
 )
 
@@ -216,6 +217,77 @@ func TestExecutorTruncatesLargeToolResults(t *testing.T) {
 	}
 	if results[0].Metadata["original_bytes"] != 6 || results[0].Metadata["returned_bytes"] != 4 {
 		t.Fatalf("metadata = %#v, want byte counts", results[0].Metadata)
+	}
+}
+
+func TestExecutorStoresLargeToolResults(t *testing.T) {
+	store := resultstore.NewMemoryStore()
+	reg := NewRegistry(Definition{
+		ToolSpec: model.ToolSpec{Name: "read", MaxResultBytes: 4},
+		Handler: func(context.Context, Call) (model.ToolResult, error) {
+			return model.ToolResult{
+				Content:  "abcdef",
+				Metadata: map[string]any{"path": "README.md"},
+			}, nil
+		},
+	})
+
+	results := collect(Executor{
+		Registry:    reg,
+		ResultStore: store,
+		Runtime:     Runtime{SessionID: "session-1", ParentSessionID: "parent-1"},
+	}.Run(context.Background(), []model.ToolUse{{ID: "1", Name: "read"}}))
+
+	if got, want := len(results), 1; got != want {
+		t.Fatalf("len(results) = %d, want %d", got, want)
+	}
+	result := results[0]
+	if result.Content != "abcd" {
+		t.Fatalf("Content = %q, want abcd", result.Content)
+	}
+	id, ok := result.Metadata["stored_result_id"].(string)
+	if !ok || id == "" {
+		t.Fatalf("stored_result_id = %#v, want non-empty string", result.Metadata["stored_result_id"])
+	}
+	if result.Metadata["stored_result_bytes"] != 6 || result.Metadata["original_bytes"] != 6 || result.Metadata["returned_bytes"] != 4 {
+		t.Fatalf("metadata = %#v, want stored and truncation byte counts", result.Metadata)
+	}
+	entry, err := store.Get(context.Background(), id)
+	if err != nil {
+		t.Fatalf("Get returned error: %v", err)
+	}
+	if entry.Content != "abcdef" || entry.SessionID != "session-1" || entry.ParentSessionID != "parent-1" || entry.ToolUseID != "1" || entry.ToolName != "read" {
+		t.Fatalf("entry = %#v, want full stored result", entry)
+	}
+	if entry.Metadata["path"] != "README.md" {
+		t.Fatalf("entry metadata = %#v, want original metadata", entry.Metadata)
+	}
+}
+
+func TestExecutorFallsBackWhenResultStoreFails(t *testing.T) {
+	storeErr := errors.New("blob store unavailable")
+	reg := NewRegistry(Definition{
+		ToolSpec: model.ToolSpec{Name: "read", MaxResultBytes: 4},
+		Handler: func(context.Context, Call) (model.ToolResult, error) {
+			return model.ToolResult{Content: "abcdef"}, nil
+		},
+	})
+
+	results := collect(Executor{
+		Registry: reg,
+		ResultStore: resultstore.StoreFunc(func(context.Context, resultstore.PutRequest) (resultstore.Handle, error) {
+			return resultstore.Handle{}, storeErr
+		}),
+	}.Run(context.Background(), []model.ToolUse{{ID: "1", Name: "read"}}))
+
+	if got, want := len(results), 1; got != want {
+		t.Fatalf("len(results) = %d, want %d", got, want)
+	}
+	if results[0].IsError || results[0].Content != "abcd" {
+		t.Fatalf("result = %#v, want truncated successful result", results[0])
+	}
+	if results[0].Metadata["stored_result_error"] != "blob store unavailable" {
+		t.Fatalf("metadata = %#v, want store error", results[0].Metadata)
 	}
 }
 

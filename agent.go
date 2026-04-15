@@ -159,6 +159,7 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 		Permissions:    opts.Permissions,
 		Hooks:          opts.Hooks,
 		MaxConcurrency: opts.MaxToolConcurrency,
+		ResultStore:    opts.ResultStore,
 		Runtime: tool.Runtime{
 			SessionID:       sessionID,
 			ParentSessionID: opts.ParentSessionID,

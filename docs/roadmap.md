@@ -59,7 +59,7 @@ system prompt.
 - Add provider-specific prompt profiles. Initial `prompt.ProfileOpenAI` and `prompt.ProfileAnthropic` guidance exists.
 - Add project/user memory injection. Initial `memory.Source`, `Options.MemorySource`, explicit `Options.Memories`, relevance selection, and named prompt-part injection exist for persistent project rules, user preferences, session notes, and organization context.
 - Add reactive context-failure recovery. Initial `Options.ContextRetry` support retries once when providers return a recognized context-window error.
-- Add external large-result storage. Very large tool outputs should be stored by a host-provided blob/result store and returned to the model as handles plus previews.
+- Add external large-result storage. Initial `resultstore.Store`, `Options.ResultStore`, in-memory result storage, truncation preview handles, transcript metadata, and fallback-on-store-error behavior exist for oversized tool outputs.
 - Add structured output contracts. Hosts should be able to request final answers in typed JSON schemas and receive validation/retry behavior.
 - Add cost and token accounting. Provider adapters should surface usage when available, and the SDK should emit usage metrics and events.
 - Add autonomy eval harness. Build deterministic and live evals for planning, tool recovery, subagent delegation, session resume, compaction quality, and final-answer correctness.

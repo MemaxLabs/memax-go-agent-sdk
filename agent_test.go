@@ -14,6 +14,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/identity"
 	"github.com/MemaxLabs/memax-go-agent-sdk/memory"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
+	"github.com/MemaxLabs/memax-go-agent-sdk/resultstore"
 	"github.com/MemaxLabs/memax-go-agent-sdk/session"
 	"github.com/MemaxLabs/memax-go-agent-sdk/skill"
 	"github.com/MemaxLabs/memax-go-agent-sdk/telemetry"
@@ -778,6 +779,68 @@ func TestQueryRunsContextAppliedHook(t *testing.T) {
 	}
 	if got.OriginalMessages != 3 || got.SentMessages != 2 {
 		t.Fatalf("context hook input = %#v, want 3 -> 2", got)
+	}
+}
+
+func TestQueryPersistsStoredResultMetadataInSession(t *testing.T) {
+	store := session.NewMemoryStore()
+	results := resultstore.NewMemoryStore()
+	fake := &fakeModel{turns: [][]model.StreamEvent{
+		{{Kind: model.StreamToolUse, ToolUse: model.ToolUse{ID: "tool-1", Name: "read", Input: json.RawMessage(`{}`)}}},
+		{{Kind: model.StreamText, Text: "done"}},
+	}}
+	registry := tool.NewRegistry(tool.Definition{
+		ToolSpec: model.ToolSpec{Name: "read", MaxResultBytes: 4},
+		Handler: func(context.Context, tool.Call) (model.ToolResult, error) {
+			return model.ToolResult{Content: "abcdef"}, nil
+		},
+	})
+
+	events, err := Query(context.Background(), "start", Options{
+		Model:       fake,
+		Tools:       registry,
+		Sessions:    store,
+		ResultStore: results,
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+	var sessionID string
+	for event := range events {
+		if event.SessionID != "" {
+			sessionID = event.SessionID
+		}
+		if event.Kind == EventError {
+			t.Fatalf("query error: %v", event.Err)
+		}
+		if event.Kind == EventResult {
+			break
+		}
+	}
+	messages, err := store.Messages(context.Background(), sessionID)
+	if err != nil {
+		t.Fatalf("Messages returned error: %v", err)
+	}
+	var toolResult *model.ToolResult
+	for _, msg := range messages {
+		if msg.ToolResult != nil {
+			toolResult = msg.ToolResult
+			break
+		}
+	}
+	if toolResult == nil {
+		t.Fatal("session transcript missing tool result")
+	}
+	id, ok := toolResult.Metadata["stored_result_id"].(string)
+	if !ok || id == "" {
+		t.Fatalf("tool result metadata = %#v, want stored result id", toolResult.Metadata)
+	}
+	entry, err := results.Get(context.Background(), id)
+	if err != nil {
+		t.Fatalf("Get returned error: %v", err)
+	}
+	if entry.Content != "abcdef" || toolResult.Content != "abcd" {
+		t.Fatalf("stored content = %q, transcript content = %q", entry.Content, toolResult.Content)
 	}
 }
 

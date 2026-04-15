@@ -88,7 +88,16 @@ This keeps the core neutral. A `Read` tool can read the host filesystem, a memor
 
 Tool input schemas are compiled when tools are registered. Model-emitted inputs are validated before permission checks and before handlers run, and validation failures are returned as tool-result errors so the model can recover in the next turn.
 
-Tools can set `MaxResultBytes` to cap the content returned to the model. Truncated results preserve UTF-8 boundaries and carry metadata for original and returned byte counts.
+Tools can set `MaxResultBytes` to cap the content returned to the model.
+Truncated results preserve UTF-8 boundaries and carry metadata for original and
+returned byte counts. Hosts can also configure `Options.ResultStore` with a
+`resultstore.Store`. When a result exceeds the tool limit, the executor stores
+the full content first, returns a bounded preview to the model, and attaches
+handle metadata such as `stored_result_id`, `stored_result_uri`, and
+`stored_result_bytes`. Store failures do not turn a successful tool call into an
+error; the executor falls back to normal truncation and adds
+`stored_result_error` metadata. This keeps oversized data host-owned while
+allowing agents and UIs to recover the full payload through application policy.
 
 Large registries can opt into `tool.SearchSelector` through `Options.ToolSelector`. The selector always keeps `AlwaysLoad` tools, defers unmatched `ShouldDefer` tools, ranks matches by transcript text against names, descriptions, and search hints, and sends only selected specs to the model. The optional `toolkit/toolsearch` package exposes a `search_tools` tool with `AlwaysLoad` set, so an agent can discover deferred tools and cause matching specs to be loaded on a later turn through normal transcript context.
 

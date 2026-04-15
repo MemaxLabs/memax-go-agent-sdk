@@ -14,6 +14,7 @@ Implemented foundation:
 - typed tool registry and executor
 - compiled JSON Schema validation before tool execution
 - per-tool result size limits with truncation metadata
+- host-owned storage for oversized tool results with preview handles
 - tool and session lifecycle hooks
 - structured permission policies with host approval callbacks
 - in-memory and append-only JSONL session stores
@@ -123,6 +124,18 @@ To persist sessions in SQLite, use `session/sqlitestore` with any `database/sql`
 ```go
 db, err := sql.Open("sqlite", "file:memax.db")
 sessions, err := sqlitestore.New(ctx, db)
+```
+
+To preserve full oversized tool results outside the model transcript, configure
+`Options.ResultStore`. The model receives a bounded preview plus handle metadata:
+
+```go
+largeResults := resultstore.NewMemoryStore()
+events, err := memaxagent.Query(ctx, "Inspect the large report.", memaxagent.Options{
+    Model:       client,
+    Tools:       registry,
+    ResultStore: largeResults,
+})
 ```
 
 To configure agent identity and skills:
