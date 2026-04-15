@@ -157,31 +157,37 @@ func mapMessages(messages []model.Message) []message {
 	for _, msg := range messages {
 		switch msg.Role {
 		case model.RoleUser:
-			out = append(out, message{
-				Role:    "user",
-				Content: []contentBlock{{"type": "text", "text": msg.PlainText()}},
-			})
+			out = appendMessage(out, "user", []contentBlock{{"type": "text", "text": msg.PlainText()}})
 		case model.RoleAssistant:
 			blocks := mapAssistantBlocks(msg)
 			if len(blocks) > 0 {
-				out = append(out, message{Role: "assistant", Content: blocks})
+				out = appendMessage(out, "assistant", blocks)
 			}
 		case model.RoleTool:
 			if msg.ToolResult == nil {
 				continue
 			}
-			out = append(out, message{
-				Role: "user",
-				Content: []contentBlock{{
-					"type":        "tool_result",
-					"tool_use_id": msg.ToolResult.ToolUseID,
-					"content":     msg.ToolResult.Content,
-					"is_error":    msg.ToolResult.IsError,
-				}},
-			})
+			out = appendMessage(out, "user", []contentBlock{{
+				"type":        "tool_result",
+				"tool_use_id": msg.ToolResult.ToolUseID,
+				"content":     msg.ToolResult.Content,
+				"is_error":    msg.ToolResult.IsError,
+			}})
 		}
 	}
 	return out
+}
+
+func appendMessage(messages []message, role string, blocks []contentBlock) []message {
+	if len(blocks) == 0 {
+		return messages
+	}
+	last := len(messages) - 1
+	if last >= 0 && messages[last].Role == role {
+		messages[last].Content = append(messages[last].Content, blocks...)
+		return messages
+	}
+	return append(messages, message{Role: role, Content: blocks})
 }
 
 func mapAssistantBlocks(msg model.Message) []contentBlock {

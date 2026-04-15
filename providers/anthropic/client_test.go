@@ -144,3 +144,55 @@ func TestClientMapsToolResultsToToolResultBlocks(t *testing.T) {
 		t.Fatalf("tool result message = %#v", body.Messages[1])
 	}
 }
+
+func TestClientMergesConsecutiveToolResults(t *testing.T) {
+	body := (&Client{Model: "test"}).requestBody(model.Request{
+		Messages: []model.Message{
+			{
+				Role: model.RoleAssistant,
+				Content: []model.ContentBlock{
+					{Type: model.ContentToolUse, ToolUse: &model.ToolUse{
+						ID:    "toolu_1",
+						Name:  "read_file",
+						Input: json.RawMessage(`{"path":"README.md"}`),
+					}},
+					{Type: model.ContentToolUse, ToolUse: &model.ToolUse{
+						ID:    "toolu_2",
+						Name:  "read_file",
+						Input: json.RawMessage(`{"path":"AGENTS.md"}`),
+					}},
+				},
+			},
+			{
+				Role: model.RoleTool,
+				ToolResult: &model.ToolResult{
+					ToolUseID: "toolu_1",
+					Name:      "read_file",
+					Content:   "readme",
+				},
+			},
+			{
+				Role: model.RoleTool,
+				ToolResult: &model.ToolResult{
+					ToolUseID: "toolu_2",
+					Name:      "read_file",
+					Content:   "agents",
+				},
+			},
+		},
+	})
+
+	if len(body.Messages) != 2 {
+		t.Fatalf("len(messages) = %d, want 2", len(body.Messages))
+	}
+	toolResults := body.Messages[1]
+	if toolResults.Role != "user" {
+		t.Fatalf("tool result role = %q, want user", toolResults.Role)
+	}
+	if len(toolResults.Content) != 2 {
+		t.Fatalf("len(tool result content) = %d, want 2", len(toolResults.Content))
+	}
+	if toolResults.Content[0]["tool_use_id"] != "toolu_1" || toolResults.Content[1]["tool_use_id"] != "toolu_2" {
+		t.Fatalf("tool result content = %#v", toolResults.Content)
+	}
+}
