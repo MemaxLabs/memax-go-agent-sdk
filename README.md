@@ -322,5 +322,12 @@ if err := report.Error(); err != nil {
 }
 ```
 
+The `agenteval/scenarios` package includes reusable deterministic cases for
+tool recovery, structured output repair, and memory search/save behavior:
+
+```go
+report := agenteval.Runner{}.Run(ctx, scenarios.All()...)
+```
+
 Next implementation work is tracked in [docs/roadmap.md](docs/roadmap.md).
 Server embedding guidance is available in [docs/server.md](docs/server.md).

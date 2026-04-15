@@ -141,6 +141,9 @@ implements `model.Client` with predefined stream events so evals can cover
 planning, tool recovery, structured-output repair, context retry, and session
 resume behavior without a live provider. This keeps autonomy quality executable
 while preserving the same provider-neutral core loop used in production.
+`agenteval/scenarios` contains reusable baseline cases for core behaviors such
+as tool validation recovery, structured-output repair, and memory search/save
+workflows.
 
 ## Permissions
 
