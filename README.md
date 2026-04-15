@@ -143,8 +143,9 @@ events, err := memaxagent.Query(ctx, "Review the migration plan.", memaxagent.Op
 })
 ```
 
-Local `SKILL.md` directories can be loaded up front or exposed through
-`Options.SkillSource`:
+Skills can come from the filesystem, embedded `fs.FS` values, HTTP endpoints,
+databases, or any custom `skill.Source`. Local `SKILL.md` directories can be
+loaded up front or exposed through `Options.SkillSource`:
 
 ```go
 skills, err := skill.LoadDir(ctx, ".agents/skills")
@@ -152,6 +153,19 @@ events, err := memaxagent.Query(ctx, "Review the migration plan.", memaxagent.Op
     Model:       client,
     SkillSource: skill.StaticSource(skills),
 })
+```
+
+Other source adapters are available:
+
+```go
+embeddedSkills, err := skill.LoadFS(ctx, embedFS, "skills")
+source := &skill.CachedSource{
+    Source: skill.MultiSource{
+        skill.StaticSource(embeddedSkills),
+        skill.HTTPSource{URL: "https://example.com/skills.json"},
+        skill.SourceFunc(loadSkillsFromDatabase),
+    },
+}
 ```
 
 To let the model discover skills through the normal tool layer, register
@@ -163,6 +177,9 @@ searchSkills, err := skilltools.NewSearchTool(skilltools.Config{
 })
 registry := tool.NewRegistry(searchSkills)
 ```
+
+The supported `SKILL.md` metadata subset and source formats are documented in
+[docs/skills.md](docs/skills.md).
 
 To expose bounded worker agents as a tool, import `github.com/MemaxLabs/memax-go-agent-sdk/toolkit/subagents` and register the returned tool:
 

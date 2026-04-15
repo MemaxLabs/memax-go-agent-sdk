@@ -2,9 +2,14 @@ package skill
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
+	"testing/fstest"
+	"time"
 )
 
 func TestLoadDirParsesSkillFiles(t *testing.T) {
@@ -41,6 +46,28 @@ Read the diff and report risks first.
 	}
 }
 
+func TestLoadFSParsesEmbeddedSkills(t *testing.T) {
+	fsys := fstest.MapFS{
+		"skills/security/SKILL.md": &fstest.MapFile{Data: []byte(`---
+description: Security review
+tags: security, auth
+---
+Check authorization boundaries.
+`)},
+	}
+
+	got, err := LoadFS(context.Background(), fsys, "skills")
+	if err != nil {
+		t.Fatalf("LoadFS returned error: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len(skills) = %d, want 1", len(got))
+	}
+	if got[0].Name != "security" || got[0].Source != "fs" || got[0].Path != "skills/security/SKILL.md" {
+		t.Fatalf("skill = %#v", got[0])
+	}
+}
+
 func TestSelectorKeepsAlwaysOnAndRanksRelevantSkills(t *testing.T) {
 	skills := []Skill{
 		{Name: "always", AlwaysOn: true},
@@ -67,5 +94,86 @@ func TestStaticSourceReturnsDefensiveCopy(t *testing.T) {
 	again, _ := source.Skills(context.Background())
 	if again[0].Tags[0] != "a" {
 		t.Fatalf("source mutated through returned copy: %#v", again)
+	}
+}
+
+func TestSourceFunc(t *testing.T) {
+	source := SourceFunc(func(context.Context) ([]Skill, error) {
+		return []Skill{{Name: "dynamic"}}, nil
+	})
+	got, err := source.Skills(context.Background())
+	if err != nil {
+		t.Fatalf("Skills returned error: %v", err)
+	}
+	if len(got) != 1 || got[0].Name != "dynamic" {
+		t.Fatalf("skills = %#v", got)
+	}
+}
+
+func TestMultiSourceDeduplicatesByName(t *testing.T) {
+	source := MultiSource{
+		StaticSource{{Name: "a"}, {Name: "b"}},
+		StaticSource{{Name: "a"}, {Name: "c"}},
+	}
+	got, err := source.Skills(context.Background())
+	if err != nil {
+		t.Fatalf("Skills returned error: %v", err)
+	}
+	names := []string{got[0].Name, got[1].Name, got[2].Name}
+	want := []string{"a", "b", "c"}
+	for i := range want {
+		if names[i] != want[i] {
+			t.Fatalf("names = %#v, want %#v", names, want)
+		}
+	}
+}
+
+func TestCachedSourceCachesSuccessfulLoads(t *testing.T) {
+	calls := 0
+	source := &CachedSource{
+		TTL: time.Hour,
+		Source: SourceFunc(func(context.Context) ([]Skill, error) {
+			calls++
+			return []Skill{{Name: "cached", Tags: []string{"x"}}}, nil
+		}),
+	}
+
+	first, err := source.Skills(context.Background())
+	if err != nil {
+		t.Fatalf("Skills returned error: %v", err)
+	}
+	first[0].Tags[0] = "mutated"
+	second, err := source.Skills(context.Background())
+	if err != nil {
+		t.Fatalf("Skills returned error: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("calls = %d, want 1", calls)
+	}
+	if second[0].Tags[0] != "x" {
+		t.Fatalf("cached skills were mutated: %#v", second)
+	}
+}
+
+func TestHTTPSourceLoadsWrappedSkills(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer token" {
+			t.Fatalf("Authorization header = %q", r.Header.Get("Authorization"))
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"skills": []Skill{{Name: "remote", Tags: []string{"api"}}},
+		})
+	}))
+	defer server.Close()
+
+	got, err := HTTPSource{
+		URL:    server.URL,
+		Header: http.Header{"Authorization": []string{"Bearer token"}},
+	}.Skills(context.Background())
+	if err != nil {
+		t.Fatalf("Skills returned error: %v", err)
+	}
+	if len(got) != 1 || got[0].Name != "remote" || got[0].Source != "http" {
+		t.Fatalf("skills = %#v", got)
 	}
 }

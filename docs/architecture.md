@@ -136,13 +136,16 @@ The builder returns named prompt parts and a stable hash so embedders can log,
 test, snapshot, and compare prompt changes. This keeps prompt evolution visible
 instead of hiding intelligence changes inside provider adapters.
 
-`skill.LoadDir` loads local `SKILL.md` manifests from skill directories. The
-initial loader supports simple frontmatter fields for name, description,
-when-to-use guidance, tags, and always-on behavior. Callers can pass explicit
-skills or a dynamic `Options.SkillSource`. `skill.Selector` keeps always-on
-skills and ranks relevant skills against the current prompt and transcript.
-The optional `toolkit/skilltools` package exposes skill discovery through the
-normal tool layer. A `search_skills` tool can list relevant instructions from a
+`skill.Source` is the source-neutral loading contract for instruction bundles.
+Built-in helpers cover static slices, function-backed sources, merged sources,
+cached sources, HTTP JSON endpoints, host filesystem directories, and standard
+`fs.FS` implementations. `skill.LoadDir` and `skill.LoadFS` load `SKILL.md`
+manifests with simple frontmatter fields for name, description, when-to-use
+guidance, tags, and always-on behavior. Callers can pass explicit skills or a
+dynamic `Options.SkillSource`. `skill.Selector` keeps always-on skills and ranks
+relevant skills against the current prompt and transcript. The optional
+`toolkit/skilltools` package exposes skill discovery through the normal tool
+layer. A `search_skills` tool can list relevant instructions from a
 `skill.Source`, while the prompt builder can inject selected skills as named
 prompt parts. This keeps skills inspectable and governable by the same registry,
 permission, hook, and telemetry machinery as every other capability.

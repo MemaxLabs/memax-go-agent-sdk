@@ -3,8 +3,11 @@ package skill
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -32,13 +35,13 @@ func LoadDir(ctx context.Context, dir string) ([]Skill, error) {
 		}
 		path := filepath.Join(dir, entry.Name(), skillFileName)
 		data, err := os.ReadFile(path)
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
 		if err != nil {
 			return nil, err
 		}
-		parsed, err := parseSkillFile(entry.Name(), path, string(data))
+		parsed, err := parseSkillFile(entry.Name(), path, "local", string(data))
 		if err != nil {
 			return nil, err
 		}
@@ -47,14 +50,55 @@ func LoadDir(ctx context.Context, dir string) ([]Skill, error) {
 	return out, nil
 }
 
-func parseSkillFile(defaultName string, path string, data string) (Skill, error) {
+// LoadFS loads skills from subdirectories in fsys containing SKILL.md files.
+//
+// Use this for embedded skills, map-backed filesystems, archives, or any other
+// standard fs.FS implementation.
+func LoadFS(ctx context.Context, fsys fs.FS, root string) ([]Skill, error) {
+	if fsys == nil {
+		return nil, fmt.Errorf("skill: nil fs")
+	}
+	if root == "" {
+		root = "."
+	}
+	entries, err := fs.ReadDir(fsys, root)
+	if err != nil {
+		return nil, err
+	}
+
+	var out []Skill
+	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if !entry.IsDir() {
+			continue
+		}
+		filePath := path.Join(root, entry.Name(), skillFileName)
+		data, err := fs.ReadFile(fsys, filePath)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		parsed, err := parseSkillFile(entry.Name(), filePath, "fs", string(data))
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, parsed)
+	}
+	return out, nil
+}
+
+func parseSkillFile(defaultName string, path string, source string, data string) (Skill, error) {
 	meta, body := parseFrontmatter(data)
 	out := Skill{
 		Name:        firstNonEmpty(meta["name"], defaultName),
 		Description: meta["description"],
 		WhenToUse:   firstNonEmpty(meta["when_to_use"], meta["when"]),
 		Content:     strings.TrimSpace(body),
-		Source:      "local",
+		Source:      source,
 		Path:        path,
 		Tags:        splitList(meta["tags"]),
 	}
