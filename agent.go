@@ -25,12 +25,18 @@ func Query(ctx context.Context, prompt string, opts Options) (<-chan Event, erro
 
 	sess, err := opts.Sessions.Create(ctx)
 	if err != nil {
+		if cancel != nil {
+			cancel()
+		}
 		return nil, fmt.Errorf("create session: %w", err)
 	}
 	if err := opts.Sessions.Append(ctx, sess.ID, model.Message{
 		Role:    model.RoleUser,
 		Content: []model.ContentBlock{{Type: model.ContentText, Text: prompt}},
 	}); err != nil {
+		if cancel != nil {
+			cancel()
+		}
 		return nil, fmt.Errorf("append user prompt: %w", err)
 	}
 

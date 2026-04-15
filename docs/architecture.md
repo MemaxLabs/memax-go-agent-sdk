@@ -38,6 +38,7 @@ Current agent SDKs commonly expose autonomous file reading, command execution, w
 - `hook`: lifecycle hooks for host policy, audit, and observability.
 - `permission`: reusable permission checkers and policy composition.
 - `providers/openai`: optional Responses API adapter for hosted model streaming and function calls.
+- `providers/anthropic`: optional Messages API adapter for hosted model streaming and tool-use blocks.
 - `session`: session persistence interface plus in-memory and append-only JSONL implementations.
 - `contextwindow`: deterministic message-window policies used before model requests.
 - `toolkit/filetools`: optional memory-backed file tools that demonstrate the tool contract without requiring real filesystem access.

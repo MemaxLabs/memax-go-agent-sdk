@@ -19,6 +19,7 @@ Implemented foundation:
 - in-memory and append-only JSONL session stores
 - memory-backed file tools for examples and tests
 - OpenAI Responses API model adapter
+- Anthropic Messages API model adapter
 - context-window policy seam with recent-message and token-budget limiting
 - first autonomous query loop skeleton
 
@@ -36,6 +37,16 @@ To use the OpenAI adapter:
 
 ```go
 client := openai.NewFromEnv("gpt-5")
+events, err := memaxagent.Query(ctx, "Inspect the workspace.", memaxagent.Options{
+    Model: client,
+    Tools: registry,
+})
+```
+
+To use the Anthropic adapter:
+
+```go
+client := anthropic.NewFromEnv("your-anthropic-model")
 events, err := memaxagent.Query(ctx, "Inspect the workspace.", memaxagent.Options{
     Model: client,
     Tools: registry,
