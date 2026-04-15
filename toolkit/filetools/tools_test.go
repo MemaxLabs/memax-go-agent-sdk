@@ -3,6 +3,9 @@ package filetools
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -114,6 +117,62 @@ func TestOSFSReadWriteListAndRejectEscape(t *testing.T) {
 	}
 }
 
+func TestOSFSLimitsReadAndList(t *testing.T) {
+	fsys, err := NewOSFS(t.TempDir(), WithMaxReadBytes(4), WithMaxListEntries(1))
+	if err != nil {
+		t.Fatalf("NewOSFS returned error: %v", err)
+	}
+	if err := fsys.WriteFile(context.Background(), "docs/a.txt", "hello"); err != nil {
+		t.Fatalf("WriteFile a returned error: %v", err)
+	}
+	if err := fsys.WriteFile(context.Background(), "docs/b.txt", "ok"); err != nil {
+		t.Fatalf("WriteFile b returned error: %v", err)
+	}
+	if _, err := fsys.ReadFile(context.Background(), "docs/a.txt"); err == nil {
+		t.Fatal("ReadFile returned nil, want max read bytes error")
+	}
+	if _, err := fsys.ListFiles(context.Background(), "docs"); err == nil {
+		t.Fatal("ListFiles returned nil, want max list entries error")
+	}
+}
+
+func TestOSFSSymlinkContainmentRejectsEscape(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires elevated privileges on some Windows setups")
+	}
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("secret"), 0o644); err != nil {
+		t.Fatalf("write outside fixture: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "outside")); err != nil {
+		t.Fatalf("create symlink: %v", err)
+	}
+
+	lexical, err := NewOSFS(root)
+	if err != nil {
+		t.Fatalf("NewOSFS lexical returned error: %v", err)
+	}
+	content, err := lexical.ReadFile(context.Background(), "outside/secret.txt")
+	if err != nil {
+		t.Fatalf("lexical ReadFile returned error: %v", err)
+	}
+	if content != "secret" {
+		t.Fatalf("content = %q, want secret", content)
+	}
+
+	contained, err := NewOSFS(root, WithSymlinkContainment(true))
+	if err != nil {
+		t.Fatalf("NewOSFS contained returned error: %v", err)
+	}
+	if _, err := contained.ReadFile(context.Background(), "outside/secret.txt"); err == nil {
+		t.Fatal("contained ReadFile returned nil, want symlink escape error")
+	}
+	if err := contained.WriteFile(context.Background(), "outside/new.txt", "nope"); err == nil {
+		t.Fatal("contained WriteFile returned nil, want symlink escape error")
+	}
+}
+
 func TestReadOnlyFSAdapter(t *testing.T) {
 	fsys, err := NewReadOnlyFS(fstest.MapFS{
 		"README.md":     {Data: []byte("hello")},
@@ -148,6 +207,13 @@ func TestReadOnlyFSAdapter(t *testing.T) {
 	}
 	if _, err := fsys.ReadFile(context.Background(), "../escape.txt"); err == nil {
 		t.Fatal("ReadFile returned nil, want invalid fs path error")
+	}
+	files, err = fsys.ListFiles(context.Background(), "missing")
+	if err != nil {
+		t.Fatalf("ListFiles missing returned error: %v", err)
+	}
+	if len(files) != 0 {
+		t.Fatalf("missing files = %#v, want empty list", files)
 	}
 }
 

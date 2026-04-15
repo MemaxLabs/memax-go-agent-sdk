@@ -182,8 +182,10 @@ func TestQueryAppliesContextPolicyBeforeModelRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Query returned error: %v", err)
 	}
-	if _, err := Drain(events); err != nil {
-		t.Fatalf("Drain returned error: %v", err)
+	for event := range events {
+		if event.Kind == EventError {
+			t.Fatalf("query error: %v", event.Err)
+		}
 	}
 
 	lastRequest := fake.requests[len(fake.requests)-1]
@@ -285,6 +287,33 @@ func TestQueryStartsTracingSpans(t *testing.T) {
 		if !tracer.hasSpan(name) {
 			t.Fatalf("missing span %q in %#v", name, tracer.names())
 		}
+	}
+}
+
+func TestQueryRecordsMetrics(t *testing.T) {
+	meter := &recordingMeter{}
+	events, err := Query(context.Background(), "start", Options{
+		Model: &fakeModel{turns: [][]model.StreamEvent{
+			{{Kind: model.StreamText, Text: "done"}},
+		}},
+		Meter: meter,
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+	for event := range events {
+		if event.Kind == EventError {
+			t.Fatalf("query error: %v", event.Err)
+		}
+	}
+
+	for _, name := range []string{"memax.query.started", "memax.turn.started", "memax.model.stream.started", "memax.query.completed"} {
+		if !meter.hasCounter(name) {
+			t.Fatalf("missing counter %q in %#v", name, meter.counterNames())
+		}
+	}
+	if !meter.hasRecord("memax.model.stream.duration_ms") || !meter.hasRecord("memax.turn.duration_ms") {
+		t.Fatalf("missing duration records in %#v", meter.recordNames())
 	}
 }
 
@@ -624,6 +653,58 @@ func (s *recordingSpan) RecordError(err error) {
 
 func (s *recordingSpan) End() {
 	s.ended = true
+}
+
+type recordingMeter struct {
+	mu       sync.Mutex
+	counters []string
+	records  []string
+}
+
+func (m *recordingMeter) Add(_ context.Context, name string, _ int64, _ ...telemetry.Attribute) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.counters = append(m.counters, name)
+}
+
+func (m *recordingMeter) Record(_ context.Context, name string, _ float64, _ ...telemetry.Attribute) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.records = append(m.records, name)
+}
+
+func (m *recordingMeter) hasCounter(name string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, existing := range m.counters {
+		if existing == name {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *recordingMeter) hasRecord(name string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, existing := range m.records {
+		if existing == name {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *recordingMeter) counterNames() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]string(nil), m.counters...)
+}
+
+func (m *recordingMeter) recordNames() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]string(nil), m.records...)
 }
 
 func sameStrings(a []string, b []string) bool {

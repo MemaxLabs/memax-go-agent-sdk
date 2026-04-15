@@ -40,10 +40,11 @@ Current agent SDKs commonly expose autonomous file reading, command execution, w
 - `providers/openai`: optional Responses API adapter for hosted model streaming and function calls.
 - `providers/anthropic`: optional Messages API adapter for hosted model streaming and tool-use blocks.
 - `session`: session persistence interface plus in-memory and append-only JSONL implementations.
+- `session/sqlitestore`: optional SQLite-backed session store for embedded durable agents.
 - `checkpoint`: checkpoint metadata, manager interface, and in-memory checkpoint manager.
 - `contextwindow`: deterministic message-window policies used before model requests.
-- `telemetry`: minimal SDK tracing interface used by core packages.
-- `otel`: OpenTelemetry adapter for SDK tracing.
+- `telemetry`: minimal SDK tracing and metrics interfaces used by core packages.
+- `otel`: OpenTelemetry adapter for SDK tracing and metrics.
 - `toolkit/filetools`: optional memory-backed file tools that demonstrate the tool contract without requiring real filesystem access.
 - `toolkit/checkpointtools`: optional checkpoint tools over a checkpoint manager.
 - `toolkit/toolsearch`: optional search tool for discovering deferred tool specs.
@@ -53,7 +54,6 @@ Current agent SDKs commonly expose autonomous file reading, command execution, w
 Expected near-term packages:
 
 - `workspace`: optional virtual filesystem and checkpoint abstractions.
-- `metrics`: optional counters and histograms around turns, model calls, tools, hooks, and compaction.
 
 ## Core Loop
 
@@ -88,7 +88,7 @@ Tools can set `MaxResultBytes` to cap the content returned to the model. Truncat
 
 Large registries can opt into `tool.SearchSelector` through `Options.ToolSelector`. The selector always keeps `AlwaysLoad` tools, defers unmatched `ShouldDefer` tools, ranks matches by transcript text against names, descriptions, and search hints, and sends only selected specs to the model. The optional `toolkit/toolsearch` package exposes a `search_tools` tool with `AlwaysLoad` set, so an agent can discover deferred tools and cause matching specs to be loaded on a later turn through normal transcript context.
 
-The optional `toolkit/filetools` package provides `list_files`, `read_file`, and `write_file` tools over a `FileSystem` interface. It includes `MemoryFS` for deterministic tests and examples, `OSFS` for root-confined host directories, and `ReadOnlyFS` for standard `io/fs.FS` implementations such as embedded or map-backed filesystems. It is a DX reference, not a privileged core capability.
+The optional `toolkit/filetools` package provides `list_files`, `read_file`, and `write_file` tools over a `FileSystem` interface. It includes `MemoryFS` for deterministic tests and examples, `OSFS` for root-confined host directories, and `ReadOnlyFS` for standard `io/fs.FS` implementations such as embedded or map-backed filesystems. `OSFS` supports optional symlink containment, read-size limits, list-entry limits, and file mode configuration. It is a DX reference, not a privileged core capability.
 
 The optional `toolkit/tasktools` package provides `list_tasks`, `upsert_task`, and `delete_task` over a `Store` interface plus a concurrency-safe memory store. Task state is deliberately tool-owned state rather than implicit model memory; hosts can persist it in a database, scope it to a workspace, or discard it for short-lived runs.
 
@@ -128,7 +128,7 @@ Context-window policies transform session messages before each model request wit
 
 ## Observability
 
-Tracing is optional and uses a small SDK-owned `telemetry.Tracer` interface so the core can be tested without a real exporter. The `otel` package adapts that interface to OpenTelemetry. Current spans cover full query runs, turns, context policy application, model streaming, and individual tool executions. Spans carry stable attributes for session IDs, turn numbers, message counts, tool IDs, tool names, tool input/result byte counts, and tool policy flags.
+Tracing is optional and uses a small SDK-owned `telemetry.Tracer` interface so the core can be tested without a real exporter. Metrics are optional and use a matching SDK-owned `telemetry.Meter` interface with counter and value-recording methods. The `otel` package adapts both interfaces to OpenTelemetry. Current spans cover full query runs, turns, context policy application, model streaming, and individual tool executions. Metrics cover query starts/completions/errors, turn starts and durations, model stream starts/errors/durations, context compaction events, tool executions and durations, and hook errors. Spans and metrics carry stable attributes for session IDs, turn numbers, message counts, tool IDs, tool names, tool input/result byte counts, and tool policy flags.
 
 Durable session stores should support:
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"time"
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/hook"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
@@ -30,6 +31,7 @@ func Query(ctx context.Context, prompt string, opts Options) (<-chan Event, erro
 		telemetry.Int("memax.max_turns", opts.MaxTurns),
 		telemetry.Int("memax.max_tool_concurrency", opts.MaxToolConcurrency),
 	)
+	opts.Meter.Add(ctx, "memax.query.started", 1)
 
 	sess, err := startSession(ctx, opts)
 	if err != nil {
@@ -124,6 +126,7 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 			Sessions:        opts.Sessions,
 		},
 		Tracer: opts.Tracer,
+		Meter:  opts.Meter,
 	}
 
 	emit := func(event Event) bool {
@@ -139,22 +142,41 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 	}
 
 	finish := func(turn int, reason hook.StopReason, err error) error {
+		finalErr := err
 		if errs := opts.Hooks.Stop(ctx, hook.StopInput{
 			SessionID: sessionID,
 			Turn:      turn,
 			Reason:    reason,
 			Err:       err,
-		}); len(errs) > 0 && err == nil {
-			return fmt.Errorf("stop hook failed: %w", errors.Join(errs...))
+		}); len(errs) > 0 && finalErr == nil {
+			opts.Meter.Add(ctx, "memax.hook.errors", int64(len(errs)),
+				telemetry.String("memax.session_id", sessionID),
+				telemetry.String("memax.hook", "stop"),
+			)
+			finalErr = fmt.Errorf("stop hook failed: %w", errors.Join(errs...))
 		}
 		if errs := opts.Hooks.SessionEnded(ctx, hook.SessionEndedInput{
 			SessionID: sessionID,
 			Reason:    reason,
 			Err:       err,
-		}); len(errs) > 0 && err == nil {
-			return fmt.Errorf("session ended hook failed: %w", errors.Join(errs...))
+		}); len(errs) > 0 && finalErr == nil {
+			opts.Meter.Add(ctx, "memax.hook.errors", int64(len(errs)),
+				telemetry.String("memax.session_id", sessionID),
+				telemetry.String("memax.hook", "session_ended"),
+			)
+			finalErr = fmt.Errorf("session ended hook failed: %w", errors.Join(errs...))
 		}
-		return nil
+		attrs := []telemetry.Attribute{
+			telemetry.String("memax.session_id", sessionID),
+			telemetry.Int("memax.turn", turn),
+			telemetry.String("memax.stop_reason", string(reason)),
+			telemetry.Bool("memax.error", finalErr != nil),
+		}
+		opts.Meter.Add(ctx, "memax.query.completed", 1, attrs...)
+		if finalErr != nil {
+			opts.Meter.Add(ctx, "memax.query.errors", 1, attrs...)
+		}
+		return finalErr
 	}
 
 	if !emit(newEvent(EventSessionStarted, sessionID, 0)) {
@@ -163,13 +185,24 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 	}
 
 	for turn := 1; turn <= opts.MaxTurns; turn++ {
+		turnStarted := time.Now()
 		turnCtx, turnSpan := opts.Tracer.Start(ctx, "memaxagent.turn",
+			telemetry.String("memax.session_id", sessionID),
+			telemetry.Int("memax.turn", turn),
+		)
+		opts.Meter.Add(turnCtx, "memax.turn.started", 1,
 			telemetry.String("memax.session_id", sessionID),
 			telemetry.Int("memax.turn", turn),
 		)
 		shouldStop := false
 		func() {
-			defer turnSpan.End()
+			defer func() {
+				opts.Meter.Record(turnCtx, "memax.turn.duration_ms", durationMilliseconds(time.Since(turnStarted)),
+					telemetry.String("memax.session_id", sessionID),
+					telemetry.Int("memax.turn", turn),
+				)
+				turnSpan.End()
+			}()
 
 			messages, err := opts.Sessions.Messages(turnCtx, sessionID)
 			if err != nil {
@@ -213,6 +246,10 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 						OriginalMessages: originalCount,
 						SentMessages:     len(messages),
 					}); len(errs) > 0 {
+						opts.Meter.Add(turnCtx, "memax.hook.errors", int64(len(errs)),
+							telemetry.String("memax.session_id", sessionID),
+							telemetry.String("memax.hook", "context_applied"),
+						)
 						err = fmt.Errorf("context applied hook failed: %w", errors.Join(errs...))
 						turnSpan.RecordError(err)
 						emitError(turnCtx, emit, sessionID, turn, err)
@@ -224,6 +261,12 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 						shouldStop = true
 						return
 					}
+					opts.Meter.Add(turnCtx, "memax.context.applied", 1,
+						telemetry.String("memax.session_id", sessionID),
+						telemetry.Int("memax.turn", turn),
+						telemetry.Int("memax.context.original_messages", originalCount),
+						telemetry.Int("memax.context.sent_messages", len(messages)),
+					)
 				}
 			}
 			turnSpan.Set(telemetry.Int("memax.model.messages", len(messages)))
@@ -252,6 +295,13 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 				telemetry.Int("memax.model.messages", len(messages)),
 				telemetry.Int("memax.model.tools", len(toolSpecs)),
 			)
+			modelStarted := time.Now()
+			opts.Meter.Add(modelCtx, "memax.model.stream.started", 1,
+				telemetry.String("memax.session_id", sessionID),
+				telemetry.Int("memax.turn", turn),
+				telemetry.Int("memax.model.messages", len(messages)),
+				telemetry.Int("memax.model.tools", len(toolSpecs)),
+			)
 			stream, err := opts.Model.Stream(modelCtx, model.Request{
 				SessionID:          sessionID,
 				Messages:           messages,
@@ -264,6 +314,14 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 				err = fmt.Errorf("stream model: %w", err)
 				modelSpan.RecordError(err)
 				modelSpan.End()
+				opts.Meter.Add(modelCtx, "memax.model.stream.errors", 1,
+					telemetry.String("memax.session_id", sessionID),
+					telemetry.Int("memax.turn", turn),
+				)
+				opts.Meter.Record(modelCtx, "memax.model.stream.duration_ms", durationMilliseconds(time.Since(modelStarted)),
+					telemetry.String("memax.session_id", sessionID),
+					telemetry.Int("memax.turn", turn),
+				)
 				turnSpan.RecordError(err)
 				emitError(turnCtx, emit, sessionID, turn, err)
 				_ = finish(turn, hook.StopReasonError, err)
@@ -282,6 +340,14 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 			if err != nil {
 				modelSpan.RecordError(err)
 				modelSpan.End()
+				opts.Meter.Add(modelCtx, "memax.model.stream.errors", 1,
+					telemetry.String("memax.session_id", sessionID),
+					telemetry.Int("memax.turn", turn),
+				)
+				opts.Meter.Record(modelCtx, "memax.model.stream.duration_ms", durationMilliseconds(time.Since(modelStarted)),
+					telemetry.String("memax.session_id", sessionID),
+					telemetry.Int("memax.turn", turn),
+				)
 				turnSpan.RecordError(err)
 				emitError(turnCtx, emit, sessionID, turn, err)
 				_ = finish(turn, hook.StopReasonError, err)
@@ -289,6 +355,12 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 				return
 			}
 			modelSpan.End()
+			opts.Meter.Record(modelCtx, "memax.model.stream.duration_ms", durationMilliseconds(time.Since(modelStarted)),
+				telemetry.String("memax.session_id", sessionID),
+				telemetry.Int("memax.turn", turn),
+				telemetry.Int("memax.model.tool_uses", len(uses)),
+				telemetry.Int("memax.model.assistant_blocks", len(assistant.Content)),
+			)
 			if len(assistant.Content) > 0 {
 				if err := opts.Sessions.Append(turnCtx, sessionID, assistant); err != nil {
 					err = fmt.Errorf("append assistant message: %w", err)
@@ -404,6 +476,10 @@ func emitError(_ context.Context, emit func(Event) bool, sessionID string, turn 
 	event := newEvent(EventError, sessionID, turn)
 	event.Err = err
 	emit(event)
+}
+
+func durationMilliseconds(d time.Duration) float64 {
+	return float64(d) / float64(time.Millisecond)
 }
 
 // Drain consumes a query event stream and returns the final result or error.

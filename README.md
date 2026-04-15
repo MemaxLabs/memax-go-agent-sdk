@@ -43,7 +43,12 @@ The same file tools can run over different workspace implementations:
 
 ```go
 memory := filetools.NewMemoryFS(map[string]string{"README.md": "hello"})
-disk, err := filetools.NewOSFS("./workspace")
+disk, err := filetools.NewOSFS(
+    ".",
+    filetools.WithSymlinkContainment(true),
+    filetools.WithMaxReadBytes(512*1024),
+    filetools.WithMaxListEntries(5000),
+)
 readonly, err := filetools.NewReadOnlyFS(embedFS)
 ```
 
@@ -62,6 +67,13 @@ To try the embeddable HTTP shape:
 ```sh
 go run ./examples/server_embedding
 curl -s localhost:8080/query -d '{"prompt":"inspect workspace"}'
+```
+
+For a live-provider HTTP server, set an explicit provider and model:
+
+```sh
+AGENT_PROVIDER=openai OPENAI_API_KEY=... OPENAI_MODEL=... go run ./examples/server_live
+AGENT_PROVIDER=anthropic ANTHROPIC_API_KEY=... ANTHROPIC_MODEL=... go run ./examples/server_live
 ```
 
 To use the OpenAI adapter:
@@ -98,7 +110,15 @@ events, err := memaxagent.Query(ctx, "Inspect the workspace.", memaxagent.Option
     Model:  client,
     Tools:  registry,
     Tracer: sdkotel.NewTracer("my-agent-service"),
+    Meter:  sdkotel.NewMeter("my-agent-service"),
 })
+```
+
+To persist sessions in SQLite, use `session/sqlitestore` with any `database/sql` SQLite driver:
+
+```go
+db, err := sql.Open("sqlite", "file:memax.db")
+sessions, err := sqlitestore.New(ctx, db)
 ```
 
 To expose bounded worker agents as a tool, import `github.com/MemaxLabs/memax-go-agent-sdk/toolkit/subagents` and register the returned tool:

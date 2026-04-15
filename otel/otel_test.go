@@ -16,3 +16,9 @@ func TestTracerAdaptsOpenTelemetryTracer(t *testing.T) {
 	span.RecordError(errors.New("boom"))
 	span.End()
 }
+
+func TestMeterAdaptsOpenTelemetryMeter(t *testing.T) {
+	meter := NewMeter("test")
+	meter.Add(context.Background(), "test.counter", 1, telemetry.String("key", "value"))
+	meter.Record(context.Background(), "test.histogram", 1.5, telemetry.Float64("value", 1.5))
+}

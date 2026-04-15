@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/hook"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
@@ -28,6 +29,7 @@ type Executor struct {
 	MaxConcurrency int
 	Runtime        Runtime
 	Tracer         telemetry.Tracer
+	Meter          telemetry.Meter
 }
 
 func (e Executor) Run(ctx context.Context, uses []model.ToolUse) <-chan model.ToolResult {
@@ -105,6 +107,11 @@ func (e Executor) runOne(ctx context.Context, use model.ToolUse) model.ToolResul
 	if tracer == nil {
 		tracer = telemetry.NoopTracer{}
 	}
+	meter := e.Meter
+	if meter == nil {
+		meter = telemetry.NoopMeter{}
+	}
+	started := time.Now()
 	ctx, span := tracer.Start(ctx, "memaxagent.tool.execute",
 		telemetry.String("memax.session_id", e.Runtime.SessionID),
 		telemetry.String("memax.tool.id", use.ID),
@@ -112,10 +119,21 @@ func (e Executor) runOne(ctx context.Context, use model.ToolUse) model.ToolResul
 		telemetry.Int("memax.tool.input_bytes", len(use.Input)),
 	)
 	defer span.End()
+	finish := func(result model.ToolResult) model.ToolResult {
+		attrs := []telemetry.Attribute{
+			telemetry.String("memax.session_id", e.Runtime.SessionID),
+			telemetry.String("memax.tool.id", use.ID),
+			telemetry.String("memax.tool.name", use.Name),
+			telemetry.Bool("memax.tool.error", result.IsError),
+		}
+		meter.Add(ctx, "memax.tool.executions", 1, attrs...)
+		meter.Record(ctx, "memax.tool.duration_ms", durationMilliseconds(time.Since(started)), attrs...)
+		return result
+	}
 	fail := func(err error) model.ToolResult {
 		span.RecordError(err)
 		span.Set(telemetry.Bool("memax.tool.error", true))
-		return errorResult(use, err)
+		return finish(errorResult(use, err))
 	}
 
 	t, ok := e.Registry.Get(use.Name)
@@ -140,6 +158,11 @@ func (e Executor) runOne(ctx context.Context, use model.ToolUse) model.ToolResul
 			Spec:      spec,
 		})
 		if err != nil {
+			meter.Add(ctx, "memax.hook.errors", 1,
+				telemetry.String("memax.session_id", e.Runtime.SessionID),
+				telemetry.String("memax.hook", "before_tool_use"),
+				telemetry.String("memax.tool.name", use.Name),
+			)
 			return fail(fmt.Errorf("before tool hook failed: %w", err))
 		}
 		if result.DenyReason != "" {
@@ -179,10 +202,15 @@ func (e Executor) runOne(ctx context.Context, use model.ToolUse) model.ToolResul
 			Result:    result,
 		})
 		if len(errs) > 0 {
+			meter.Add(ctx, "memax.hook.errors", int64(len(errs)),
+				telemetry.String("memax.session_id", e.Runtime.SessionID),
+				telemetry.String("memax.hook", "after_tool_use"),
+				telemetry.String("memax.tool.name", use.Name),
+			)
 			result = withHookErrors(result, errs)
 		}
 	}
-	return result
+	return finish(result)
 }
 
 func enforceResultLimit(result model.ToolResult, limit int) model.ToolResult {
@@ -264,4 +292,8 @@ func errorResult(use model.ToolUse, err error) model.ToolResult {
 		Content:   msg,
 		IsError:   true,
 	}
+}
+
+func durationMilliseconds(d time.Duration) float64 {
+	return float64(d) / float64(time.Millisecond)
 }

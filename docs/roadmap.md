@@ -31,7 +31,7 @@
 - Add checkpoint interfaces for virtual workspaces. Initial checkpoint manager and tools exist.
 - Add resumable/forkable durable sessions. Initial resume/list/get/fork support exists.
 - Add retry-after-context-failure and external result storage.
-- Add optional metrics for turns, model calls, tools, hooks, and compaction.
+- Add optional metrics for turns, model calls, tools, hooks, and compaction. Initial SDK-owned meter interface and OpenTelemetry adapter exist.
 - Add performance benchmarks for long sessions and high tool concurrency. Initial benchmark coverage exists for context windows, tool selection, concurrent tool execution, and memory sessions.
 
 ## Phase 4: DX Polish
@@ -39,4 +39,4 @@
 - Provide clear examples for server embedding, CI embedding, and local CLI embedding. Initial deterministic examples cover memory tools, session resume, CI embedding, advanced toolkit composition, and HTTP server embedding. Live OpenAI and Anthropic examples are available behind explicit environment variables.
 - Publish stable API docs.
 - Add golden tests for event streams and transcript compatibility. Initial golden coverage protects the public query event sequence for a tool-using run.
-- Add adapters for common virtual filesystem and memory store implementations. Initial file workspace adapters cover in-memory maps, root-confined host directories, and read-only `io/fs.FS` sources.
+- Add adapters for common virtual filesystem and memory store implementations. Initial file workspace adapters cover in-memory maps, root-confined host directories, and read-only `io/fs.FS` sources. Initial durable session adapters cover memory, JSONL, and SQLite.

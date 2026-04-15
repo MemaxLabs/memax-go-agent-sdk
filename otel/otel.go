@@ -3,11 +3,13 @@ package otel
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/telemetry"
 	gootel "go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -70,6 +72,88 @@ func (s Span) End() {
 	if s.span != nil {
 		s.span.End()
 	}
+}
+
+type Meter struct {
+	mu         sync.Mutex
+	meter      metric.Meter
+	counters   map[string]metric.Int64Counter
+	histograms map[string]metric.Float64Histogram
+}
+
+// NewMeter creates an SDK telemetry meter backed by the global OpenTelemetry
+// meter provider.
+func NewMeter(name string) *Meter {
+	if name == "" {
+		name = defaultInstrumentationName
+	}
+	return FromMetricMeter(gootel.Meter(name))
+}
+
+// FromMetricMeter adapts an existing OpenTelemetry meter.
+func FromMetricMeter(meter metric.Meter) *Meter {
+	if meter == nil {
+		meter = gootel.Meter(defaultInstrumentationName)
+	}
+	return &Meter{
+		meter:      meter,
+		counters:   make(map[string]metric.Int64Counter),
+		histograms: make(map[string]metric.Float64Histogram),
+	}
+}
+
+// Add records a counter increment.
+func (m *Meter) Add(ctx context.Context, name string, value int64, attrs ...telemetry.Attribute) {
+	if m == nil || name == "" {
+		return
+	}
+	counter, err := m.counter(name)
+	if err != nil {
+		return
+	}
+	counter.Add(ctx, value, metric.WithAttributes(convertAttributes(attrs)...))
+}
+
+// Record records a value measurement.
+func (m *Meter) Record(ctx context.Context, name string, value float64, attrs ...telemetry.Attribute) {
+	if m == nil || name == "" {
+		return
+	}
+	histogram, err := m.histogram(name)
+	if err != nil {
+		return
+	}
+	histogram.Record(ctx, value, metric.WithAttributes(convertAttributes(attrs)...))
+}
+
+func (m *Meter) counter(name string) (metric.Int64Counter, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	counter, ok := m.counters[name]
+	if ok {
+		return counter, nil
+	}
+	counter, err := m.meter.Int64Counter(name)
+	if err != nil {
+		return nil, err
+	}
+	m.counters[name] = counter
+	return counter, nil
+}
+
+func (m *Meter) histogram(name string) (metric.Float64Histogram, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	histogram, ok := m.histograms[name]
+	if ok {
+		return histogram, nil
+	}
+	histogram, err := m.meter.Float64Histogram(name)
+	if err != nil {
+		return nil, err
+	}
+	m.histograms[name] = histogram
+	return histogram, nil
 }
 
 func convertAttributes(attrs []telemetry.Attribute) []attribute.KeyValue {

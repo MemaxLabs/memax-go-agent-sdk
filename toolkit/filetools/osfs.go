@@ -2,6 +2,7 @@ package filetools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -10,15 +11,62 @@ import (
 	"strings"
 )
 
+const (
+	defaultOSFSDirMode  fs.FileMode = 0o755
+	defaultOSFSFileMode fs.FileMode = 0o644
+)
+
 // OSFS adapts a directory on the host filesystem to FileSystem.
 //
 // All paths are resolved relative to the configured root. Lexical path escapes
 // such as ../secret are rejected before any host filesystem operation runs.
 type OSFS struct {
-	root string
+	root            string
+	containSymlinks bool
+	maxReadBytes    int64
+	maxListEntries  int
+	dirMode         fs.FileMode
+	fileMode        fs.FileMode
 }
 
-func NewOSFS(root string) (*OSFS, error) {
+// OSFSOption configures an OSFS.
+type OSFSOption func(*OSFS)
+
+// WithSymlinkContainment verifies that symlink-resolved paths stay under the
+// configured root before reading, writing, or listing.
+func WithSymlinkContainment(enabled bool) OSFSOption {
+	return func(fsys *OSFS) {
+		fsys.containSymlinks = enabled
+	}
+}
+
+// WithMaxReadBytes rejects reads whose file size is larger than n bytes.
+func WithMaxReadBytes(n int64) OSFSOption {
+	return func(fsys *OSFS) {
+		fsys.maxReadBytes = n
+	}
+}
+
+// WithMaxListEntries rejects list operations after more than n files are found.
+func WithMaxListEntries(n int) OSFSOption {
+	return func(fsys *OSFS) {
+		fsys.maxListEntries = n
+	}
+}
+
+// WithModes sets the modes used for newly created directories and files.
+func WithModes(dirMode fs.FileMode, fileMode fs.FileMode) OSFSOption {
+	return func(fsys *OSFS) {
+		if dirMode != 0 {
+			fsys.dirMode = dirMode
+		}
+		if fileMode != 0 {
+			fsys.fileMode = fileMode
+		}
+	}
+}
+
+func NewOSFS(root string, opts ...OSFSOption) (*OSFS, error) {
 	root = strings.TrimSpace(root)
 	if root == "" {
 		return nil, fmt.Errorf("filetools: OSFS root is required")
@@ -27,7 +75,24 @@ func NewOSFS(root string) (*OSFS, error) {
 	if err != nil {
 		return nil, fmt.Errorf("filetools: resolve OSFS root: %w", err)
 	}
-	return &OSFS{root: filepath.Clean(abs)}, nil
+	fsys := &OSFS{
+		root:     filepath.Clean(abs),
+		dirMode:  defaultOSFSDirMode,
+		fileMode: defaultOSFSFileMode,
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(fsys)
+		}
+	}
+	if fsys.containSymlinks {
+		resolved, err := filepath.EvalSymlinks(fsys.root)
+		if err != nil {
+			return nil, fmt.Errorf("filetools: resolve OSFS root symlinks: %w", err)
+		}
+		fsys.root = filepath.Clean(resolved)
+	}
+	return fsys, nil
 }
 
 func (fsys *OSFS) ReadFile(ctx context.Context, name string) (string, error) {
@@ -37,6 +102,19 @@ func (fsys *OSFS) ReadFile(ctx context.Context, name string) (string, error) {
 	full, _, err := fsys.join(name)
 	if err != nil {
 		return "", err
+	}
+	full, err = fsys.resolveExisting(full)
+	if err != nil {
+		return "", err
+	}
+	if fsys.maxReadBytes > 0 {
+		info, err := os.Stat(full)
+		if err != nil {
+			return "", err
+		}
+		if info.Size() > fsys.maxReadBytes {
+			return "", fmt.Errorf("filetools: file exceeds max read bytes: %s", name)
+		}
 	}
 	data, err := os.ReadFile(full)
 	if err != nil {
@@ -56,14 +134,22 @@ func (fsys *OSFS) WriteFile(ctx context.Context, name string, content string) er
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(full), fsys.dirMode); err != nil {
 		return err
 	}
-	return os.WriteFile(full, []byte(content), 0o644)
+	full, err = fsys.resolveWriteTarget(full)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(full, []byte(content), fsys.fileMode)
 }
 
 func (fsys *OSFS) ListFiles(ctx context.Context, prefix string) ([]string, error) {
 	full, clean, err := fsys.join(cleanPrefix(prefix))
+	if err != nil {
+		return nil, err
+	}
+	full, err = fsys.resolveExisting(full)
 	if err != nil {
 		return nil, err
 	}
@@ -94,6 +180,9 @@ func (fsys *OSFS) ListFiles(ctx context.Context, prefix string) ([]string, error
 			return err
 		}
 		files = append(files, filepath.ToSlash(rel))
+		if fsys.maxListEntries > 0 && len(files) > fsys.maxListEntries {
+			return fmt.Errorf("filetools: list exceeds max entries: %d", fsys.maxListEntries)
+		}
 		return nil
 	})
 	if err != nil {
@@ -116,6 +205,53 @@ func (fsys *OSFS) join(name string) (string, string, error) {
 		return "", "", fmt.Errorf("filetools: path escapes workspace root: %s", name)
 	}
 	return full, clean, nil
+}
+
+func (fsys *OSFS) resolveExisting(full string) (string, error) {
+	if !fsys.containSymlinks {
+		return full, nil
+	}
+	resolved, err := filepath.EvalSymlinks(full)
+	if err != nil {
+		return "", err
+	}
+	if err := fsys.ensureContained(resolved); err != nil {
+		return "", err
+	}
+	return resolved, nil
+}
+
+func (fsys *OSFS) resolveWriteTarget(full string) (string, error) {
+	if !fsys.containSymlinks {
+		return full, nil
+	}
+	if resolved, err := filepath.EvalSymlinks(full); err == nil {
+		if err := fsys.ensureContained(resolved); err != nil {
+			return "", err
+		}
+		return resolved, nil
+	} else if !os.IsNotExist(err) {
+		return "", err
+	}
+	parent, err := filepath.EvalSymlinks(filepath.Dir(full))
+	if err != nil {
+		return "", err
+	}
+	if err := fsys.ensureContained(parent); err != nil {
+		return "", err
+	}
+	return filepath.Join(parent, filepath.Base(full)), nil
+}
+
+func (fsys *OSFS) ensureContained(path string) error {
+	rel, err := filepath.Rel(fsys.root, filepath.Clean(path))
+	if err != nil {
+		return err
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return fmt.Errorf("filetools: path escapes workspace root after symlink resolution")
+	}
+	return nil
 }
 
 // ReadOnlyFS adapts any io/fs.FS implementation to FileSystem.
@@ -156,7 +292,7 @@ func (fsys *ReadOnlyFS) ListFiles(ctx context.Context, prefix string) ([]string,
 	}
 	info, err := fs.Stat(fsys.fsys, prefix)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			return nil, nil
 		}
 		return nil, err

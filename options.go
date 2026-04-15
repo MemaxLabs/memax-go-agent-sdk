@@ -25,6 +25,7 @@ type Options struct {
 	Context      contextwindow.Policy
 	ToolSelector tool.Selector
 	Tracer       telemetry.Tracer
+	Meter        telemetry.Meter
 
 	SystemPrompt       string
 	AppendSystemPrompt string
@@ -53,6 +54,9 @@ func (o Options) withDefaults() Options {
 	}
 	if o.Tracer == nil {
 		o.Tracer = telemetry.NoopTracer{}
+	}
+	if o.Meter == nil {
+		o.Meter = telemetry.NoopMeter{}
 	}
 	return o
 }
