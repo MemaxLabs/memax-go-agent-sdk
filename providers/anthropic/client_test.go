@@ -118,6 +118,13 @@ func TestAPIErrorMarksContextWindowExceeded(t *testing.T) {
 	}
 }
 
+func TestAPIErrorDoesNotMarkUnrelatedContextType(t *testing.T) {
+	err := &apiError{Type: "context_canceled", Message: "request canceled"}
+	if errors.Is(err, model.ErrContextWindowExceeded) {
+		t.Fatalf("errors.Is(%v, ErrContextWindowExceeded) = true, want false", err)
+	}
+}
+
 func TestClientMapsToolResultsToToolResultBlocks(t *testing.T) {
 	body := (&Client{Model: "test"}).requestBody(model.Request{
 		Messages: []model.Message{

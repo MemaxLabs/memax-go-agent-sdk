@@ -35,7 +35,8 @@ func (e *apiError) contextWindowExceeded() bool {
 	}
 	typ := strings.ToLower(e.Type)
 	message := strings.ToLower(e.Message)
-	return strings.Contains(typ, "context") ||
+	return strings.Contains(typ, "context_window") ||
+		strings.Contains(typ, "context_length") ||
 		strings.Contains(message, "prompt is too long") ||
 		strings.Contains(message, "prompt too long") ||
 		strings.Contains(message, "context window") ||

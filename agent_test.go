@@ -230,9 +230,22 @@ func TestQueryRetriesContextWindowErrorWithRetryPolicy(t *testing.T) {
 		turns: [][]model.StreamEvent{{{Kind: model.StreamText, Text: "done"}}},
 	}
 	retryModel := &contextRetryModel{fake: fake}
+	registry := tool.NewRegistry(
+		tool.Definition{ToolSpec: model.ToolSpec{Name: "read_file"}},
+		tool.Definition{ToolSpec: model.ToolSpec{Name: "write_file"}},
+	)
+	selectCalls := 0
 	events, err := Query(context.Background(), "start", Options{
 		Model:        retryModel,
+		Tools:        registry,
 		ContextRetry: replaceContextPolicy{text: "compact"},
+		ToolSelector: tool.SelectorFunc(func(_ context.Context, _ *tool.Registry, req tool.SelectRequest) ([]model.ToolSpec, error) {
+			selectCalls++
+			if len(req.Messages) > 0 && strings.Contains(req.Messages[0].PlainText(), "compact") {
+				return []model.ToolSpec{{Name: "read_file"}}, nil
+			}
+			return []model.ToolSpec{{Name: "write_file"}}, nil
+		}),
 	})
 	if err != nil {
 		t.Fatalf("Query returned error: %v", err)
@@ -253,6 +266,15 @@ func TestQueryRetriesContextWindowErrorWithRetryPolicy(t *testing.T) {
 	}
 	if retryModel.requests[1].Messages[0].PlainText() != "compact" {
 		t.Fatalf("retry messages = %#v, want compacted prompt", retryModel.requests[1].Messages)
+	}
+	if selectCalls != 2 {
+		t.Fatalf("selector calls = %d, want original and retry selection", selectCalls)
+	}
+	if got := requestToolNames(retryModel.requests[0]); !sameStrings(got, []string{"write_file"}) {
+		t.Fatalf("original retry tools = %#v, want write_file", got)
+	}
+	if got := requestToolNames(retryModel.requests[1]); !sameStrings(got, []string{"read_file"}) {
+		t.Fatalf("compacted retry tools = %#v, want read_file", got)
 	}
 }
 

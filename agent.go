@@ -338,7 +338,7 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 			})
 			if err != nil {
 				if opts.ContextRetry != nil && model.IsContextWindowExceeded(err) {
-					retryMessages, retryPrompt, retryErr := retryContextWindow(modelCtx, opts, messages, toolSpecs)
+					retryMessages, retryTools, retryPrompt, retryErr := retryContextWindow(modelCtx, opts, messages)
 					if retryErr == nil {
 						if !reflect.DeepEqual(retryMessages, messages) {
 							if ok, applyErr := emitContextApplied(turnCtx, emit, opts, sessionID, turn, len(messages), len(retryMessages)); applyErr != nil {
@@ -357,7 +357,9 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 							}
 						}
 						messages = retryMessages
+						toolSpecs = retryTools
 						promptResult = retryPrompt
+						modelSpan.Set(telemetry.Int("memax.model.retry_tools", len(toolSpecs)))
 						stream, err = opts.Model.Stream(modelCtx, model.Request{
 							SessionID:          sessionID,
 							Messages:           messages,
@@ -536,16 +538,20 @@ func buildPrompt(ctx context.Context, opts Options, messages []model.Message, to
 	}, nil
 }
 
-func retryContextWindow(ctx context.Context, opts Options, messages []model.Message, tools []model.ToolSpec) ([]model.Message, builtPrompt, error) {
+func retryContextWindow(ctx context.Context, opts Options, messages []model.Message) ([]model.Message, []model.ToolSpec, builtPrompt, error) {
 	retryMessages, err := opts.ContextRetry.Apply(ctx, messages)
 	if err != nil {
-		return nil, builtPrompt{}, err
+		return nil, nil, builtPrompt{}, err
 	}
-	retryPrompt, err := buildPrompt(ctx, opts, retryMessages, tools)
+	retryTools, err := selectedToolSpecs(ctx, opts, retryMessages)
 	if err != nil {
-		return nil, builtPrompt{}, err
+		return nil, nil, builtPrompt{}, err
 	}
-	return retryMessages, retryPrompt, nil
+	retryPrompt, err := buildPrompt(ctx, opts, retryMessages, retryTools)
+	if err != nil {
+		return nil, nil, builtPrompt{}, err
+	}
+	return retryMessages, retryTools, retryPrompt, nil
 }
 
 func emitContextApplied(
