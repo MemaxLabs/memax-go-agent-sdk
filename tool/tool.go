@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/MemaxLabs/memax-go-agent-sdk/identity"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/session"
 )
@@ -12,6 +13,7 @@ import (
 type Runtime struct {
 	SessionID       string
 	ParentSessionID string
+	Identity        identity.Identity
 	Sessions        session.Store
 }
 

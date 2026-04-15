@@ -168,6 +168,7 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 		Runtime: tool.Runtime{
 			SessionID:       sessionID,
 			ParentSessionID: opts.ParentSessionID,
+			Identity:        opts.Identity,
 			Sessions:        opts.Sessions,
 		},
 		Tracer: opts.Tracer,

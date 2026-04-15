@@ -86,9 +86,12 @@ func NewSearchTool(config Config) (tool.Tool, error) {
 			SearchHint:      "search recall memory project user session organization context preference rule",
 			ReadOnly:        true,
 			ConcurrencySafe: true,
-			AlwaysLoad:      true,
-			MaxResultBytes:  maxResultBytes,
-			InputSchema:     searchInputSchema(),
+			// Keep memory search visible by default because it is a read-only
+			// discovery capability for deferred durable context. Hosts can wrap
+			// or construct their own tool when they want deferred memory search.
+			AlwaysLoad:     true,
+			MaxResultBytes: maxResultBytes,
+			InputSchema:    searchInputSchema(),
 		},
 		Handler: func(ctx context.Context, call tool.Call) (model.ToolResult, error) {
 			input, err := tool.DecodeInput[searchInput](call.Use)
@@ -105,6 +108,7 @@ func NewSearchTool(config Config) (tool.Tool, error) {
 			items, err := config.Source.Memories(ctx, memory.Request{
 				SessionID:       call.Runtime.SessionID,
 				ParentSessionID: call.Runtime.ParentSessionID,
+				Identity:        call.Runtime.Identity,
 				Query:           input.Query,
 			})
 			if err != nil {
@@ -149,13 +153,18 @@ func NewSaveTool(config Config) (tool.Tool, error) {
 			if err != nil {
 				return model.ToolResult{}, err
 			}
-			item, err := config.Writer.PutMemory(ctx, memory.PutRequest{
+			scope, err := parseScope(input.Scope)
+			if err != nil {
+				return model.ToolResult{}, err
+			}
+			result, err := config.Writer.PutMemory(ctx, memory.PutRequest{
 				SessionID:       call.Runtime.SessionID,
 				ParentSessionID: call.Runtime.ParentSessionID,
+				Identity:        call.Runtime.Identity,
 				Memory: memory.Memory{
 					ID:          strings.TrimSpace(input.ID),
 					Name:        strings.TrimSpace(input.Name),
-					Scope:       parseScope(input.Scope),
+					Scope:       scope,
 					Description: strings.TrimSpace(input.Description),
 					Content:     strings.TrimSpace(input.Content),
 					Priority:    input.Priority,
@@ -167,9 +176,18 @@ func NewSaveTool(config Config) (tool.Tool, error) {
 			if err != nil {
 				return model.ToolResult{}, err
 			}
+			item := result.Memory
+			action := "saved"
+			if result.Created {
+				action = "created"
+			} else if result.Updated {
+				action = "updated"
+			}
+			metadata := memoryMetadata(item)
+			metadata["action"] = action
 			return model.ToolResult{
-				Content:  fmt.Sprintf("saved memory %s", memoryLabel(item)),
-				Metadata: memoryMetadata(item),
+				Content:  fmt.Sprintf("%s memory %s", action, memoryLabel(item)),
+				Metadata: metadata,
 			}, nil
 		},
 	}, nil
@@ -205,9 +223,17 @@ func NewDeleteTool(config Config) (tool.Tool, error) {
 			req := memory.DeleteRequest{
 				SessionID:       call.Runtime.SessionID,
 				ParentSessionID: call.Runtime.ParentSessionID,
+				Identity:        call.Runtime.Identity,
 				ID:              strings.TrimSpace(input.ID),
 				Name:            strings.TrimSpace(input.Name),
 				Scope:           memory.Scope(strings.TrimSpace(input.Scope)),
+			}
+			if req.Scope != "" {
+				scope, err := parseScope(string(req.Scope))
+				if err != nil {
+					return model.ToolResult{}, err
+				}
+				req.Scope = scope
 			}
 			if req.ID == "" && req.Name == "" {
 				return model.ToolResult{}, fmt.Errorf("delete_memory requires id or name")
@@ -314,12 +340,18 @@ func scopeSchema() map[string]any {
 	}
 }
 
-func parseScope(value string) memory.Scope {
+func parseScope(value string) (memory.Scope, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
-		return memory.ScopeCustom
+		return memory.ScopeCustom, nil
 	}
-	return memory.Scope(value)
+	scope := memory.Scope(value)
+	switch scope {
+	case memory.ScopeProject, memory.ScopeUser, memory.ScopeSession, memory.ScopeOrganization, memory.ScopeCustom:
+		return scope, nil
+	default:
+		return "", fmt.Errorf("invalid memory scope: %s", value)
+	}
 }
 
 func formatMemories(memories []memory.Memory) string {

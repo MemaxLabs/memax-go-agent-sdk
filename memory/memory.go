@@ -71,7 +71,14 @@ type Source interface {
 
 // Writer is an optional memory mutation capability.
 type Writer interface {
-	PutMemory(context.Context, PutRequest) (Memory, error)
+	PutMemory(context.Context, PutRequest) (PutResult, error)
+}
+
+// PutResult is the outcome of a durable memory write.
+type PutResult struct {
+	Memory  Memory
+	Created bool
+	Updated bool
 }
 
 // Deleter is an optional memory deletion capability.
@@ -121,7 +128,13 @@ func NewMemoryStore(memories []Memory) *MemoryStore {
 
 // Memories returns a defensive snapshot of all memories. Selection is handled
 // by Selector or the prompt builder.
-func (s *MemoryStore) Memories(context.Context, Request) ([]Memory, error) {
+func (s *MemoryStore) Memories(ctx context.Context, _ Request) ([]Memory, error) {
+	if err := contextError(ctx); err != nil {
+		return nil, err
+	}
+	if s == nil {
+		return nil, fmt.Errorf("memory: nil MemoryStore")
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := make([]Memory, 0, len(s.order))
@@ -135,9 +148,15 @@ func (s *MemoryStore) Memories(context.Context, Request) ([]Memory, error) {
 
 // PutMemory creates or replaces a memory by ID when provided, otherwise by
 // scope/name when name is present.
-func (s *MemoryStore) PutMemory(_ context.Context, req PutRequest) (Memory, error) {
+func (s *MemoryStore) PutMemory(ctx context.Context, req PutRequest) (PutResult, error) {
+	if err := contextError(ctx); err != nil {
+		return PutResult{}, err
+	}
+	if s == nil {
+		return PutResult{}, fmt.Errorf("memory: nil MemoryStore")
+	}
 	if strings.TrimSpace(req.Memory.Content) == "" {
-		return Memory{}, fmt.Errorf("memory: content is required")
+		return PutResult{}, fmt.Errorf("memory: content is required")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -145,7 +164,13 @@ func (s *MemoryStore) PutMemory(_ context.Context, req PutRequest) (Memory, erro
 }
 
 // DeleteMemory deletes a memory by ID or by scope/name.
-func (s *MemoryStore) DeleteMemory(_ context.Context, req DeleteRequest) error {
+func (s *MemoryStore) DeleteMemory(ctx context.Context, req DeleteRequest) error {
+	if err := contextError(ctx); err != nil {
+		return err
+	}
+	if s == nil {
+		return fmt.Errorf("memory: nil MemoryStore")
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.ensureLocked()
@@ -337,7 +362,7 @@ func clone(in Memory) Memory {
 	return in
 }
 
-func (s *MemoryStore) insert(item Memory) (Memory, error) {
+func (s *MemoryStore) insert(item Memory) (PutResult, error) {
 	s.ensureLocked()
 	item = normalizeMemory(item)
 	if item.ID == "" {
@@ -347,18 +372,19 @@ func (s *MemoryStore) insert(item Memory) (Memory, error) {
 				if ok && existing.Name == item.Name && existing.Scope == item.Scope {
 					item.ID = id
 					s.memories[id] = clone(item)
-					return clone(item), nil
+					return PutResult{Memory: clone(item), Updated: true}, nil
 				}
 			}
 		}
 		item.ID = s.nextIDLocked()
 	}
-	if _, exists := s.memories[item.ID]; !exists {
+	_, exists := s.memories[item.ID]
+	if !exists {
 		s.order = append(s.order, item.ID)
 	}
 	s.memories[item.ID] = clone(item)
 	s.bumpNextLocked(item.ID)
-	return clone(item), nil
+	return PutResult{Memory: clone(item), Created: !exists, Updated: exists}, nil
 }
 
 func (s *MemoryStore) ensureLocked() {
@@ -428,6 +454,13 @@ func (s *MemoryStore) bumpNextLocked(id string) {
 	if _, err := fmt.Sscanf(id, "memory-%d", &n); err == nil && n >= s.next {
 		s.next = n + 1
 	}
+}
+
+func contextError(ctx context.Context) error {
+	if ctx == nil {
+		return nil
+	}
+	return ctx.Err()
 }
 
 func tokenize(value string) []string {

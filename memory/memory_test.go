@@ -111,7 +111,7 @@ func TestMemoryStorePutSearchDelete(t *testing.T) {
 		Tags:    []string{"billing"},
 	}})
 
-	updated, err := store.PutMemory(context.Background(), PutRequest{Memory: Memory{
+	put, err := store.PutMemory(context.Background(), PutRequest{Memory: Memory{
 		Name:     "billing",
 		Scope:    ScopeProject,
 		Content:  "audit invoices and rollback",
@@ -120,8 +120,12 @@ func TestMemoryStorePutSearchDelete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PutMemory returned error: %v", err)
 	}
+	updated := put.Memory
 	if updated.ID != "memory-7" {
 		t.Fatalf("updated ID = %q, want memory-7", updated.ID)
+	}
+	if !put.Updated || put.Created {
+		t.Fatalf("PutResult = %#v, want updated", put)
 	}
 	updated.Metadata["owner"] = "mutated"
 
@@ -142,5 +146,20 @@ func TestMemoryStorePutSearchDelete(t *testing.T) {
 	}
 	if len(memories) != 0 {
 		t.Fatalf("memories = %#v, want deleted", memories)
+	}
+}
+
+func TestMemoryStoreHonorsCanceledContext(t *testing.T) {
+	store := NewMemoryStore(nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := store.Memories(ctx, Request{}); err == nil {
+		t.Fatal("Memories returned nil error, want context cancellation")
+	}
+	if _, err := store.PutMemory(ctx, PutRequest{Memory: Memory{Content: "remember"}}); err == nil {
+		t.Fatal("PutMemory returned nil error, want context cancellation")
+	}
+	if err := store.DeleteMemory(ctx, DeleteRequest{ID: "memory-1"}); err == nil {
+		t.Fatal("DeleteMemory returned nil error, want context cancellation")
 	}
 }
