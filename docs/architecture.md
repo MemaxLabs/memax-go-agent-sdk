@@ -116,13 +116,13 @@ If no structured rule matches, `Policy` denies by default unless an explicit def
 
 Hooks complement permissions. Permissions answer "may this run?" while hooks let host applications add policy, audit, tracing, and future input rewriting without changing tool implementations.
 
-## Prompt, Identity, and Skills
+## Prompt, Identity, Memories, and Skills
 
 The prompt layer is a first-class part of the orchestration contract. Applications
 can keep using raw `SystemPrompt` and `AppendSystemPrompt` fields for full
-control. When an identity, skills, or a custom prompt builder are configured,
-the SDK builds a deterministic system prompt from named parts and passes that
-assembled prompt to the provider adapter.
+control. When an identity, memories, skills, or a custom prompt builder are
+configured, the SDK builds a deterministic system prompt from named parts and
+passes that assembled prompt to the provider adapter.
 
 `identity.Identity` captures stable agent behavior without requiring callers to
 copy a long prompt: name, role, mission, tone, autonomy level, and constraints.
@@ -130,11 +130,13 @@ The default identity is deliberately tool-bounded: it tells the model to operate
 only through host-provided tools and to prefer observable progress.
 
 `prompt.Builder` receives the identity, selected model-visible tools, session
-messages, configured skills, and host prompt text. The default builder emits:
+messages, configured memories, configured skills, and host prompt text. The
+default builder emits:
 
 - core Memax runtime instructions
 - identity and constraints
 - tool-use guidance based on active tool count
+- durable host memory context
 - relevant skills
 - host system and append-system prompt text
 
@@ -144,6 +146,16 @@ instead of hiding intelligence changes inside provider adapters.
 `prompt.DefaultBuilder` also supports provider-family profiles for OpenAI and
 Anthropic. Profiles add small provider-oriented guidance without importing
 provider request types into core prompt assembly.
+
+`memory.Source` is the source-neutral loading contract for durable host context
+such as project rules, user preferences, session notes, or organization policy.
+Callers can pass explicit `Options.Memories` or a dynamic `Options.MemorySource`.
+The source receives the active session ID, parent session ID, identity,
+model-visible messages after context-window policy, and query text. The default
+prompt builder injects selected memories as a named `memax.memories` prompt part.
+`memory.Selector` keeps always-on memories and ranks relevant memories against
+the current prompt and transcript. Memory injection is prompt context only; it
+does not grant filesystem, network, workspace, or OS capabilities.
 
 `skill.Source` is the source-neutral loading contract for instruction bundles.
 Built-in helpers cover static slices, function-backed sources, merged sources,

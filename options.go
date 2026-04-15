@@ -6,6 +6,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/contextwindow"
 	"github.com/MemaxLabs/memax-go-agent-sdk/hook"
 	"github.com/MemaxLabs/memax-go-agent-sdk/identity"
+	"github.com/MemaxLabs/memax-go-agent-sdk/memory"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/permission"
 	"github.com/MemaxLabs/memax-go-agent-sdk/prompt"
@@ -33,6 +34,8 @@ type Options struct {
 	PromptBuilder prompt.Builder
 	PromptProfile prompt.Profile
 	Identity      identity.Identity
+	MemorySource  memory.Source
+	Memories      []memory.Memory
 	SkillSource   skill.Source
 	Skills        []skill.Skill
 

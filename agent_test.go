@@ -12,6 +12,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/contextwindow"
 	"github.com/MemaxLabs/memax-go-agent-sdk/hook"
 	"github.com/MemaxLabs/memax-go-agent-sdk/identity"
+	"github.com/MemaxLabs/memax-go-agent-sdk/memory"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/session"
 	"github.com/MemaxLabs/memax-go-agent-sdk/skill"
@@ -493,6 +494,60 @@ func TestQueryLoadsSkillsFromSource(t *testing.T) {
 	}
 	if len(fake.requests) != 1 || !strings.Contains(fake.requests[0].SystemPrompt, "security-review") {
 		t.Fatalf("system prompt = %q, want loaded skill", fake.requests[0].SystemPrompt)
+	}
+}
+
+func TestQueryLoadsMemoriesFromSource(t *testing.T) {
+	fake := &fakeModel{turns: [][]model.StreamEvent{{{Kind: model.StreamText, Text: "done"}}}}
+	var got memory.Request
+	events, err := Query(context.Background(), "inspect billing code", Options{
+		Model:           fake,
+		ParentSessionID: "parent-session",
+		MemorySource: memory.SourceFunc(func(_ context.Context, req memory.Request) ([]memory.Memory, error) {
+			got = req
+			return []memory.Memory{{
+				Name:    "billing-rules",
+				Scope:   memory.ScopeProject,
+				Content: "Billing changes require audit logging.",
+			}}, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+	if _, err := Drain(events); err != nil {
+		t.Fatalf("Drain returned error: %v", err)
+	}
+	if got.SessionID == "" {
+		t.Fatal("memory source did not receive active session id")
+	}
+	if got.ParentSessionID != "parent-session" {
+		t.Fatalf("memory source parent session = %q, want parent-session", got.ParentSessionID)
+	}
+	if len(got.Messages) != 1 || got.Messages[0].PlainText() != "inspect billing code" {
+		t.Fatalf("memory source messages = %#v, want current messages", got.Messages)
+	}
+	if got.Query != "inspect billing code" {
+		t.Fatalf("memory source query = %q, want prompt text", got.Query)
+	}
+	if len(fake.requests) != 1 || !strings.Contains(fake.requests[0].SystemPrompt, "Billing changes require audit logging.") {
+		t.Fatalf("system prompt = %q, want loaded memory", fake.requests[0].SystemPrompt)
+	}
+}
+
+func TestQueryMemorySourceErrorStopsRun(t *testing.T) {
+	sourceErr := errors.New("memory store unavailable")
+	events, err := Query(context.Background(), "start", Options{
+		Model: &fakeModel{},
+		MemorySource: memory.SourceFunc(func(context.Context, memory.Request) ([]memory.Memory, error) {
+			return nil, sourceErr
+		}),
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+	if _, err := Drain(events); err == nil || !strings.Contains(err.Error(), "build prompt") || !errors.Is(err, sourceErr) {
+		t.Fatalf("Drain error = %v, want memory source error", err)
 	}
 }
 

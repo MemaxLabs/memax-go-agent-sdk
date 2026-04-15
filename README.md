@@ -24,6 +24,7 @@ Implemented foundation:
 - task state tools for agent planning and progress tracking
 - opt-in tool selection and search for deferred tool loading
 - agent identity profiles, deterministic prompt assembly, and local skill manifests
+- project, user, and session memory injection through source-neutral prompt memory sources
 - skill discovery tools
 - OpenAI Responses API model adapter
 - Anthropic Messages API model adapter
@@ -185,6 +186,24 @@ registry := tool.NewRegistry(searchSkills)
 
 The supported `SKILL.md` metadata subset and source formats are documented in
 [docs/skills.md](docs/skills.md).
+
+To inject durable host context, pass explicit memories or a custom
+`memory.Source`. Sources receive the active session ID, parent session ID,
+identity, current model-visible messages, and query text:
+
+```go
+events, err := memaxagent.Query(ctx, "Review the billing change.", memaxagent.Options{
+    Model: client,
+    Memories: []memory.Memory{{
+        Name:    "billing-rules",
+        Scope:   memory.ScopeProject,
+        Content: "Billing changes require audit logging and rollback notes.",
+    }},
+    MemorySource: memory.SourceFunc(func(ctx context.Context, req memory.Request) ([]memory.Memory, error) {
+        return loadRelevantMemories(ctx, req.SessionID, req.Query)
+    }),
+})
+```
 
 To expose bounded worker agents as a tool, import `github.com/MemaxLabs/memax-go-agent-sdk/toolkit/subagents` and register the returned tool:
 

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/hook"
+	"github.com/MemaxLabs/memax-go-agent-sdk/memory"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	promptpkg "github.com/MemaxLabs/memax-go-agent-sdk/prompt"
 	"github.com/MemaxLabs/memax-go-agent-sdk/session"
@@ -300,7 +301,7 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 				telemetry.Int("memax.tools.available", len(opts.Tools.Specs())),
 				telemetry.Int("memax.tools.selected", len(toolSpecs)),
 			)
-			promptResult, err := buildPrompt(turnCtx, opts, messages, toolSpecs)
+			promptResult, err := buildPrompt(turnCtx, opts, sessionID, messages, toolSpecs)
 			if err != nil {
 				err = fmt.Errorf("build prompt: %w", err)
 				turnSpan.RecordError(err)
@@ -338,7 +339,7 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 			})
 			if err != nil {
 				if opts.ContextRetry != nil && model.IsContextWindowExceeded(err) {
-					retryMessages, retryTools, retryPrompt, retryErr := retryContextWindow(modelCtx, opts, messages)
+					retryMessages, retryTools, retryPrompt, retryErr := retryContextWindow(modelCtx, opts, sessionID, messages)
 					if retryErr == nil {
 						if !reflect.DeepEqual(retryMessages, messages) {
 							if ok, applyErr := emitContextApplied(turnCtx, emit, opts, sessionID, turn, len(messages), len(retryMessages)); applyErr != nil {
@@ -501,8 +502,8 @@ type builtPrompt struct {
 	Parts              []promptpkg.Part
 }
 
-func buildPrompt(ctx context.Context, opts Options, messages []model.Message, tools []model.ToolSpec) (builtPrompt, error) {
-	if opts.PromptBuilder == nil && opts.PromptProfile == "" && opts.Identity.IsZero() && opts.SkillSource == nil && len(opts.Skills) == 0 {
+func buildPrompt(ctx context.Context, opts Options, sessionID string, messages []model.Message, tools []model.ToolSpec) (builtPrompt, error) {
+	if opts.PromptBuilder == nil && opts.PromptProfile == "" && opts.Identity.IsZero() && opts.MemorySource == nil && len(opts.Memories) == 0 && opts.SkillSource == nil && len(opts.Skills) == 0 {
 		return builtPrompt{
 			SystemPrompt:       opts.SystemPrompt,
 			AppendSystemPrompt: opts.AppendSystemPrompt,
@@ -511,6 +512,10 @@ func buildPrompt(ctx context.Context, opts Options, messages []model.Message, to
 	builder := opts.PromptBuilder
 	if builder == nil {
 		builder = promptpkg.DefaultBuilder{Profile: opts.PromptProfile}
+	}
+	memories, err := loadMemories(ctx, opts, sessionID, messages)
+	if err != nil {
+		return builtPrompt{}, err
 	}
 	skills := append([]skillpkg.Skill(nil), opts.Skills...)
 	if opts.SkillSource != nil {
@@ -526,6 +531,7 @@ func buildPrompt(ctx context.Context, opts Options, messages []model.Message, to
 		AppendSystemPrompt: opts.AppendSystemPrompt,
 		Messages:           messages,
 		Tools:              tools,
+		Memories:           memories,
 		Skills:             skills,
 	})
 	if err != nil {
@@ -538,7 +544,27 @@ func buildPrompt(ctx context.Context, opts Options, messages []model.Message, to
 	}, nil
 }
 
-func retryContextWindow(ctx context.Context, opts Options, messages []model.Message) ([]model.Message, []model.ToolSpec, builtPrompt, error) {
+func loadMemories(ctx context.Context, opts Options, sessionID string, messages []model.Message) ([]memory.Memory, error) {
+	if opts.MemorySource == nil && len(opts.Memories) == 0 {
+		return nil, nil
+	}
+	sources := make(memory.MultiSource, 0, 2)
+	if len(opts.Memories) > 0 {
+		sources = append(sources, memory.StaticSource(opts.Memories))
+	}
+	if opts.MemorySource != nil {
+		sources = append(sources, opts.MemorySource)
+	}
+	return sources.Memories(ctx, memory.Request{
+		SessionID:       sessionID,
+		ParentSessionID: opts.ParentSessionID,
+		Identity:        opts.Identity,
+		Messages:        messages,
+		Query:           requestQuery(messages),
+	})
+}
+
+func retryContextWindow(ctx context.Context, opts Options, sessionID string, messages []model.Message) ([]model.Message, []model.ToolSpec, builtPrompt, error) {
 	retryMessages, err := opts.ContextRetry.Apply(ctx, messages)
 	if err != nil {
 		return nil, nil, builtPrompt{}, err
@@ -547,11 +573,35 @@ func retryContextWindow(ctx context.Context, opts Options, messages []model.Mess
 	if err != nil {
 		return nil, nil, builtPrompt{}, err
 	}
-	retryPrompt, err := buildPrompt(ctx, opts, retryMessages, retryTools)
+	retryPrompt, err := buildPrompt(ctx, opts, sessionID, retryMessages, retryTools)
 	if err != nil {
 		return nil, nil, builtPrompt{}, err
 	}
 	return retryMessages, retryTools, retryPrompt, nil
+}
+
+func requestQuery(messages []model.Message) string {
+	if len(messages) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for _, msg := range messages {
+		if text := msg.PlainText(); text != "" {
+			if b.Len() > 0 {
+				b.WriteByte(' ')
+			}
+			b.WriteString(text)
+		}
+		if msg.ToolResult != nil {
+			if b.Len() > 0 {
+				b.WriteByte(' ')
+			}
+			b.WriteString(msg.ToolResult.Name)
+			b.WriteByte(' ')
+			b.WriteString(msg.ToolResult.Content)
+		}
+	}
+	return b.String()
 }
 
 func emitContextApplied(

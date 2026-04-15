@@ -57,7 +57,7 @@ system prompt.
 - Add skill-scoped hooks and permissions. Initial `skill.PolicySource` support exists for host accept/deny/rewrite policy over loaded skills.
 - Add agent identity propagation for subagents. Child agents can already receive full `Options`; future examples should define dedicated reviewer, explorer, implementer, and verifier identities.
 - Add provider-specific prompt profiles. Initial `prompt.ProfileOpenAI` and `prompt.ProfileAnthropic` guidance exists.
-- Add project/user memory injection. Persistent project rules and user preferences should be injected as named prompt parts through the same builder rather than concatenated ad hoc.
+- Add project/user memory injection. Initial `memory.Source`, `Options.MemorySource`, explicit `Options.Memories`, relevance selection, and named prompt-part injection exist for persistent project rules, user preferences, session notes, and organization context.
 - Add reactive context-failure recovery. Initial `Options.ContextRetry` support retries once when providers return a recognized context-window error.
 - Add external large-result storage. Very large tool outputs should be stored by a host-provided blob/result store and returned to the model as handles plus previews.
 - Add structured output contracts. Hosts should be able to request final answers in typed JSON schemas and receive validation/retry behavior.

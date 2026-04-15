@@ -17,6 +17,12 @@ Available tool count: 2
 
 Provider profile: use available tool-use blocks with complete JSON inputs when tool use is needed. Keep text concise around tool calls so tool results can drive the next turn.
 
+Durable host context for this run:
+
+## migration-preferences (project)
+Description: Project review memory.
+Prefer reversible migrations with explicit rollback checks.
+
 Relevant skills for this run:
 
 ## database-review

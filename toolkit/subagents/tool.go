@@ -6,6 +6,7 @@ import (
 	"time"
 
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
+	"github.com/MemaxLabs/memax-go-agent-sdk/memory"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/skill"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
@@ -217,6 +218,12 @@ func mergeOptions(base memaxagent.Options, override memaxagent.Options) memaxage
 	}
 	if !override.Identity.IsZero() {
 		out.Identity = override.Identity
+	}
+	if override.MemorySource != nil {
+		out.MemorySource = override.MemorySource
+	}
+	if len(override.Memories) != 0 {
+		out.Memories = append([]memory.Memory(nil), override.Memories...)
 	}
 	if override.SkillSource != nil {
 		out.SkillSource = override.SkillSource

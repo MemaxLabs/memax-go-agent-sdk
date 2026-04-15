@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/identity"
+	"github.com/MemaxLabs/memax-go-agent-sdk/memory"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/skill"
 )
@@ -32,6 +33,7 @@ type Request struct {
 	AppendSystemPrompt string
 	Messages           []model.Message
 	Tools              []model.ToolSpec
+	Memories           []memory.Memory
 	Skills             []skill.Skill
 }
 
@@ -51,8 +53,9 @@ type Result struct {
 
 // DefaultBuilder is the SDK's default Memax-native prompt assembler.
 type DefaultBuilder struct {
-	SkillSelector skill.Selector
-	Profile       Profile
+	SkillSelector  skill.Selector
+	MemorySelector memory.Selector
+	Profile        Profile
 }
 
 // Build assembles ordered prompt parts from identity, tools, skills, and host
@@ -70,6 +73,9 @@ func (b DefaultBuilder) Build(ctx context.Context, req Request) (Result, error) 
 	}
 	if profile := b.Profile.WithDefault(); profile != ProfileGeneric {
 		parts = append(parts, Part{Name: "memax.provider_profile", Content: formatProfile(profile)})
+	}
+	if selected := b.MemorySelector.Select(req.Memories, requestQuery(req)); len(selected) > 0 {
+		parts = append(parts, Part{Name: "memax.memories", Content: formatMemories(selected)})
 	}
 	if selected := b.SkillSelector.Select(req.Skills, requestQuery(req)); len(selected) > 0 {
 		parts = append(parts, Part{Name: "memax.skills", Content: formatSkills(selected)})
@@ -179,6 +185,32 @@ func formatSkills(skills []skill.Skill) string {
 		}
 		if item.WhenToUse != "" {
 			fmt.Fprintf(&b, "\nUse when: %s", item.WhenToUse)
+		}
+		if len(item.Tags) > 0 {
+			fmt.Fprintf(&b, "\nTags: %s", strings.Join(item.Tags, ", "))
+		}
+		if item.Content != "" {
+			fmt.Fprintf(&b, "\n%s", item.Content)
+		}
+	}
+	return b.String()
+}
+
+func formatMemories(memories []memory.Memory) string {
+	var b strings.Builder
+	b.WriteString("Durable host context for this run:")
+	for _, item := range memories {
+		name := strings.TrimSpace(item.Name)
+		scope := strings.TrimSpace(string(item.Scope))
+		if name == "" {
+			name = "memory"
+		}
+		if scope == "" {
+			scope = string(memory.ScopeCustom)
+		}
+		fmt.Fprintf(&b, "\n\n## %s (%s)", name, scope)
+		if item.Description != "" {
+			fmt.Fprintf(&b, "\nDescription: %s", item.Description)
 		}
 		if len(item.Tags) > 0 {
 			fmt.Fprintf(&b, "\nTags: %s", strings.Join(item.Tags, ", "))

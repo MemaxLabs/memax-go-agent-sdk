@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/identity"
+	"github.com/MemaxLabs/memax-go-agent-sdk/memory"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/skill"
 )
@@ -36,6 +37,28 @@ func TestDefaultBuilderIncludesIdentityToolsSkillsAndHostPrompt(t *testing.T) {
 	}
 }
 
+func TestDefaultBuilderIncludesSelectedMemories(t *testing.T) {
+	result, err := (DefaultBuilder{MemorySelector: memory.Selector{MaxMemories: 1}}).Build(context.Background(), Request{
+		Messages: []model.Message{{
+			Role:    model.RoleUser,
+			Content: []model.ContentBlock{{Type: model.ContentText, Text: "review billing flow"}},
+		}},
+		Memories: []memory.Memory{
+			{Name: "billing", Scope: memory.ScopeProject, Description: "billing context", Content: "Invoices require audit logs."},
+			{Name: "frontend", Scope: memory.ScopeProject, Content: "Use accessible controls."},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+	if !strings.Contains(result.SystemPrompt, "Durable host context") || !strings.Contains(result.SystemPrompt, "Invoices require audit logs.") {
+		t.Fatalf("system prompt missing selected memory:\n%s", result.SystemPrompt)
+	}
+	if strings.Contains(result.SystemPrompt, "Use accessible controls.") {
+		t.Fatalf("system prompt included irrelevant memory:\n%s", result.SystemPrompt)
+	}
+}
+
 func TestDefaultBuilderGolden(t *testing.T) {
 	result, err := (DefaultBuilder{Profile: ProfileAnthropic}).Build(context.Background(), Request{
 		Identity: identity.Identity{
@@ -55,6 +78,13 @@ func TestDefaultBuilderGolden(t *testing.T) {
 		Messages: []model.Message{{
 			Role:    model.RoleUser,
 			Content: []model.ContentBlock{{Type: model.ContentText, Text: "review SQL migration"}},
+		}},
+		Memories: []memory.Memory{{
+			Name:        "migration-preferences",
+			Scope:       memory.ScopeProject,
+			Description: "Project review memory.",
+			Content:     "Prefer reversible migrations with explicit rollback checks.",
+			AlwaysOn:    true,
 		}},
 		Skills: []skill.Skill{{
 			Name:        "database-review",
