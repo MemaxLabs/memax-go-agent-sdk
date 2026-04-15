@@ -12,9 +12,12 @@ import (
 )
 
 type stream struct {
-	body  io.ReadCloser
-	scan  *bufio.Scanner
-	calls map[int]*functionCall
+	body         io.ReadCloser
+	scan         *bufio.Scanner
+	calls        map[int]*functionCall
+	pendingEvent string
+	pendingData  []string
+	pendingEOF   bool
 }
 
 func newStream(body io.ReadCloser) *stream {
@@ -28,34 +31,74 @@ func newStream(body io.ReadCloser) *stream {
 }
 
 func (s *stream) Recv() (model.StreamEvent, error) {
-	for s.scan.Scan() {
-		line := s.scan.Text()
-		if !strings.HasPrefix(line, "data:") {
-			continue
+	for {
+		eventName, data, err := s.nextSSE()
+		if err != nil {
+			return model.StreamEvent{}, err
 		}
-		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 		if data == "" || data == "[DONE]" {
 			continue
 		}
-		event, err := s.handleData([]byte(data))
+		event, err := s.handleData(eventName, []byte(data))
 		if err != nil {
+			if errors.Is(err, model.ErrEndOfStream) {
+				return model.StreamEvent{}, err
+			}
 			return model.StreamEvent{}, err
 		}
 		if event.Kind != "" {
 			return event, nil
 		}
 	}
-	if err := s.scan.Err(); err != nil {
-		return model.StreamEvent{}, fmt.Errorf("openai: read stream: %w", err)
-	}
-	return model.StreamEvent{}, model.ErrEndOfStream
 }
 
 func (s *stream) Close() error {
 	return s.body.Close()
 }
 
-func (s *stream) handleData(data []byte) (model.StreamEvent, error) {
+func (s *stream) nextSSE() (string, string, error) {
+	for s.scan.Scan() {
+		line := s.scan.Text()
+		if line == "" {
+			return s.flushSSE()
+		}
+		if strings.HasPrefix(line, ":") {
+			continue
+		}
+		name, value, ok := strings.Cut(line, ":")
+		if !ok {
+			continue
+		}
+		value = strings.TrimPrefix(value, " ")
+		switch name {
+		case "event":
+			s.pendingEvent = value
+		case "data":
+			s.pendingData = append(s.pendingData, value)
+		}
+	}
+	if err := s.scan.Err(); err != nil {
+		return "", "", fmt.Errorf("openai: read stream: %w", err)
+	}
+	if len(s.pendingData) > 0 || s.pendingEvent != "" {
+		return s.flushSSE()
+	}
+	if s.pendingEOF {
+		return "", "", model.ErrEndOfStream
+	}
+	s.pendingEOF = true
+	return "", "", model.ErrEndOfStream
+}
+
+func (s *stream) flushSSE() (string, string, error) {
+	eventName := s.pendingEvent
+	data := strings.Join(s.pendingData, "\n")
+	s.pendingEvent = ""
+	s.pendingData = nil
+	return eventName, data, nil
+}
+
+func (s *stream) handleData(eventName string, data []byte) (model.StreamEvent, error) {
 	var envelope struct {
 		Type        string          `json:"type"`
 		Delta       string          `json:"delta"`
@@ -66,6 +109,9 @@ func (s *stream) handleData(data []byte) (model.StreamEvent, error) {
 	}
 	if err := json.Unmarshal(data, &envelope); err != nil {
 		return model.StreamEvent{}, fmt.Errorf("openai: decode stream event: %w", err)
+	}
+	if envelope.Type == "" {
+		envelope.Type = eventName
 	}
 
 	switch envelope.Type {

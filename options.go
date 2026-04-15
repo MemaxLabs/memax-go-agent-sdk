@@ -3,6 +3,7 @@ package memaxagent
 import (
 	"time"
 
+	"github.com/MemaxLabs/memax-go-agent-sdk/contextwindow"
 	"github.com/MemaxLabs/memax-go-agent-sdk/hook"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/permission"
@@ -20,6 +21,7 @@ type Options struct {
 	Permissions permission.Checker
 	Sessions    session.Store
 	Hooks       *hook.Runner
+	Context     contextwindow.Policy
 
 	SystemPrompt       string
 	AppendSystemPrompt string

@@ -14,10 +14,14 @@ import (
 const defaultEndpoint = "https://api.openai.com/v1/responses"
 
 type Client struct {
-	APIKey     string
-	Model      string
-	Endpoint   string
-	HTTPClient *http.Client
+	APIKey          string
+	Model           string
+	Endpoint        string
+	HTTPClient      *http.Client
+	Store           bool
+	MaxOutputTokens int
+	Temperature     *float64
+	TopP            *float64
 }
 
 // New creates a Responses API model client.
@@ -73,13 +77,23 @@ func (c *Client) Stream(ctx context.Context, req model.Request) (model.Stream, e
 
 func (c *Client) requestBody(req model.Request) responsesRequest {
 	return responsesRequest{
-		Model:        c.Model,
-		Instructions: joinInstructions(req.SystemPrompt, req.AppendSystemPrompt),
-		Input:        mapMessages(req.Messages),
-		Tools:        mapTools(req.Tools),
-		Stream:       true,
-		Store:        false,
+		Model:           c.Model,
+		Instructions:    joinInstructions(req.SystemPrompt, req.AppendSystemPrompt),
+		Input:           mapMessages(req.Messages),
+		Tools:           mapTools(req.Tools),
+		Stream:          true,
+		Store:           c.Store,
+		MaxOutputTokens: optionalInt(c.MaxOutputTokens),
+		Temperature:     c.Temperature,
+		TopP:            c.TopP,
 	}
+}
+
+func optionalInt(v int) *int {
+	if v <= 0 {
+		return nil
+	}
+	return &v
 }
 
 func joinInstructions(parts ...string) string {
@@ -97,12 +111,15 @@ func joinInstructions(parts ...string) string {
 }
 
 type responsesRequest struct {
-	Model        string          `json:"model"`
-	Instructions string          `json:"instructions,omitempty"`
-	Input        []responsesItem `json:"input"`
-	Tools        []responsesTool `json:"tools,omitempty"`
-	Stream       bool            `json:"stream"`
-	Store        bool            `json:"store"`
+	Model           string          `json:"model"`
+	Instructions    string          `json:"instructions,omitempty"`
+	Input           []responsesItem `json:"input"`
+	Tools           []responsesTool `json:"tools,omitempty"`
+	Stream          bool            `json:"stream"`
+	Store           bool            `json:"store"`
+	MaxOutputTokens *int            `json:"max_output_tokens,omitempty"`
+	Temperature     *float64        `json:"temperature,omitempty"`
+	TopP            *float64        `json:"top_p,omitempty"`
 }
 
 type responsesItem map[string]any

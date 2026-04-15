@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/MemaxLabs/memax-go-agent-sdk/contextwindow"
 	"github.com/MemaxLabs/memax-go-agent-sdk/hook"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
@@ -152,6 +153,40 @@ func TestQueryFeedsHookDenialBackToModel(t *testing.T) {
 	last := fake.requests[1].Messages[len(fake.requests[1].Messages)-1]
 	if last.ToolResult == nil || !last.ToolResult.IsError || last.ToolResult.Content != "writes are disabled" {
 		t.Fatalf("last message before recovery = %#v, want hook denial tool error", last)
+	}
+}
+
+func TestQueryAppliesContextPolicyBeforeModelRequest(t *testing.T) {
+	fake := &fakeModel{turns: [][]model.StreamEvent{
+		{{Kind: model.StreamToolUse, ToolUse: model.ToolUse{ID: "tool-1", Name: "noop", Input: json.RawMessage(`{}`)}}},
+		{{Kind: model.StreamToolUse, ToolUse: model.ToolUse{ID: "tool-2", Name: "noop", Input: json.RawMessage(`{}`)}}},
+		{{Kind: model.StreamText, Text: "done"}},
+	}}
+	registry := tool.NewRegistry(tool.Definition{
+		ToolSpec: model.ToolSpec{Name: "noop"},
+		Handler: func(context.Context, tool.Call) (model.ToolResult, error) {
+			return model.ToolResult{Content: "ok"}, nil
+		},
+	})
+
+	events, err := Query(context.Background(), "start", Options{
+		Model:   fake,
+		Tools:   registry,
+		Context: contextwindow.RecentMessages{MaxMessages: 2},
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+	if _, err := Drain(events); err != nil {
+		t.Fatalf("Drain returned error: %v", err)
+	}
+
+	lastRequest := fake.requests[len(fake.requests)-1]
+	if len(lastRequest.Messages) != 2 {
+		t.Fatalf("len(messages) = %d, want 2", len(lastRequest.Messages))
+	}
+	if lastRequest.Messages[0].Role == model.RoleTool {
+		t.Fatalf("context policy left orphan tool result first: %#v", lastRequest.Messages)
 	}
 }
 

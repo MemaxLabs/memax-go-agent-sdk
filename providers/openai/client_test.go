@@ -102,6 +102,65 @@ data: {"type":"response.completed"}
 	}
 }
 
+func TestClientParsesSSEEventAndDataPairs(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("event: response.output_text.delta\n"))
+		_, _ = w.Write([]byte("data: {\"delta\":\"hello\"}\n\n"))
+		_, _ = w.Write([]byte("event: response.completed\n"))
+		_, _ = w.Write([]byte("data: {}\n\n"))
+	}))
+	defer server.Close()
+
+	stream, err := (&Client{
+		APIKey:   "test-key",
+		Model:    "test-model",
+		Endpoint: server.URL,
+	}).Stream(context.Background(), model.Request{})
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	event, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("Recv returned error: %v", err)
+	}
+	if event.Kind != model.StreamText || event.Text != "hello" {
+		t.Fatalf("event = %#v, want text hello", event)
+	}
+	_, err = stream.Recv()
+	if err != model.ErrEndOfStream {
+		t.Fatalf("final Recv error = %v, want ErrEndOfStream", err)
+	}
+}
+
+func TestClientRequestOptions(t *testing.T) {
+	temperature := 0.2
+	topP := 0.9
+	client := &Client{
+		Model:           "test",
+		Store:           true,
+		MaxOutputTokens: 123,
+		Temperature:     &temperature,
+		TopP:            &topP,
+	}
+
+	body := client.requestBody(model.Request{})
+	if !body.Store {
+		t.Fatal("Store = false, want true")
+	}
+	if body.MaxOutputTokens == nil || *body.MaxOutputTokens != 123 {
+		t.Fatalf("MaxOutputTokens = %#v, want 123", body.MaxOutputTokens)
+	}
+	if body.Temperature == nil || *body.Temperature != temperature {
+		t.Fatalf("Temperature = %#v, want %v", body.Temperature, temperature)
+	}
+	if body.TopP == nil || *body.TopP != topP {
+		t.Fatalf("TopP = %#v, want %v", body.TopP, topP)
+	}
+}
+
 func TestClientMapsToolResultsToFunctionOutputs(t *testing.T) {
 	client := &Client{Model: "test"}
 	body := client.requestBody(model.Request{

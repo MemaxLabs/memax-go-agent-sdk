@@ -19,6 +19,7 @@ Implemented foundation:
 - in-memory and append-only JSONL session stores
 - memory-backed file tools for examples and tests
 - OpenAI Responses API model adapter
+- context-window policy seam with recent-message limiting
 - first autonomous query loop skeleton
 
 ## Try It

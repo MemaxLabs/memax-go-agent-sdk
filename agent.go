@@ -74,6 +74,13 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 			emitError(ctx, emit, sessionID, turn, fmt.Errorf("load session messages: %w", err))
 			return
 		}
+		if opts.Context != nil {
+			messages, err = opts.Context.Apply(ctx, messages)
+			if err != nil {
+				emitError(ctx, emit, sessionID, turn, fmt.Errorf("apply context policy: %w", err))
+				return
+			}
+		}
 
 		if !emit(newEvent(EventModelRequest, sessionID, turn)) {
 			return

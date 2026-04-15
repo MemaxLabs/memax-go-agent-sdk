@@ -39,6 +39,7 @@ Current agent SDKs commonly expose autonomous file reading, command execution, w
 - `permission`: reusable permission checkers and policy composition.
 - `providers/openai`: optional Responses API adapter for hosted model streaming and function calls.
 - `session`: session persistence interface plus in-memory and append-only JSONL implementations.
+- `contextwindow`: deterministic message-window policies used before model requests.
 - `toolkit/filetools`: optional memory-backed file tools that demonstrate the tool contract without requiring real filesystem access.
 
 Expected near-term packages:
@@ -103,6 +104,10 @@ Hooks complement permissions. Permissions answer "may this run?" while hooks let
 Sessions persist the conversation trajectory: user messages, assistant messages, tool uses, tool results, compact boundaries, and metadata. They must not silently persist workspace state. Checkpoints and virtual filesystem snapshots should be separate services referenced from session metadata.
 
 The SDK includes an in-memory store for tests and short-lived agents, plus an append-only JSONL store for durable transcripts. The JSONL store validates session IDs before path construction and reports corrupt transcript lines with line numbers.
+
+## Context Window
+
+Context-window policies transform session messages before each model request without mutating the durable session transcript. The initial `RecentMessages` policy keeps a bounded suffix and drops leading orphan tool-result messages after trimming. This is not summarizing compaction; it is a deterministic pressure valve and an interface for future compaction strategies.
 
 Durable session stores should support:
 
