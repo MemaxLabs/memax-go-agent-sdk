@@ -61,7 +61,7 @@ system prompt.
 - Add reactive context-failure recovery. Initial `Options.ContextRetry` support retries once when providers return a recognized context-window error.
 - Add external large-result storage. Initial `resultstore.Store`, `Options.ResultStore`, in-memory result storage, truncation preview handles, transcript metadata, and fallback-on-store-error behavior exist for oversized tool outputs.
 - Add structured output contracts. Initial `output.Contract`, `Options.Output`, prompt contract injection, JSON Schema validation, final-answer repair retry, and retry-exhaustion errors exist.
-- Add cost and token accounting. Provider adapters should surface usage when available, and the SDK should emit usage metrics and events.
+- Add cost and token accounting. Initial provider-neutral `model.Usage`, stream usage events, `EventUsage`, final-result usage aggregation, token meter counters, and OpenAI/Anthropic usage mapping exist. Cost calculation remains future host/provider policy.
 - Add autonomy eval harness. Build deterministic and live evals for planning, tool recovery, subagent delegation, session resume, compaction quality, and final-answer correctness.
 
 ## Phase 6: Ecosystem and Hardening

@@ -15,17 +15,21 @@ type stream struct {
 	body         io.ReadCloser
 	scan         *bufio.Scanner
 	blocks       map[int]*toolUseBlock
+	model        string
+	inputTokens  int
+	outputTokens int
 	pendingEvent string
 	pendingData  []string
 }
 
-func newStream(body io.ReadCloser) *stream {
+func newStream(body io.ReadCloser, modelName string) *stream {
 	scan := bufio.NewScanner(body)
 	scan.Buffer(make([]byte, 64*1024), 16*1024*1024)
 	return &stream{
 		body:   body,
 		scan:   scan,
 		blocks: make(map[int]*toolUseBlock),
+		model:  modelName,
 	}
 }
 
@@ -96,7 +100,11 @@ func (s *stream) handleData(eventName string, data []byte) (model.StreamEvent, e
 		Index        int             `json:"index"`
 		ContentBlock json.RawMessage `json:"content_block"`
 		Delta        json.RawMessage `json:"delta"`
-		Error        *apiError       `json:"error"`
+		Message      struct {
+			Usage anthropicUsage `json:"usage"`
+		} `json:"message"`
+		Usage anthropicUsage `json:"usage"`
+		Error *apiError      `json:"error"`
 	}
 	if err := json.Unmarshal(data, &envelope); err != nil {
 		return model.StreamEvent{}, fmt.Errorf("anthropic: decode stream event: %w", err)
@@ -106,6 +114,28 @@ func (s *stream) handleData(eventName string, data []byte) (model.StreamEvent, e
 	}
 
 	switch envelope.Type {
+	case "message_start":
+		if envelope.Message.Usage.empty() {
+			return model.StreamEvent{}, nil
+		}
+		usage := envelope.Message.Usage
+		inputDelta := usage.InputTokens - s.inputTokens
+		if inputDelta < 0 {
+			inputDelta = usage.InputTokens
+		}
+		s.inputTokens = usage.InputTokens
+		return s.usageEvent(anthropicUsage{InputTokens: inputDelta}), nil
+	case "message_delta":
+		if envelope.Usage.empty() {
+			return model.StreamEvent{}, nil
+		}
+		usage := envelope.Usage
+		outputDelta := usage.OutputTokens - s.outputTokens
+		if outputDelta < 0 {
+			outputDelta = usage.OutputTokens
+		}
+		s.outputTokens = usage.OutputTokens
+		return s.usageEvent(anthropicUsage{OutputTokens: outputDelta}), nil
 	case "content_block_start":
 		block, ok, err := decodeToolUseBlock(envelope.ContentBlock)
 		if err != nil || !ok {
@@ -137,6 +167,28 @@ func (s *stream) handleData(eventName string, data []byte) (model.StreamEvent, e
 		return model.StreamEvent{}, errors.New("anthropic: stream failed")
 	}
 	return model.StreamEvent{}, nil
+}
+
+func (s *stream) usageEvent(usage anthropicUsage) model.StreamEvent {
+	return model.StreamEvent{
+		Kind: model.StreamUsage,
+		Usage: &model.Usage{
+			Provider:     "anthropic",
+			Model:        s.model,
+			InputTokens:  usage.InputTokens,
+			OutputTokens: usage.OutputTokens,
+			TotalTokens:  usage.InputTokens + usage.OutputTokens,
+		},
+	}
+}
+
+type anthropicUsage struct {
+	InputTokens  int `json:"input_tokens"`
+	OutputTokens int `json:"output_tokens"`
+}
+
+func (u anthropicUsage) empty() bool {
+	return u.InputTokens == 0 && u.OutputTokens == 0
 }
 
 func (s *stream) handleDelta(index int, data json.RawMessage) (model.StreamEvent, error) {

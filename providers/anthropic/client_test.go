@@ -111,6 +111,62 @@ data: {"type":"message_stop"}
 	}
 }
 
+func TestClientStreamsUsage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(`event: message_start
+data: {"type":"message_start","message":{"usage":{"input_tokens":7}}}
+
+event: message_delta
+data: {"type":"message_delta","usage":{"output_tokens":5}}
+
+event: message_delta
+data: {"type":"message_delta","usage":{"output_tokens":11}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+`))
+	}))
+	defer server.Close()
+
+	stream, err := (&Client{
+		APIKey:   "test-key",
+		Model:    "test-model",
+		Endpoint: server.URL,
+	}).Stream(context.Background(), model.Request{})
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	input, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("Recv input usage returned error: %v", err)
+	}
+	if input.Kind != model.StreamUsage || input.Usage == nil || input.Usage.Provider != "anthropic" || input.Usage.Model != "test-model" || input.Usage.InputTokens != 7 {
+		t.Fatalf("input usage event = %#v", input)
+	}
+	firstOutput, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("Recv output usage returned error: %v", err)
+	}
+	if firstOutput.Kind != model.StreamUsage || firstOutput.Usage == nil || firstOutput.Usage.OutputTokens != 5 || firstOutput.Usage.TotalTokens != 5 {
+		t.Fatalf("first output usage event = %#v", firstOutput)
+	}
+	secondOutput, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("Recv second output usage returned error: %v", err)
+	}
+	if secondOutput.Kind != model.StreamUsage || secondOutput.Usage == nil || secondOutput.Usage.OutputTokens != 6 || secondOutput.Usage.TotalTokens != 6 {
+		t.Fatalf("second output usage event = %#v", secondOutput)
+	}
+	_, err = stream.Recv()
+	if err != model.ErrEndOfStream {
+		t.Fatalf("final Recv error = %v, want ErrEndOfStream", err)
+	}
+}
+
 func TestAPIErrorMarksContextWindowExceeded(t *testing.T) {
 	err := &apiError{Message: "prompt is too long"}
 	if !errors.Is(err, model.ErrContextWindowExceeded) {

@@ -15,18 +15,20 @@ type stream struct {
 	body         io.ReadCloser
 	scan         *bufio.Scanner
 	calls        map[int]*functionCall
+	model        string
 	pendingEvent string
 	pendingData  []string
 	pendingEOF   bool
 }
 
-func newStream(body io.ReadCloser) *stream {
+func newStream(body io.ReadCloser, modelName string) *stream {
 	scan := bufio.NewScanner(body)
 	scan.Buffer(make([]byte, 64*1024), 16*1024*1024)
 	return &stream{
 		body:  body,
 		scan:  scan,
 		calls: make(map[int]*functionCall),
+		model: modelName,
 	}
 }
 
@@ -105,7 +107,11 @@ func (s *stream) handleData(eventName string, data []byte) (model.StreamEvent, e
 		OutputIndex int             `json:"output_index"`
 		Arguments   string          `json:"arguments"`
 		Item        json.RawMessage `json:"item"`
-		Error       *apiError       `json:"error"`
+		Response    struct {
+			Usage openAIUsage `json:"usage"`
+		} `json:"response"`
+		Usage openAIUsage `json:"usage"`
+		Error *apiError   `json:"error"`
 	}
 	if err := json.Unmarshal(data, &envelope); err != nil {
 		return model.StreamEvent{}, fmt.Errorf("openai: decode stream event: %w", err)
@@ -150,7 +156,23 @@ func (s *stream) handleData(eventName string, data []byte) (model.StreamEvent, e
 			},
 		}, nil
 	case "response.completed":
-		return model.StreamEvent{}, model.ErrEndOfStream
+		usage := envelope.Response.Usage
+		if usage.empty() {
+			usage = envelope.Usage
+		}
+		if usage.empty() {
+			return model.StreamEvent{}, model.ErrEndOfStream
+		}
+		return model.StreamEvent{
+			Kind: model.StreamUsage,
+			Usage: &model.Usage{
+				Provider:     "openai",
+				Model:        s.model,
+				InputTokens:  usage.InputTokens,
+				OutputTokens: usage.OutputTokens,
+				TotalTokens:  usage.TotalTokens,
+			},
+		}, nil
 	case "error", "response.failed":
 		if envelope.Error != nil {
 			return model.StreamEvent{}, envelope.Error
@@ -158,6 +180,16 @@ func (s *stream) handleData(eventName string, data []byte) (model.StreamEvent, e
 		return model.StreamEvent{}, errors.New("openai: stream failed")
 	}
 	return model.StreamEvent{}, nil
+}
+
+type openAIUsage struct {
+	InputTokens  int `json:"input_tokens"`
+	OutputTokens int `json:"output_tokens"`
+	TotalTokens  int `json:"total_tokens"`
+}
+
+func (u openAIUsage) empty() bool {
+	return u.InputTokens == 0 && u.OutputTokens == 0 && u.TotalTokens == 0
 }
 
 type functionCall struct {

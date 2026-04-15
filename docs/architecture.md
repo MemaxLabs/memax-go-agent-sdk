@@ -117,6 +117,16 @@ Before-tool hooks run after validation and before permission checks. They can de
 
 Session lifecycle hooks cover session start/end, user prompt submission, stop events, and context-window application. User prompt hooks may rewrite or deny the prompt before it is persisted. Session start/end, stop, and context-applied hooks are observational; their errors are surfaced as agent errors at stable lifecycle boundaries.
 
+## Usage Accounting
+
+`model.Usage` is the provider-neutral token accounting shape. Model streams can
+emit `StreamUsage` events when a provider reports input, output, or total token
+counts. `Query` forwards those as `EventUsage`, records token counters through
+the configured meter, and attaches the aggregate usage to the final
+`EventResult`. Usage is optional: providers that do not report token counts
+continue to behave as before. The OpenAI Responses and Anthropic Messages
+adapters map provider usage payloads into SDK usage events where available.
+
 ## Permissions
 
 Permission checks run before execution and receive the raw tool use plus the tool spec. The permission package includes simple `AllowAll`, `ReadOnly`, and function-backed checkers plus a structured `Policy` for ordered rules. Rules can allow, deny, or ask a host application for approval. Matchers cover exact tool names, tool-name glob patterns, read-only/destructive tool metadata, top-level string fields in JSON tool input, and boolean composition with `All`, `AnyOf`, and `Not`.

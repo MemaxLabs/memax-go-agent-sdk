@@ -72,7 +72,7 @@ func (c *Client) Stream(ctx context.Context, req model.Request) (model.Stream, e
 		defer resp.Body.Close()
 		return nil, decodeError(resp)
 	}
-	return newStream(resp.Body), nil
+	return newStream(resp.Body, c.Model), nil
 }
 
 func (c *Client) requestBody(req model.Request) responsesRequest {

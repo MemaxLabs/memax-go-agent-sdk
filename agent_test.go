@@ -523,6 +523,54 @@ func TestQueryValidatesStructuredOutput(t *testing.T) {
 	}
 }
 
+func TestQueryEmitsUsageAndAggregatesOnResult(t *testing.T) {
+	meter := &recordingMeter{}
+	fake := &fakeModel{turns: [][]model.StreamEvent{{{
+		Kind: model.StreamText,
+		Text: "done",
+	}, {
+		Kind: model.StreamUsage,
+		Usage: &model.Usage{
+			Provider:     "test",
+			Model:        "fake",
+			InputTokens:  3,
+			OutputTokens: 5,
+			TotalTokens:  8,
+		},
+	}}}}
+	events, err := Query(context.Background(), "start", Options{
+		Model: fake,
+		Meter: meter,
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+	var usageEvent *model.Usage
+	var resultEvent *model.Usage
+	for event := range events {
+		if event.Kind == EventError {
+			t.Fatalf("query error: %v", event.Err)
+		}
+		switch event.Kind {
+		case EventUsage:
+			usageEvent = event.Usage
+		case EventResult:
+			resultEvent = event.Usage
+		}
+	}
+	if usageEvent == nil || usageEvent.InputTokens != 3 || usageEvent.OutputTokens != 5 || usageEvent.TotalTokens != 8 {
+		t.Fatalf("usage event = %#v, want token counts", usageEvent)
+	}
+	if resultEvent == nil || resultEvent.InputTokens != 3 || resultEvent.OutputTokens != 5 || resultEvent.TotalTokens != 8 {
+		t.Fatalf("result usage = %#v, want aggregate token counts", resultEvent)
+	}
+	for _, want := range []string{"memax.model.input_tokens", "memax.model.output_tokens", "memax.model.total_tokens"} {
+		if !meter.hasCounter(want) {
+			t.Fatalf("meter counters = %#v, missing %s", meter.counterNames(), want)
+		}
+	}
+}
+
 func TestQueryRetriesInvalidStructuredOutput(t *testing.T) {
 	store := session.NewMemoryStore()
 	fake := &fakeModel{turns: [][]model.StreamEvent{

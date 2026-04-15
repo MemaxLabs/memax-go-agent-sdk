@@ -27,6 +27,7 @@ Implemented foundation:
 - agent identity profiles, deterministic prompt assembly, and local skill manifests
 - project, user, and session memory injection through source-neutral prompt memory sources
 - structured final-output contracts with JSON Schema validation and retry
+- provider-neutral model usage events and token telemetry
 - skill discovery tools
 - OpenAI Responses API model adapter
 - Anthropic Messages API model adapter
@@ -118,6 +119,22 @@ events, err := memaxagent.Query(ctx, "Inspect the workspace.", memaxagent.Option
     Tracer: sdkotel.NewTracer("my-agent-service"),
     Meter:  sdkotel.NewMeter("my-agent-service"),
 })
+```
+
+When providers report token usage, `Query` emits `EventUsage` events and
+attaches aggregate usage to the final `EventResult`:
+
+```go
+for event := range events {
+    switch event.Kind {
+    case memaxagent.EventUsage:
+        log.Printf("usage: input=%d output=%d", event.Usage.InputTokens, event.Usage.OutputTokens)
+    case memaxagent.EventResult:
+        if event.Usage != nil {
+            log.Printf("total tokens: %d", event.Usage.TotalTokens)
+        }
+    }
+}
 ```
 
 To persist sessions in SQLite, use `session/sqlitestore` with any `database/sql` SQLite driver:

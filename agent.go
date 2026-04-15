@@ -232,6 +232,7 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 	// Output repair attempts are scoped to the whole Query run so a contract
 	// cannot consume unbounded turns by repeatedly producing invalid finals.
 	outputRetries := 0
+	var totalUsage model.Usage
 	for turn := 1; turn <= opts.MaxTurns; turn++ {
 		turnStarted := time.Now()
 		turnCtx, turnSpan := opts.Tracer.Start(ctx, "memaxagent.turn",
@@ -409,7 +410,8 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 				return
 			}
 
-			assistant, uses, err := collectAssistant(modelCtx, emit, stream, sessionID, turn)
+			assistant, uses, usage, err := collectAssistant(modelCtx, emit, stream, sessionID, turn, opts.Meter)
+			totalUsage = totalUsage.Add(usage)
 			if closeErr := stream.Close(); closeErr != nil && err == nil {
 				err = closeErr
 			}
@@ -485,6 +487,10 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 				}
 				event := newEvent(EventResult, sessionID, turn)
 				event.Result = result
+				if hasUsage(totalUsage) {
+					usage := totalUsage
+					event.Usage = &usage
+				}
 				emit(event)
 				shouldStop = true
 				return
@@ -734,17 +740,19 @@ func collectAssistant(
 	stream model.Stream,
 	sessionID string,
 	turn int,
-) (model.Message, []model.ToolUse, error) {
+	meter telemetry.Meter,
+) (model.Message, []model.ToolUse, model.Usage, error) {
 	var blocks []model.ContentBlock
 	var uses []model.ToolUse
+	var usage model.Usage
 
 	for {
 		event, err := stream.Recv()
 		if errors.Is(err, model.ErrEndOfStream) {
-			return model.Message{Role: model.RoleAssistant, Content: blocks}, uses, nil
+			return model.Message{Role: model.RoleAssistant, Content: blocks}, uses, usage, nil
 		}
 		if err != nil {
-			return model.Message{}, nil, fmt.Errorf("receive model event: %w", err)
+			return model.Message{}, nil, model.Usage{}, fmt.Errorf("receive model event: %w", err)
 		}
 
 		switch event.Kind {
@@ -755,7 +763,7 @@ func collectAssistant(
 				out := newEvent(EventAssistant, sessionID, turn)
 				out.Message = &model.Message{Role: model.RoleAssistant, Content: []model.ContentBlock{block}}
 				if !emit(out) {
-					return model.Message{}, nil, ctx.Err()
+					return model.Message{}, nil, model.Usage{}, ctx.Err()
 				}
 			}
 		case model.StreamToolUse:
@@ -764,9 +772,50 @@ func collectAssistant(
 			out := newEvent(EventToolUse, sessionID, turn)
 			out.ToolUse = &event.ToolUse
 			if !emit(out) {
-				return model.Message{}, nil, ctx.Err()
+				return model.Message{}, nil, model.Usage{}, ctx.Err()
+			}
+		case model.StreamUsage:
+			if event.Usage == nil {
+				continue
+			}
+			usage = usage.Add(*event.Usage)
+			recordUsage(ctx, meter, sessionID, turn, *event.Usage)
+			out := newEvent(EventUsage, sessionID, turn)
+			current := *event.Usage
+			out.Usage = &current
+			if !emit(out) {
+				return model.Message{}, nil, model.Usage{}, ctx.Err()
 			}
 		}
+	}
+}
+
+func hasUsage(usage model.Usage) bool {
+	return usage.InputTokens != 0 || usage.OutputTokens != 0 || usage.TotalTokens != 0 || usage.Provider != "" || usage.Model != "" || len(usage.Metadata) > 0
+}
+
+func recordUsage(ctx context.Context, meter telemetry.Meter, sessionID string, turn int, usage model.Usage) {
+	if meter == nil {
+		meter = telemetry.NoopMeter{}
+	}
+	attrs := []telemetry.Attribute{
+		telemetry.String("memax.session_id", sessionID),
+		telemetry.Int("memax.turn", turn),
+	}
+	if usage.Provider != "" {
+		attrs = append(attrs, telemetry.String("memax.model.provider", usage.Provider))
+	}
+	if usage.Model != "" {
+		attrs = append(attrs, telemetry.String("memax.model.name", usage.Model))
+	}
+	if usage.InputTokens != 0 {
+		meter.Add(ctx, "memax.model.input_tokens", int64(usage.InputTokens), attrs...)
+	}
+	if usage.OutputTokens != 0 {
+		meter.Add(ctx, "memax.model.output_tokens", int64(usage.OutputTokens), attrs...)
+	}
+	if usage.TotalTokens != 0 {
+		meter.Add(ctx, "memax.model.total_tokens", int64(usage.TotalTokens), attrs...)
 	}
 }
 

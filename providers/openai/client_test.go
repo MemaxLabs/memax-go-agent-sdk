@@ -143,6 +143,41 @@ func TestClientParsesSSEEventAndDataPairs(t *testing.T) {
 	}
 }
 
+func TestClientStreamsUsage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(`data: {"type":"response.completed","response":{"usage":{"input_tokens":3,"output_tokens":5,"total_tokens":8}}}
+
+`))
+	}))
+	defer server.Close()
+
+	stream, err := (&Client{
+		APIKey:   "test-key",
+		Model:    "test-model",
+		Endpoint: server.URL,
+	}).Stream(context.Background(), model.Request{})
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	event, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("Recv returned error: %v", err)
+	}
+	if event.Kind != model.StreamUsage || event.Usage == nil {
+		t.Fatalf("event = %#v, want usage", event)
+	}
+	if event.Usage.Provider != "openai" || event.Usage.Model != "test-model" || event.Usage.InputTokens != 3 || event.Usage.OutputTokens != 5 || event.Usage.TotalTokens != 8 {
+		t.Fatalf("usage = %#v, want provider/model token counts", event.Usage)
+	}
+	_, err = stream.Recv()
+	if err != model.ErrEndOfStream {
+		t.Fatalf("final Recv error = %v, want ErrEndOfStream", err)
+	}
+}
+
 func TestClientRequestOptions(t *testing.T) {
 	temperature := 0.2
 	topP := 0.9

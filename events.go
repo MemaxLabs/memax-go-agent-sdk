@@ -14,6 +14,7 @@ const (
 	EventAssistant      EventKind = "assistant"
 	EventToolUse        EventKind = "tool_use"
 	EventToolResult     EventKind = "tool_result"
+	EventUsage          EventKind = "usage"
 	EventContextApplied EventKind = "context_applied"
 	EventError          EventKind = "error"
 	EventResult         EventKind = "result"
@@ -30,6 +31,7 @@ type Event struct {
 	Message    *model.Message
 	ToolUse    *model.ToolUse
 	ToolResult *model.ToolResult
+	Usage      *model.Usage
 	Context    *ContextEvent
 	Result     string
 	Err        error
