@@ -228,6 +228,57 @@ func TestQueryEmitsContextAppliedEvent(t *testing.T) {
 	}
 }
 
+func TestQueryEmitsContextAppliedEventWhenMessageCountIsUnchanged(t *testing.T) {
+	fake := &fakeModel{turns: [][]model.StreamEvent{
+		{{Kind: model.StreamText, Text: "done"}},
+	}}
+
+	events, err := Query(context.Background(), "start", Options{
+		Model:   fake,
+		Context: replaceContextPolicy{text: "summary"},
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+
+	var contextEvent *ContextEvent
+	for event := range events {
+		if event.Kind == EventContextApplied {
+			contextEvent = event.Context
+		}
+		if event.Kind == EventError {
+			t.Fatalf("query error: %v", event.Err)
+		}
+	}
+	if contextEvent == nil {
+		t.Fatal("missing context applied event")
+	}
+	if contextEvent.OriginalMessages != 1 || contextEvent.SentMessages != 1 {
+		t.Fatalf("context event = %#v, want 1 -> 1", contextEvent)
+	}
+	if len(fake.requests) != 1 || fake.requests[0].Messages[0].PlainText() != "summary" {
+		t.Fatalf("model request = %#v", fake.requests)
+	}
+}
+
+type replaceContextPolicy struct {
+	text string
+}
+
+func (p replaceContextPolicy) Apply(_ context.Context, messages []model.Message) ([]model.Message, error) {
+	if len(messages) == 0 {
+		return nil, nil
+	}
+	return []model.Message{
+		{
+			Role: model.RoleUser,
+			Content: []model.ContentBlock{
+				{Type: model.ContentText, Text: p.text},
+			},
+		},
+	}, nil
+}
+
 type fakeModel struct {
 	turns    [][]model.StreamEvent
 	requests []model.Request

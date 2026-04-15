@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
@@ -81,13 +82,14 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 			return
 		}
 		if opts.Context != nil {
+			originalMessages := messages
 			originalCount := len(messages)
 			messages, err = opts.Context.Apply(ctx, messages)
 			if err != nil {
 				emitError(ctx, emit, sessionID, turn, fmt.Errorf("apply context policy: %w", err))
 				return
 			}
-			if len(messages) != originalCount {
+			if !reflect.DeepEqual(messages, originalMessages) {
 				event := newEvent(EventContextApplied, sessionID, turn)
 				event.Context = &ContextEvent{
 					OriginalMessages: originalCount,

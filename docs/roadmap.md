@@ -19,7 +19,7 @@
 
 - Add hook engine: before/after tool-use hooks exist; session start/end, user prompt submit, stop, and compaction hooks remain.
 - Add structured permission modes and host approval callbacks.
-- Add context budgeting and automatic compaction. Deterministic recent-message and token-budget policies exist; summarizing compaction remains.
+- Add context budgeting and automatic compaction. Recent-message, token-budget, and summarizing-budget policies exist; retry-after-context-failure remains.
 - Add tool result truncation and external result storage. Per-tool truncation exists; external result storage remains.
 - Add OpenTelemetry spans and metrics.
 

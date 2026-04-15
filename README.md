@@ -20,7 +20,7 @@ Implemented foundation:
 - memory-backed file tools for examples and tests
 - OpenAI Responses API model adapter
 - Anthropic Messages API model adapter
-- context-window policy seam with recent-message and token-budget limiting
+- context-window policies for recent-message limiting, token budgets, and summarizing compaction
 - first autonomous query loop skeleton
 
 ## Try It
