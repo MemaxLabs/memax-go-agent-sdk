@@ -17,7 +17,8 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/memorytools"
 )
 
-// All returns the default deterministic autonomy scenario suite.
+// All returns the default deterministic autonomy scenario suite. Returned cases
+// are single-use because they contain stateful scripted models.
 func All() []agenteval.Case {
 	return []agenteval.Case{
 		ToolRecovery(),
@@ -26,8 +27,8 @@ func All() []agenteval.Case {
 	}
 }
 
-// ToolRecovery returns a scenario where the model emits invalid tool input,
-// receives the validation error as a tool result, and recovers.
+// ToolRecovery returns a single-use scenario where the model emits invalid tool
+// input, receives the validation error as a tool result, and recovers.
 func ToolRecovery() agenteval.Case {
 	modelClient := agenteval.NewScriptedModel(
 		[]model.StreamEvent{{
@@ -93,8 +94,9 @@ func ToolRecovery() agenteval.Case {
 	}
 }
 
-// StructuredOutputRepair returns a scenario where invalid final JSON is
-// persisted, the SDK appends a repair prompt, and the model returns valid JSON.
+// StructuredOutputRepair returns a single-use scenario where invalid final JSON
+// is persisted, the SDK appends a repair prompt, and the model returns valid
+// JSON.
 func StructuredOutputRepair() agenteval.Case {
 	modelClient := agenteval.NewScriptedModel(
 		[]model.StreamEvent{{Kind: model.StreamText, Text: "not json"}},
@@ -135,9 +137,9 @@ func StructuredOutputRepair() agenteval.Case {
 	}
 }
 
-// MemorySearchAndSave returns a scenario where the model searches durable
-// memories, saves a new memory, and completes with the saved memory in the
-// backing store.
+// MemorySearchAndSave returns a single-use scenario where the model searches
+// durable memories, saves a new memory, and completes with the saved memory in
+// the backing store.
 func MemorySearchAndSave() agenteval.Case {
 	store := memory.NewMemoryStore([]memory.Memory{{
 		Name:    "billing-rule",
@@ -145,8 +147,8 @@ func MemorySearchAndSave() agenteval.Case {
 		Content: "Invoices require audit logs.",
 		Tags:    []string{"billing"},
 	}})
-	searchTool, _ := memorytools.NewSearchTool(memorytools.Config{Source: store})
-	saveTool, _ := memorytools.NewSaveTool(memorytools.Config{Writer: store})
+	searchTool, searchErr := memorytools.NewSearchTool(memorytools.Config{Source: store})
+	saveTool, saveErr := memorytools.NewSaveTool(memorytools.Config{Writer: store})
 	modelClient := agenteval.NewScriptedModel(
 		[]model.StreamEvent{{
 			Kind: model.StreamToolUse,
@@ -182,9 +184,23 @@ func MemorySearchAndSave() agenteval.Case {
 			MemorySource: store,
 		},
 		Assertions: []agenteval.Assertion{
+			toolConstructionSucceeded(searchErr, saveErr),
 			agenteval.ToolUsed(memorytools.SearchToolName),
 			agenteval.ToolUsed(memorytools.SaveToolName),
 			agenteval.FinalEquals("memory saved"),
+			{
+				Name: "search returned seeded memory",
+				Check: func(result agenteval.Result) error {
+					for _, toolResult := range result.ToolResults() {
+						if toolResult.Name == memorytools.SearchToolName &&
+							strings.Contains(toolResult.Content, "billing-rule") &&
+							strings.Contains(toolResult.Content, "Invoices require audit logs") {
+							return nil
+						}
+					}
+					return fmt.Errorf("search result did not contain seeded billing memory: %#v", result.ToolResults())
+				},
+			},
 			{
 				Name: "memory persisted",
 				Check: func(agenteval.Result) error {
@@ -200,17 +216,21 @@ func MemorySearchAndSave() agenteval.Case {
 					return fmt.Errorf("saved memory not found: %#v", items)
 				},
 			},
-			{
-				Name: "memory tools succeeded",
-				Check: func(result agenteval.Result) error {
-					for _, toolResult := range result.ToolResults() {
-						if toolResult.IsError {
-							return fmt.Errorf("%s failed: %s", toolResult.Name, toolResult.Content)
-						}
-					}
-					return nil
-				},
-			},
+			agenteval.NoToolErrors(),
+		},
+	}
+}
+
+func toolConstructionSucceeded(errs ...error) agenteval.Assertion {
+	return agenteval.Assertion{
+		Name: "tool construction succeeded",
+		Check: func(agenteval.Result) error {
+			for _, err := range errs {
+				if err != nil {
+					return err
+				}
+			}
+			return nil
 		},
 	}
 }
