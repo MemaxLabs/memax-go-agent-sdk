@@ -220,8 +220,10 @@ func (e Executor) enforceResultLimit(ctx context.Context, result model.ToolResul
 		return result
 	}
 	originalBytes := len(result.Content)
+	var storedHandle resultstore.Handle
+	var storeErr error
 	if e.ResultStore != nil {
-		handle, err := e.ResultStore.Put(ctx, resultstore.PutRequest{
+		storedHandle, storeErr = e.ResultStore.Put(ctx, resultstore.PutRequest{
 			SessionID:       e.Runtime.SessionID,
 			ParentSessionID: e.Runtime.ParentSessionID,
 			ToolUseID:       use.ID,
@@ -229,28 +231,29 @@ func (e Executor) enforceResultLimit(ctx context.Context, result model.ToolResul
 			Content:         result.Content,
 			Metadata:        result.Metadata,
 		})
-		result.Metadata = cloneMetadata(result.Metadata)
-		if err != nil {
-			result.Metadata["stored_result_error"] = err.Error()
+	}
+	result.Content = truncateUTF8(result.Content, limit)
+	result.Metadata = cloneMetadata(result.Metadata)
+	if e.ResultStore != nil {
+		if storeErr != nil {
+			result.Metadata["stored_result_error"] = storeErr.Error()
 		} else {
-			if handle.ID != "" {
-				result.Metadata["stored_result_id"] = handle.ID
+			if storedHandle.ID != "" {
+				result.Metadata["stored_result_id"] = storedHandle.ID
 			}
-			if handle.URI != "" {
-				result.Metadata["stored_result_uri"] = handle.URI
+			if storedHandle.URI != "" {
+				result.Metadata["stored_result_uri"] = storedHandle.URI
 			}
-			storedBytes := handle.Bytes
+			storedBytes := storedHandle.Bytes
 			if storedBytes <= 0 {
 				storedBytes = originalBytes
 			}
 			result.Metadata["stored_result_bytes"] = storedBytes
-			if !handle.CreatedAt.IsZero() {
-				result.Metadata["stored_result_created_at"] = handle.CreatedAt.Format(time.RFC3339Nano)
+			if !storedHandle.CreatedAt.IsZero() {
+				result.Metadata["stored_result_created_at"] = storedHandle.CreatedAt.Format(time.RFC3339Nano)
 			}
 		}
 	}
-	result.Content = truncateUTF8(result.Content, limit)
-	result.Metadata = cloneMetadata(result.Metadata)
 	result.Metadata["truncated"] = true
 	result.Metadata["original_bytes"] = originalBytes
 	result.Metadata["returned_bytes"] = len(result.Content)

@@ -4,12 +4,14 @@ package resultstore
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 )
 
 // PutRequest is the full tool result payload to store outside the model
-// transcript.
+// transcript. Metadata is the original tool metadata before model-facing
+// preview fields such as truncation byte counts are attached.
 type PutRequest struct {
 	SessionID       string
 	ParentSessionID string
@@ -28,7 +30,9 @@ type Handle struct {
 	Metadata  map[string]any
 }
 
-// Entry is a stored result record.
+// Entry is a stored result record. Metadata comes from the original tool result
+// through the embedded Handle; it does not include model-facing preview fields
+// such as truncated, original_bytes, or returned_bytes.
 type Entry struct {
 	Handle
 	SessionID       string
@@ -120,6 +124,38 @@ func (s *MemoryStore) Get(ctx context.Context, id string) (Entry, error) {
 		return Entry{}, fmt.Errorf("resultstore: no such result: %s", id)
 	}
 	return cloneEntry(entry), nil
+}
+
+// List returns all stored results in stable ID order.
+func (s *MemoryStore) List(ctx context.Context) ([]Entry, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if s == nil {
+		return nil, fmt.Errorf("resultstore: nil MemoryStore")
+	}
+	s.mu.RLock()
+	ids := make([]string, 0, len(s.entries))
+	for id := range s.entries {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	out := make([]Entry, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, cloneEntry(s.entries[id]))
+	}
+	s.mu.RUnlock()
+	return out, nil
+}
+
+// Len returns the number of stored results.
+func (s *MemoryStore) Len() int {
+	if s == nil {
+		return 0
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.entries)
 }
 
 func cloneEntry(in Entry) Entry {
