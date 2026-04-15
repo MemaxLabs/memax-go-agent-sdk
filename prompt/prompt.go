@@ -13,6 +13,11 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/skill"
 )
 
+const (
+	maxSelectorQueryMessages = 3
+	maxSelectorQueryBytes    = 4096
+)
+
 // Builder builds the provider-facing system prompt for a model request.
 type Builder interface {
 	Build(context.Context, Request) (Result, error)
@@ -112,21 +117,47 @@ func (p Profile) WithDefault() Profile {
 }
 
 func requestQuery(req Request) string {
+	values := make([]string, 0, 2+maxSelectorQueryMessages)
+	if value := strings.TrimSpace(req.SystemPrompt); value != "" {
+		values = append(values, value)
+	}
+	if value := strings.TrimSpace(req.AppendSystemPrompt); value != "" {
+		values = append(values, value)
+	}
+	messageText := recentUserText(req.Messages, maxSelectorQueryMessages)
+	values = append(values, messageText...)
+	return limitStringBytes(strings.Join(values, " "), maxSelectorQueryBytes)
+}
+
+func recentUserText(messages []model.Message, max int) []string {
+	if max <= 0 || len(messages) == 0 {
+		return nil
+	}
+	selected := make([]string, 0, max)
+	for i := len(messages) - 1; i >= 0 && len(selected) < max; i-- {
+		if messages[i].Role != model.RoleUser {
+			continue
+		}
+		if text := strings.TrimSpace(messages[i].PlainText()); text != "" {
+			selected = append(selected, text)
+		}
+	}
+	for i, j := 0, len(selected)-1; i < j; i, j = i+1, j-1 {
+		selected[i], selected[j] = selected[j], selected[i]
+	}
+	return selected
+}
+
+func limitStringBytes(value string, max int) string {
+	if max <= 0 || len(value) <= max {
+		return value
+	}
 	var b strings.Builder
-	b.WriteString(req.SystemPrompt)
-	b.WriteByte(' ')
-	b.WriteString(req.AppendSystemPrompt)
-	for _, msg := range req.Messages {
-		if text := msg.PlainText(); text != "" {
-			b.WriteByte(' ')
-			b.WriteString(text)
+	for _, r := range value {
+		if b.Len()+len(string(r)) > max {
+			break
 		}
-		if msg.ToolResult != nil {
-			b.WriteByte(' ')
-			b.WriteString(msg.ToolResult.Name)
-			b.WriteByte(' ')
-			b.WriteString(msg.ToolResult.Content)
-		}
+		b.WriteRune(r)
 	}
 	return b.String()
 }

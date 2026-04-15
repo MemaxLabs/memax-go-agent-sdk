@@ -59,6 +59,29 @@ func TestDefaultBuilderIncludesSelectedMemories(t *testing.T) {
 	}
 }
 
+func TestDefaultBuilderSelectorQueryUsesRecentUserMessages(t *testing.T) {
+	result, err := (DefaultBuilder{}).Build(context.Background(), Request{
+		Messages: []model.Message{
+			{Role: model.RoleUser, Content: []model.ContentBlock{{Type: model.ContentText, Text: "old frontend task"}}},
+			{Role: model.RoleTool, ToolResult: &model.ToolResult{Name: "lookup", Content: "payments noise"}},
+			{Role: model.RoleUser, Content: []model.ContentBlock{{Type: model.ContentText, Text: "review billing flow"}}},
+		},
+		Memories: []memory.Memory{
+			{Name: "billing", Scope: memory.ScopeProject, Content: "Invoices require audit logs."},
+			{Name: "payments", Scope: memory.ScopeProject, Content: "Payment tool result should not select this."},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+	if !strings.Contains(result.SystemPrompt, "Invoices require audit logs.") {
+		t.Fatalf("system prompt missing billing memory:\n%s", result.SystemPrompt)
+	}
+	if strings.Contains(result.SystemPrompt, "Payment tool result should not select this.") {
+		t.Fatalf("system prompt selected memory from tool-result noise:\n%s", result.SystemPrompt)
+	}
+}
+
 func TestDefaultBuilderGolden(t *testing.T) {
 	result, err := (DefaultBuilder{Profile: ProfileAnthropic}).Build(context.Background(), Request{
 		Identity: identity.Identity{

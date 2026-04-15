@@ -151,11 +151,14 @@ provider request types into core prompt assembly.
 such as project rules, user preferences, session notes, or organization policy.
 Callers can pass explicit `Options.Memories` or a dynamic `Options.MemorySource`.
 The source receives the active session ID, parent session ID, identity,
-model-visible messages after context-window policy, and query text. The default
-prompt builder injects selected memories as a named `memax.memories` prompt part.
+model-visible messages after context-window policy, and bounded recent
+user-message query text. Dynamic memory sources are loaded once per `Query` run;
+the cached memory set is then copied into each prompt build. The default prompt
+builder injects selected memories as a named `memax.memories` prompt part.
 `memory.Selector` keeps always-on memories and ranks relevant memories against
-the current prompt and transcript. Memory injection is prompt context only; it
-does not grant filesystem, network, workspace, or OS capabilities.
+the current prompt and recent user-message text. Memory injection is prompt
+context only; it does not grant filesystem, network, workspace, or OS
+capabilities.
 
 `skill.Source` is the source-neutral loading contract for instruction bundles.
 Built-in helpers cover static slices, function-backed sources, merged sources,

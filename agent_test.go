@@ -535,6 +535,62 @@ func TestQueryLoadsMemoriesFromSource(t *testing.T) {
 	}
 }
 
+func TestQueryLoadsMemorySourceOncePerRun(t *testing.T) {
+	registry := tool.NewRegistry(tool.Definition{
+		ToolSpec: model.ToolSpec{Name: "lookup"},
+		Handler: func(context.Context, tool.Call) (model.ToolResult, error) {
+			return model.ToolResult{Content: "tool result mentions frontend but should not reload memories"}, nil
+		},
+	})
+	fake := &fakeModel{turns: [][]model.StreamEvent{
+		{{Kind: model.StreamToolUse, ToolUse: model.ToolUse{ID: "tool-1", Name: "lookup", Input: json.RawMessage(`{}`)}}},
+		{{Kind: model.StreamText, Text: "done"}},
+	}}
+	var calls int
+	var got memory.Request
+	events, err := Query(context.Background(), "inspect billing code", Options{
+		Model: fake,
+		Tools: registry,
+		MemorySource: memory.SourceFunc(func(_ context.Context, req memory.Request) ([]memory.Memory, error) {
+			calls++
+			got = req
+			return []memory.Memory{{Name: "billing", Scope: memory.ScopeProject, Content: "Billing changes require audit logging."}}, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+	if _, err := Drain(events); err != nil {
+		t.Fatalf("Drain returned error: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("memory source calls = %d, want 1", calls)
+	}
+	if got.Query != "inspect billing code" {
+		t.Fatalf("memory source query = %q, want user prompt only", got.Query)
+	}
+}
+
+func TestMemoryQueryUsesRecentUserMessagesOnly(t *testing.T) {
+	messages := []model.Message{
+		{Role: model.RoleUser, Content: []model.ContentBlock{{Type: model.ContentText, Text: "old billing context"}}},
+		{Role: model.RoleTool, ToolResult: &model.ToolResult{Name: "lookup", Content: "frontend noise"}},
+		{Role: model.RoleAssistant, Content: []model.ContentBlock{{Type: model.ContentText, Text: "assistant noise"}}},
+		{Role: model.RoleUser, Content: []model.ContentBlock{{Type: model.ContentText, Text: "first recent"}}},
+		{Role: model.RoleUser, Content: []model.ContentBlock{{Type: model.ContentText, Text: "second recent"}}},
+		{Role: model.RoleUser, Content: []model.ContentBlock{{Type: model.ContentText, Text: "third recent"}}},
+	}
+	got := memoryQuery(messages)
+	if got != "first recent second recent third recent" {
+		t.Fatalf("memoryQuery = %q", got)
+	}
+	for _, blocked := range []string{"old billing", "frontend", "assistant"} {
+		if strings.Contains(got, blocked) {
+			t.Fatalf("memoryQuery = %q, want no %q", got, blocked)
+		}
+	}
+}
+
 func TestQueryMemorySourceErrorStopsRun(t *testing.T) {
 	sourceErr := errors.New("memory store unavailable")
 	events, err := Query(context.Background(), "start", Options{

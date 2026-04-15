@@ -188,8 +188,9 @@ The supported `SKILL.md` metadata subset and source formats are documented in
 [docs/skills.md](docs/skills.md).
 
 To inject durable host context, pass explicit memories or a custom
-`memory.Source`. Sources receive the active session ID, parent session ID,
-identity, current model-visible messages, and query text:
+`memory.Source`. Sources are loaded once per `Query` run and receive the active
+session ID, parent session ID, identity, current model-visible messages, and
+bounded recent user-message query text:
 
 ```go
 events, err := memaxagent.Query(ctx, "Review the billing change.", memaxagent.Options{

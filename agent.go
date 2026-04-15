@@ -20,6 +20,11 @@ import (
 
 var ErrMissingModelClient = errors.New("memaxagent: model client is required")
 
+const (
+	maxMemoryQueryMessages = 3
+	maxMemoryQueryBytes    = 4096
+)
+
 // Query runs an autonomous agent loop for a single prompt and streams events.
 func Query(ctx context.Context, prompt string, opts Options) (<-chan Event, error) {
 	opts = opts.withDefaults()
@@ -148,6 +153,7 @@ func startSession(ctx context.Context, opts Options) (session.Session, error) {
 }
 
 func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Options) {
+	memories := memoryLoader{opts: opts, sessionID: sessionID}
 	executor := tool.Executor{
 		Registry:       opts.Tools,
 		Permissions:    opts.Permissions,
@@ -301,7 +307,7 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 				telemetry.Int("memax.tools.available", len(opts.Tools.Specs())),
 				telemetry.Int("memax.tools.selected", len(toolSpecs)),
 			)
-			promptResult, err := buildPrompt(turnCtx, opts, sessionID, messages, toolSpecs)
+			promptResult, err := buildPrompt(turnCtx, opts, &memories, messages, toolSpecs)
 			if err != nil {
 				err = fmt.Errorf("build prompt: %w", err)
 				turnSpan.RecordError(err)
@@ -339,7 +345,7 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 			})
 			if err != nil {
 				if opts.ContextRetry != nil && model.IsContextWindowExceeded(err) {
-					retryMessages, retryTools, retryPrompt, retryErr := retryContextWindow(modelCtx, opts, sessionID, messages)
+					retryMessages, retryTools, retryPrompt, retryErr := retryContextWindow(modelCtx, opts, &memories, messages)
 					if retryErr == nil {
 						if !reflect.DeepEqual(retryMessages, messages) {
 							if ok, applyErr := emitContextApplied(turnCtx, emit, opts, sessionID, turn, len(messages), len(retryMessages)); applyErr != nil {
@@ -502,7 +508,7 @@ type builtPrompt struct {
 	Parts              []promptpkg.Part
 }
 
-func buildPrompt(ctx context.Context, opts Options, sessionID string, messages []model.Message, tools []model.ToolSpec) (builtPrompt, error) {
+func buildPrompt(ctx context.Context, opts Options, memories *memoryLoader, messages []model.Message, tools []model.ToolSpec) (builtPrompt, error) {
 	if opts.PromptBuilder == nil && opts.PromptProfile == "" && opts.Identity.IsZero() && opts.MemorySource == nil && len(opts.Memories) == 0 && opts.SkillSource == nil && len(opts.Skills) == 0 {
 		return builtPrompt{
 			SystemPrompt:       opts.SystemPrompt,
@@ -513,7 +519,7 @@ func buildPrompt(ctx context.Context, opts Options, sessionID string, messages [
 	if builder == nil {
 		builder = promptpkg.DefaultBuilder{Profile: opts.PromptProfile}
 	}
-	memories, err := loadMemories(ctx, opts, sessionID, messages)
+	loadedMemories, err := memories.Load(ctx, messages)
 	if err != nil {
 		return builtPrompt{}, err
 	}
@@ -531,7 +537,7 @@ func buildPrompt(ctx context.Context, opts Options, sessionID string, messages [
 		AppendSystemPrompt: opts.AppendSystemPrompt,
 		Messages:           messages,
 		Tools:              tools,
-		Memories:           memories,
+		Memories:           loadedMemories,
 		Skills:             skills,
 	})
 	if err != nil {
@@ -544,10 +550,21 @@ func buildPrompt(ctx context.Context, opts Options, sessionID string, messages [
 	}, nil
 }
 
-func loadMemories(ctx context.Context, opts Options, sessionID string, messages []model.Message) ([]memory.Memory, error) {
-	if opts.MemorySource == nil && len(opts.Memories) == 0 {
+type memoryLoader struct {
+	opts      Options
+	sessionID string
+	loaded    bool
+	memories  []memory.Memory
+}
+
+func (l *memoryLoader) Load(ctx context.Context, messages []model.Message) ([]memory.Memory, error) {
+	if l == nil || l.opts.MemorySource == nil && len(l.opts.Memories) == 0 {
 		return nil, nil
 	}
+	if l.loaded {
+		return memory.StaticSource(l.memories).Memories(ctx, memory.Request{})
+	}
+	opts := l.opts
 	sources := make(memory.MultiSource, 0, 2)
 	if len(opts.Memories) > 0 {
 		sources = append(sources, memory.StaticSource(opts.Memories))
@@ -555,16 +572,22 @@ func loadMemories(ctx context.Context, opts Options, sessionID string, messages 
 	if opts.MemorySource != nil {
 		sources = append(sources, opts.MemorySource)
 	}
-	return sources.Memories(ctx, memory.Request{
-		SessionID:       sessionID,
+	loaded, err := sources.Memories(ctx, memory.Request{
+		SessionID:       l.sessionID,
 		ParentSessionID: opts.ParentSessionID,
 		Identity:        opts.Identity,
 		Messages:        messages,
-		Query:           requestQuery(messages),
+		Query:           memoryQuery(messages),
 	})
+	if err != nil {
+		return nil, err
+	}
+	l.memories = loaded
+	l.loaded = true
+	return memory.StaticSource(l.memories).Memories(ctx, memory.Request{})
 }
 
-func retryContextWindow(ctx context.Context, opts Options, sessionID string, messages []model.Message) ([]model.Message, []model.ToolSpec, builtPrompt, error) {
+func retryContextWindow(ctx context.Context, opts Options, memories *memoryLoader, messages []model.Message) ([]model.Message, []model.ToolSpec, builtPrompt, error) {
 	retryMessages, err := opts.ContextRetry.Apply(ctx, messages)
 	if err != nil {
 		return nil, nil, builtPrompt{}, err
@@ -573,33 +596,46 @@ func retryContextWindow(ctx context.Context, opts Options, sessionID string, mes
 	if err != nil {
 		return nil, nil, builtPrompt{}, err
 	}
-	retryPrompt, err := buildPrompt(ctx, opts, sessionID, retryMessages, retryTools)
+	retryPrompt, err := buildPrompt(ctx, opts, memories, retryMessages, retryTools)
 	if err != nil {
 		return nil, nil, builtPrompt{}, err
 	}
 	return retryMessages, retryTools, retryPrompt, nil
 }
 
-func requestQuery(messages []model.Message) string {
+func memoryQuery(messages []model.Message) string {
 	if len(messages) == 0 {
 		return ""
 	}
+	selected := make([]string, 0, maxMemoryQueryMessages)
+	for i := len(messages) - 1; i >= 0 && len(selected) < maxMemoryQueryMessages; i-- {
+		if messages[i].Role != model.RoleUser {
+			continue
+		}
+		if text := strings.TrimSpace(messages[i].PlainText()); text != "" {
+			selected = append(selected, text)
+		}
+	}
 	var b strings.Builder
-	for _, msg := range messages {
-		if text := msg.PlainText(); text != "" {
-			if b.Len() > 0 {
-				b.WriteByte(' ')
-			}
-			b.WriteString(text)
-		}
-		if msg.ToolResult != nil {
-			if b.Len() > 0 {
-				b.WriteByte(' ')
-			}
-			b.WriteString(msg.ToolResult.Name)
+	for i := len(selected) - 1; i >= 0; i-- {
+		if b.Len() > 0 {
 			b.WriteByte(' ')
-			b.WriteString(msg.ToolResult.Content)
 		}
+		b.WriteString(selected[i])
+	}
+	return limitStringBytes(b.String(), maxMemoryQueryBytes)
+}
+
+func limitStringBytes(value string, max int) string {
+	if max <= 0 || len(value) <= max {
+		return value
+	}
+	var b strings.Builder
+	for _, r := range value {
+		if b.Len()+len(string(r)) > max {
+			break
+		}
+		b.WriteRune(r)
 	}
 	return b.String()
 }
