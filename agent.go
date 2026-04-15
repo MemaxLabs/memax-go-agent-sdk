@@ -75,10 +75,21 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 			return
 		}
 		if opts.Context != nil {
+			originalCount := len(messages)
 			messages, err = opts.Context.Apply(ctx, messages)
 			if err != nil {
 				emitError(ctx, emit, sessionID, turn, fmt.Errorf("apply context policy: %w", err))
 				return
+			}
+			if len(messages) != originalCount {
+				event := newEvent(EventContextApplied, sessionID, turn)
+				event.Context = &ContextEvent{
+					OriginalMessages: originalCount,
+					SentMessages:     len(messages),
+				}
+				if !emit(event) {
+					return
+				}
 			}
 		}
 

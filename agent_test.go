@@ -190,6 +190,44 @@ func TestQueryAppliesContextPolicyBeforeModelRequest(t *testing.T) {
 	}
 }
 
+func TestQueryEmitsContextAppliedEvent(t *testing.T) {
+	fake := &fakeModel{turns: [][]model.StreamEvent{
+		{{Kind: model.StreamToolUse, ToolUse: model.ToolUse{ID: "tool-1", Name: "noop", Input: json.RawMessage(`{}`)}}},
+		{{Kind: model.StreamText, Text: "done"}},
+	}}
+	registry := tool.NewRegistry(tool.Definition{
+		ToolSpec: model.ToolSpec{Name: "noop"},
+		Handler: func(context.Context, tool.Call) (model.ToolResult, error) {
+			return model.ToolResult{Content: "ok"}, nil
+		},
+	})
+
+	events, err := Query(context.Background(), "start", Options{
+		Model:   fake,
+		Tools:   registry,
+		Context: contextwindow.RecentMessages{MaxMessages: 2},
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+
+	var contextEvent *ContextEvent
+	for event := range events {
+		if event.Kind == EventContextApplied {
+			contextEvent = event.Context
+		}
+		if event.Kind == EventError {
+			t.Fatalf("query error: %v", event.Err)
+		}
+	}
+	if contextEvent == nil {
+		t.Fatal("missing context applied event")
+	}
+	if contextEvent.OriginalMessages != 3 || contextEvent.SentMessages != 2 {
+		t.Fatalf("context event = %#v, want 3 -> 2", contextEvent)
+	}
+}
+
 type fakeModel struct {
 	turns    [][]model.StreamEvent
 	requests []model.Request

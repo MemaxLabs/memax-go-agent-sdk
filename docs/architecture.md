@@ -107,7 +107,7 @@ The SDK includes an in-memory store for tests and short-lived agents, plus an ap
 
 ## Context Window
 
-Context-window policies transform session messages before each model request without mutating the durable session transcript. The initial `RecentMessages` policy keeps a bounded suffix and drops leading orphan tool-result messages after trimming. This is not summarizing compaction; it is a deterministic pressure valve and an interface for future compaction strategies.
+Context-window policies transform session messages before each model request without mutating the durable session transcript. `RecentMessages` keeps a bounded suffix. `TokenBudget` keeps the newest messages under a caller-defined estimate budget. Both drop leading orphan tool-result messages after trimming. These policies are not summarizing compaction; they are deterministic pressure valves and an interface for future compaction strategies.
 
 Durable session stores should support:
 
