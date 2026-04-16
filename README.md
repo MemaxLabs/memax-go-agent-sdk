@@ -23,7 +23,7 @@ Implemented foundation:
 - memory-backed, OS-backed, and `io/fs`-backed file tools for examples and tests
 - bounded subagent tool with parent/child session correlation
 - task state tools for agent planning and progress tracking
-- host-owned planner policies with deterministic prompt plan injection
+- host-owned planner policies with deterministic prompt plan injection and task-state adapters
 - opt-in tool selection and search for deferred tool loading
 - agent identity profiles, deterministic prompt assembly, and local skill manifests
 - project, user, and session memory injection through source-neutral prompt memory sources
@@ -366,6 +366,24 @@ Planner policies receive the active session ID, parent session ID, identity,
 messages, and recent user-query text. The default prompt builder injects the
 returned plan as the named `memax.plan` prompt part.
 
+Existing task state can drive the same planner context. `tasktools.Planner`
+adapts a task store into `planner.Policy`, so updates made through
+`upsert_task` are reflected in the next model request:
+
+```go
+tasks := tasktools.NewMemoryStore([]tasktools.Task{{
+    ID: "task-1", Title: "read migration", Status: tasktools.StatusInProgress,
+}})
+events, err := memaxagent.Query(ctx, "Continue the review.", memaxagent.Options{
+    Model: client,
+    Tools: tool.NewRegistry(tasktools.NewListTool(tasks), tasktools.NewUpsertTool(tasks)),
+    Planner: tasktools.Planner(tasks,
+        planner.WithTaskGoal("review migration safely"),
+        planner.WithTaskToolHints(tasktools.ListToolName, tasktools.UpsertToolName),
+    ),
+})
+```
+
 To regression-test agent behavior without a live model, use `agenteval` with a
 scripted model and assertions:
 
@@ -394,8 +412,9 @@ if err := report.Error(); err != nil {
 
 The `agenteval/scenarios` package includes reusable deterministic cases for
 tool recovery, structured output repair, memory search/save, session resume,
-context retry, subagent delegation, planner-guided tool use, provider usage
-mapping, and provider tool-use round trips. It also covers governance recovery for permission
+context retry, subagent delegation, planner-guided tool use, planner/task-state
+updates, provider usage mapping, and provider tool-use round trips. It also
+covers governance recovery for permission
 denials, hook denials, oversized tool results, budget stops, and deferred tool
 discovery:
 

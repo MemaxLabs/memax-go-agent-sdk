@@ -20,6 +20,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/memorytools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/subagents"
+	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/tasktools"
 )
 
 // All returns the default deterministic autonomy scenario suite. Returned cases
@@ -33,6 +34,7 @@ func All() []agenteval.Case {
 		ContextRetry(),
 		SubagentDelegation(),
 		PlannerGuidedToolUse(),
+		PlannerTaskStateUpdates(),
 		OpenAIProviderTextAndUsage(),
 		AnthropicProviderTextAndUsage(),
 		OpenAIProviderToolUseRoundTrip(),
@@ -44,6 +46,73 @@ func All() []agenteval.Case {
 		BudgetStopsBeforeToolBatch(),
 		BudgetStopsAfterTokenUsage(),
 		DeferredToolDiscoveryRecovery(),
+	}
+}
+
+// PlannerTaskStateUpdates returns a single-use scenario where tasktools are
+// both model-editable state and the source for prompt-visible planner context.
+func PlannerTaskStateUpdates() agenteval.Case {
+	store := tasktools.NewMemoryStore([]tasktools.Task{{
+		ID:       "task-1",
+		Title:    "read migration file",
+		Status:   tasktools.StatusInProgress,
+		Notes:    "check rollback",
+		Priority: 1,
+	}})
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "tool-1",
+				Name: tasktools.UpsertToolName,
+				Input: json.RawMessage(`{
+					"id":"task-1",
+					"status":"completed",
+					"notes":"migration file reviewed"
+				}`),
+			},
+		}},
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "task plan updated"}},
+	)
+
+	return agenteval.Case{
+		Name:   "planner_task_state_updates",
+		Prompt: "Use the task plan and mark progress.",
+		Options: memaxagent.Options{
+			Model: modelClient,
+			Tools: tool.NewRegistry(
+				tasktools.NewListTool(store),
+				tasktools.NewUpsertTool(store),
+			),
+			Planner: tasktools.Planner(store,
+				planner.WithTaskGoal("review migration safely"),
+				planner.WithTaskToolHints(tasktools.ListToolName, tasktools.UpsertToolName),
+			),
+		},
+		Assertions: []agenteval.Assertion{
+			agenteval.ToolUsed(tasktools.UpsertToolName),
+			toolResultContains(tasktools.UpsertToolName, false, "upserted task-1"),
+			agenteval.FinalEquals("task plan updated"),
+			requestCountEquals(modelClient, 2),
+			{
+				Name: "plan reflected task update",
+				Check: func(agenteval.Result) error {
+					requests := modelClient.Requests()
+					if len(requests) != 2 {
+						return fmt.Errorf("model requests = %d, want 2", len(requests))
+					}
+					first := requests[0].SystemPrompt
+					if !strings.Contains(first, "[in_progress] task-1: read migration file") || !strings.Contains(first, "check rollback") {
+						return fmt.Errorf("first prompt missing initial task state:\n%s", first)
+					}
+					second := requests[1].SystemPrompt
+					if !strings.Contains(second, "[completed] task-1: read migration file") || !strings.Contains(second, "migration file reviewed") {
+						return fmt.Errorf("second prompt missing updated task state:\n%s", second)
+					}
+					return nil
+				},
+			},
+		},
 	}
 }
 

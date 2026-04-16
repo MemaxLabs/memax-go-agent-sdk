@@ -146,7 +146,8 @@ provider-neutral core loop used in production.
 `agenteval/scenarios` contains reusable baseline cases for core behaviors such
 as tool validation recovery, structured-output repair, memory search/save,
 session resume, context retry, subagent delegation, planner-guided tool use,
-provider usage mapping, and provider tool-use round trips. Governance scenarios cover permission denial,
+planner/task-state updates, provider usage mapping, and provider tool-use round
+trips. Governance scenarios cover permission denial,
 before-hook denial, oversized result storage, budget stops, and deferred tool
 discovery recovery.
 
@@ -220,6 +221,13 @@ whole run. This is intentional: a host planner may reflect task progress,
 external approvals, or other state that changes after tool results. Planners
 that talk to remote services should be fast, cached, prefetched, or
 timeout-bounded when per-turn freshness is not needed.
+
+The core planner package also defines source-neutral `planner.Task` and
+`planner.TaskSource` contracts. `planner.FromTaskSource` converts task state
+into plan steps with deterministic priority ordering and inferred plan state.
+The optional `toolkit/tasktools` adapter exposes `tasktools.Planner(store)`, so
+the same task store can be prompt-visible plan context and model-editable state
+through `list_tasks` and `upsert_task`.
 
 `memory.Source` is the source-neutral loading contract for durable host context
 such as project rules, user preferences, session notes, or organization policy.

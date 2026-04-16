@@ -307,6 +307,9 @@ func formatPlan(plan planner.Plan) string {
 			} else {
 				fmt.Fprintf(&b, "\n- [%s] %s", status, title)
 			}
+			if notes := strings.TrimSpace(step.Notes); notes != "" {
+				fmt.Fprintf(&b, "\n  Notes: %s", notes)
+			}
 			if hints := nonEmptyStrings(step.ToolHints); len(hints) > 0 {
 				fmt.Fprintf(&b, "\n  Tool hints: %s", strings.Join(hints, ", "))
 			}
