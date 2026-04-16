@@ -191,3 +191,86 @@ func WorkspaceUnifiedDiffRecovery() agenteval.Case {
 		},
 	}
 }
+
+// WorkspacePatchReviewDenialRecovery returns a single-use scenario where a
+// host reviewer denies one patch and the model recovers with an allowed patch.
+func WorkspacePatchReviewDenialRecovery() agenteval.Case {
+	store := workspace.NewMemoryStore(map[string]string{
+		"README.md": "locked",
+	})
+	reviewer := workspacetools.PatchReviewerFunc(func(_ context.Context, req workspacetools.PatchReviewRequest) workspacetools.PatchReviewDecision {
+		for _, path := range req.Summary.Paths {
+			if path == "README.md" {
+				return workspacetools.PatchReviewDecision{Allow: false, Reason: "README.md is locked"}
+			}
+		}
+		return workspacetools.PatchReviewDecision{Allow: true}
+	})
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "patch-1",
+				Name: workspacetools.ApplyPatchToolName,
+				Input: json.RawMessage(`{
+					"operations":[{"path":"README.md","old_content":"locked","new_content":"changed"}]
+				}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "patch-2",
+				Name: workspacetools.ApplyPatchToolName,
+				Input: json.RawMessage(`{
+					"operations":[{"path":"docs/notes.md","new_content":"safe note"}]
+				}`),
+			},
+		}},
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "Applied allowed workspace patch."}},
+	)
+
+	return agenteval.Case{
+		Name:   "workspace_patch_review_denial_recovery",
+		Prompt: "Update workspace files. Recover if the host denies a patch.",
+		Options: memaxagent.Options{
+			Model: modelClient,
+			Tools: tool.NewRegistry(workspacetools.NewApplyPatchToolWithReview(store, reviewer)),
+		},
+		Assertions: []agenteval.Assertion{
+			agenteval.ToolUsed(workspacetools.ApplyPatchToolName),
+			agenteval.FinalEquals("Applied allowed workspace patch."),
+			requestCountEquals(modelClient, 3),
+			{
+				Name: "review denial is recoverable and atomic",
+				Check: func(result agenteval.Result) error {
+					results := result.ToolResults()
+					if len(results) < 2 {
+						return fmt.Errorf("tool results = %#v, want denial and success", results)
+					}
+					if !results[0].IsError || !strings.Contains(results[0].Content, "README.md is locked") {
+						return fmt.Errorf("first patch result = %#v, want reviewer denial", results[0])
+					}
+					if results[1].IsError || !strings.Contains(results[1].Content, "added docs/notes.md") {
+						return fmt.Errorf("second patch result = %#v, want allowed patch", results[1])
+					}
+					readme, err := store.ReadFile(context.Background(), "README.md")
+					if err != nil {
+						return err
+					}
+					if readme != "locked" {
+						return fmt.Errorf("README.md = %q, want denial to prevent mutation", readme)
+					}
+					notes, err := store.ReadFile(context.Background(), "docs/notes.md")
+					if err != nil {
+						return err
+					}
+					if notes != "safe note" {
+						return fmt.Errorf("docs/notes.md = %q, want allowed patch", notes)
+					}
+					return nil
+				},
+			},
+		},
+	}
+}

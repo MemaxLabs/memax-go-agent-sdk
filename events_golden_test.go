@@ -341,6 +341,10 @@ type goldenEvent struct {
 	WorkspaceOperation  string    `json:"workspace_operation,omitempty"`
 	WorkspacePaths      []string  `json:"workspace_paths,omitempty"`
 	WorkspaceChanges    int       `json:"workspace_changes,omitempty"`
+	WorkspaceAdded      int       `json:"workspace_added,omitempty"`
+	WorkspaceModified   int       `json:"workspace_modified,omitempty"`
+	WorkspaceDeleted    int       `json:"workspace_deleted,omitempty"`
+	WorkspaceByteDelta  int       `json:"workspace_byte_delta,omitempty"`
 	WorkspaceCheckpoint string    `json:"workspace_checkpoint,omitempty"`
 	WorkspaceBase       string    `json:"workspace_base,omitempty"`
 	Result              string    `json:"result,omitempty"`
@@ -406,6 +410,10 @@ func normalizeGoldenEvent(event Event) goldenEvent {
 			out.WorkspaceOperation = event.Workspace.Operation
 			out.WorkspacePaths = append([]string(nil), event.Workspace.Paths...)
 			out.WorkspaceChanges = event.Workspace.Changes
+			out.WorkspaceAdded = event.Workspace.Added
+			out.WorkspaceModified = event.Workspace.Modified
+			out.WorkspaceDeleted = event.Workspace.Deleted
+			out.WorkspaceByteDelta = event.Workspace.ByteDelta
 			out.WorkspaceCheckpoint = event.Workspace.CheckpointID
 			out.WorkspaceBase = event.Workspace.BaseID
 		}

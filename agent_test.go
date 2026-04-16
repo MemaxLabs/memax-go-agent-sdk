@@ -637,11 +637,11 @@ func TestQueryEmitsWorkspaceEventsAndMetrics(t *testing.T) {
 		t.Fatalf("checkpoint event = %#v", checkpoint)
 	}
 	patch := findWorkspaceEvent(events, EventWorkspacePatch)
-	if patch == nil || patch.Operation != "patch" || patch.Changes != 1 || !sameStrings(patch.Paths, []string{"README.md"}) {
+	if patch == nil || patch.Operation != "patch" || patch.Changes != 1 || patch.Modified != 1 || patch.ByteDelta != 0 || !sameStrings(patch.Paths, []string{"README.md"}) {
 		t.Fatalf("patch event = %#v", patch)
 	}
 	diff := findWorkspaceEvent(events, EventWorkspaceDiff)
-	if diff == nil || diff.Operation != "diff" || diff.BaseID != "checkpoint-0" || diff.Changes != 1 {
+	if diff == nil || diff.Operation != "diff" || diff.BaseID != "checkpoint-0" || diff.Changes != 1 || diff.Modified != 1 {
 		t.Fatalf("diff event = %#v", diff)
 	}
 	restore := findWorkspaceEvent(events, EventWorkspaceRestore)

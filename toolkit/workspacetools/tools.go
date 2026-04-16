@@ -46,6 +46,38 @@ type UnifiedDiffPatcher interface {
 	ApplyUnifiedDiff(context.Context, string, workspace.PatchOptions) (workspace.PatchResult, error)
 }
 
+// PatchReviewRequest is sent to a reviewer after a patch has been validated
+// and previewed but before mutation.
+type PatchReviewRequest struct {
+	ToolUse model.ToolUse
+	DryRun  bool
+	Summary workspace.PatchSummary
+	Changes []workspace.Change
+}
+
+// PatchReviewDecision controls whether a reviewed patch may be applied.
+type PatchReviewDecision struct {
+	Allow  bool
+	Reason string
+}
+
+// PatchReviewer optionally gates workspace patch mutation with structured
+// file-change context. A denied review returns a normal tool error, giving the
+// model a chance to recover without mutating the workspace.
+type PatchReviewer interface {
+	ReviewPatch(context.Context, PatchReviewRequest) PatchReviewDecision
+}
+
+// PatchReviewerFunc adapts a function into a PatchReviewer.
+type PatchReviewerFunc func(context.Context, PatchReviewRequest) PatchReviewDecision
+
+func (f PatchReviewerFunc) ReviewPatch(ctx context.Context, req PatchReviewRequest) PatchReviewDecision {
+	if f == nil {
+		return PatchReviewDecision{Allow: true}
+	}
+	return f(ctx, req)
+}
+
 // Differ is the diff capability required by NewDiffTool.
 type Differ interface {
 	Diff(context.Context, string) (workspace.Diff, error)
@@ -145,6 +177,14 @@ func NewListTool(store Lister) tool.Tool {
 // standard unified diff. Dry-run requests require a store that implements
 // PatchPreviewer for structured operations or UnifiedDiffPatcher for diffs.
 func NewApplyPatchTool(store Patcher) tool.Tool {
+	return NewApplyPatchToolWithReview(store, nil)
+}
+
+// NewApplyPatchToolWithReview returns a destructive patch tool that validates
+// and previews the requested change, passes the summary to reviewer, and only
+// mutates the workspace when the reviewer allows it. Dry-run requests never
+// mutate but still invoke the reviewer so hosts can audit proposed changes.
+func NewApplyPatchToolWithReview(store Patcher, reviewer PatchReviewer) tool.Tool {
 	return tool.Definition{
 		ToolSpec: model.ToolSpec{
 			Name:           ApplyPatchToolName,
@@ -202,16 +242,21 @@ func NewApplyPatchTool(store Patcher) tool.Tool {
 			if err != nil {
 				return model.ToolResult{}, err
 			}
-			result, err := applyPatchInput(ctx, store, input)
+			result, err := applyPatchInput(ctx, store, call.Use, input, reviewer)
 			if err != nil {
 				return model.ToolResult{}, err
 			}
+			summary := workspace.SummarizeChanges(result.Changes)
 			return model.ToolResult{
-				Content: formatChanges(result.Changes),
+				Content: formatPatchResult(result),
 				Metadata: map[string]any{
 					model.MetadataWorkspaceOperation: "patch",
-					model.MetadataWorkspaceChanges:   len(result.Changes),
-					model.MetadataWorkspacePaths:     changePaths(result.Changes),
+					model.MetadataWorkspaceChanges:   summary.Files,
+					model.MetadataWorkspaceAdded:     summary.Added,
+					model.MetadataWorkspaceModified:  summary.Modified,
+					model.MetadataWorkspaceDeleted:   summary.Deleted,
+					model.MetadataWorkspaceByteDelta: summary.ByteDelta,
+					model.MetadataWorkspacePaths:     summary.Paths,
 					"dry_run":                        result.DryRun,
 				},
 			}, nil
@@ -249,14 +294,19 @@ func NewDiffTool(store Differ) tool.Tool {
 			if err != nil {
 				return model.ToolResult{}, err
 			}
+			summary := workspace.SummarizeChanges(diff.Changes)
 			return model.ToolResult{
 				Content: formatChanges(diff.Changes),
 				Metadata: map[string]any{
 					model.MetadataWorkspaceOperation:    "diff",
 					model.MetadataWorkspaceBaseID:       diff.BaseID,
 					model.MetadataWorkspaceCheckpointID: diff.BaseID,
-					model.MetadataWorkspaceChanges:      len(diff.Changes),
-					model.MetadataWorkspacePaths:        changePaths(diff.Changes),
+					model.MetadataWorkspaceChanges:      summary.Files,
+					model.MetadataWorkspaceAdded:        summary.Added,
+					model.MetadataWorkspaceModified:     summary.Modified,
+					model.MetadataWorkspaceDeleted:      summary.Deleted,
+					model.MetadataWorkspaceByteDelta:    summary.ByteDelta,
+					model.MetadataWorkspacePaths:        summary.Paths,
 				},
 			}, nil
 		},
@@ -404,7 +454,7 @@ func patchOperations(input []patchOperationInput) ([]workspace.PatchOperation, e
 	return out, nil
 }
 
-func applyPatchInput(ctx context.Context, store Patcher, input patchInput) (workspace.PatchResult, error) {
+func applyPatchInput(ctx context.Context, store Patcher, use model.ToolUse, input patchInput, reviewer PatchReviewer) (workspace.PatchResult, error) {
 	hasOperations := len(input.Operations) > 0
 	hasUnifiedDiff := strings.TrimSpace(input.UnifiedDiff) != ""
 	switch {
@@ -415,7 +465,21 @@ func applyPatchInput(ctx context.Context, store Patcher, input patchInput) (work
 		if !ok {
 			return workspace.PatchResult{}, fmt.Errorf("workspacetools: store does not support unified diff patches")
 		}
-		return unified.ApplyUnifiedDiff(ctx, input.UnifiedDiff, workspace.PatchOptions{DryRun: input.DryRun})
+		if input.DryRun || reviewer == nil {
+			result, err := unified.ApplyUnifiedDiff(ctx, input.UnifiedDiff, workspace.PatchOptions{DryRun: input.DryRun})
+			if err != nil || reviewer == nil {
+				return result, err
+			}
+			return reviewPatch(ctx, reviewer, use, result, input.DryRun)
+		}
+		preview, err := unified.ApplyUnifiedDiff(ctx, input.UnifiedDiff, workspace.PatchOptions{DryRun: true})
+		if err != nil {
+			return workspace.PatchResult{}, err
+		}
+		if _, err := reviewPatch(ctx, reviewer, use, preview, input.DryRun); err != nil {
+			return workspace.PatchResult{}, err
+		}
+		return unified.ApplyUnifiedDiff(ctx, input.UnifiedDiff, workspace.PatchOptions{})
 	default:
 		ops, err := patchOperations(input.Operations)
 		if err != nil {
@@ -426,10 +490,53 @@ func applyPatchInput(ctx context.Context, store Patcher, input patchInput) (work
 			if !ok {
 				return workspace.PatchResult{}, fmt.Errorf("workspacetools: store does not support dry-run structured patches")
 			}
-			return previewer.PreviewPatch(ctx, ops)
+			result, err := previewer.PreviewPatch(ctx, ops)
+			if err != nil || reviewer == nil {
+				return result, err
+			}
+			return reviewPatch(ctx, reviewer, use, result, input.DryRun)
+		}
+		if reviewer != nil {
+			previewer, ok := store.(PatchPreviewer)
+			if !ok {
+				return workspace.PatchResult{}, fmt.Errorf("workspacetools: store does not support reviewed structured patches")
+			}
+			preview, err := previewer.PreviewPatch(ctx, ops)
+			if err != nil {
+				return workspace.PatchResult{}, err
+			}
+			if _, err := reviewPatch(ctx, reviewer, use, preview, input.DryRun); err != nil {
+				return workspace.PatchResult{}, err
+			}
 		}
 		return store.ApplyPatch(ctx, ops)
 	}
+}
+
+func reviewPatch(ctx context.Context, reviewer PatchReviewer, use model.ToolUse, result workspace.PatchResult, dryRun bool) (workspace.PatchResult, error) {
+	use.Input = append([]byte(nil), use.Input...)
+	decision := reviewer.ReviewPatch(ctx, PatchReviewRequest{
+		ToolUse: use,
+		DryRun:  dryRun,
+		Summary: workspace.SummarizeChanges(result.Changes),
+		Changes: append([]workspace.Change(nil), result.Changes...),
+	})
+	if decision.Allow {
+		return result, nil
+	}
+	reason := strings.TrimSpace(decision.Reason)
+	if reason == "" {
+		reason = "workspace patch denied by reviewer"
+	}
+	return workspace.PatchResult{}, fmt.Errorf("workspacetools: %s", reason)
+}
+
+func formatPatchResult(result workspace.PatchResult) string {
+	content := formatChanges(result.Changes)
+	if result.DryRun {
+		return "dry run: " + content
+	}
+	return content
 }
 
 func formatChanges(changes []workspace.Change) string {

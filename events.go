@@ -113,12 +113,17 @@ type SkillEvent struct {
 
 // WorkspaceEvent describes one workspace lifecycle observation derived from
 // tool result metadata. Operation is one of "patch", "diff", "checkpoint", or
-// "restore". Patch and diff events use Paths and Changes; checkpoint and
-// restore events use CheckpointID. Diff events may also set BaseID.
+// "restore". Patch and diff events use Paths, Changes, Added, Modified,
+// Deleted, and ByteDelta; checkpoint and restore events use CheckpointID. Diff
+// events may also set BaseID.
 type WorkspaceEvent struct {
 	Operation    string
 	Paths        []string
 	Changes      int
+	Added        int
+	Modified     int
+	Deleted      int
+	ByteDelta    int
 	CheckpointID string
 	BaseID       string
 }

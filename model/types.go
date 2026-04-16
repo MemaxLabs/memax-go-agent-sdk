@@ -101,6 +101,18 @@ const (
 	// MetadataWorkspaceChanges carries the number of file-level changes
 	// reported by a workspace operation.
 	MetadataWorkspaceChanges = "workspace_changes"
+	// MetadataWorkspaceAdded carries the number of added files in a workspace
+	// patch or diff summary.
+	MetadataWorkspaceAdded = "workspace_added"
+	// MetadataWorkspaceModified carries the number of modified files in a
+	// workspace patch or diff summary.
+	MetadataWorkspaceModified = "workspace_modified"
+	// MetadataWorkspaceDeleted carries the number of deleted files in a
+	// workspace patch or diff summary.
+	MetadataWorkspaceDeleted = "workspace_deleted"
+	// MetadataWorkspaceByteDelta carries the net byte delta for a workspace
+	// patch or diff summary.
+	MetadataWorkspaceByteDelta = "workspace_byte_delta"
 	// MetadataWorkspaceCheckpointID carries the checkpoint ID created, diffed,
 	// or restored by a workspace operation.
 	MetadataWorkspaceCheckpointID = "workspace_checkpoint_id"

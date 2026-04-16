@@ -223,7 +223,8 @@ patches, snapshots, restore, reviewable mutations, and sandbox boundaries.
 - Optional `workspace` package with virtual filesystem interfaces.
 - Patch/diff primitives separate from OS filesystem assumptions, including
   guarded structured operations, unified diff application, dry-run previews,
-  and actionable conflict diagnostics.
+  actionable conflict diagnostics, compact patch summaries, and optional
+  host review before mutation.
 - Checkpoints can snapshot and restore host-owned workspace state.
 - File tools emit structured metadata for modified paths and checkpoint IDs.
 - CI/server examples use workspace adapters instead of raw OS assumptions.
@@ -233,6 +234,8 @@ patches, snapshots, restore, reviewable mutations, and sandbox boundaries.
 - Edit failure rolls back via checkpoint.
 - Unified diff conflict returns recoverable diagnostics and the model repairs
   the patch.
+- Reviewed patch denial prevents mutation and gives the model a recoverable
+  tool error.
 - Workspace diff is available after a run.
 - Read-only policies prevent mutation.
 - Symlink/path containment tests cover OS-backed adapters.

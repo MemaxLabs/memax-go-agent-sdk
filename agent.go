@@ -1636,6 +1636,10 @@ func emitWorkspaceToolEvent(ctx context.Context, emit func(Event) bool, opts Opt
 		Operation:    operation,
 		Paths:        metadataStrings(result.Metadata, model.MetadataWorkspacePaths),
 		Changes:      metadatavalues.Int(result.Metadata, model.MetadataWorkspaceChanges),
+		Added:        metadatavalues.Int(result.Metadata, model.MetadataWorkspaceAdded),
+		Modified:     metadatavalues.Int(result.Metadata, model.MetadataWorkspaceModified),
+		Deleted:      metadatavalues.Int(result.Metadata, model.MetadataWorkspaceDeleted),
+		ByteDelta:    metadatavalues.Int(result.Metadata, model.MetadataWorkspaceByteDelta),
 		CheckpointID: metadatavalues.String(result.Metadata, model.MetadataWorkspaceCheckpointID),
 		BaseID:       metadatavalues.String(result.Metadata, model.MetadataWorkspaceBaseID),
 	}
@@ -1666,6 +1670,10 @@ func emitWorkspaceToolEvent(ctx context.Context, emit func(Event) bool, opts Opt
 		telemetry.String("memax.session_id", sessionID),
 		telemetry.Int("memax.turn", turn),
 		telemetry.Int("memax.workspace.changes", workspaceEvent.Changes),
+		telemetry.Int("memax.workspace.added", workspaceEvent.Added),
+		telemetry.Int("memax.workspace.modified", workspaceEvent.Modified),
+		telemetry.Int("memax.workspace.deleted", workspaceEvent.Deleted),
+		telemetry.Int("memax.workspace.byte_delta", workspaceEvent.ByteDelta),
 		telemetry.String("memax.workspace.checkpoint_id", workspaceEvent.CheckpointID),
 	)
 	return true

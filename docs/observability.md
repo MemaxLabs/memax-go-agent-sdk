@@ -79,7 +79,9 @@ Handler failures are non-terminal and are surfaced as
 Workspace events are derived from tool-result metadata rather than direct core
 imports of the `workspace` package. This keeps the core provider- and
 workspace-neutral while giving hosts first-class audit events for patch, diff,
-checkpoint, and restore operations.
+checkpoint, and restore operations. Patch and diff events include compact
+summary fields for total changes, added files, modified files, deleted files,
+byte delta, and affected paths.
 
 ## Metrics And Spans
 

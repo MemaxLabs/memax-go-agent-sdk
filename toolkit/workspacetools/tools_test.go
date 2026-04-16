@@ -33,6 +33,9 @@ func TestWorkspaceToolsPatchDiffAndRestore(t *testing.T) {
 	if patch.Metadata[model.MetadataWorkspaceOperation] != "patch" || patch.Metadata[model.MetadataWorkspaceChanges] != 2 {
 		t.Fatalf("patch metadata = %#v, want workspace patch metadata", patch.Metadata)
 	}
+	if patch.Metadata[model.MetadataWorkspaceAdded] != 1 || patch.Metadata[model.MetadataWorkspaceModified] != 1 {
+		t.Fatalf("patch summary metadata = %#v, want add and modify counts", patch.Metadata)
+	}
 
 	diff := mustRun(t, registry, model.ToolUse{ID: "diff-1", Name: DiffToolName, Input: json.RawMessage(`{}`)})
 	if !strings.Contains(diff.Content, "modified README.md") || !strings.Contains(diff.Content, "added docs/new.md") {
@@ -40,6 +43,9 @@ func TestWorkspaceToolsPatchDiffAndRestore(t *testing.T) {
 	}
 	if diff.Metadata[model.MetadataWorkspaceOperation] != "diff" || diff.Metadata[model.MetadataWorkspaceBaseID] != "checkpoint-0" {
 		t.Fatalf("diff metadata = %#v, want workspace diff metadata", diff.Metadata)
+	}
+	if diff.Metadata[model.MetadataWorkspaceAdded] != 1 || diff.Metadata[model.MetadataWorkspaceModified] != 1 {
+		t.Fatalf("diff summary metadata = %#v, want add and modify counts", diff.Metadata)
 	}
 
 	cp := mustRun(t, registry, model.ToolUse{ID: "cp-1", Name: CheckpointToolName, Input: json.RawMessage(`{"label":"after patch"}`)})
@@ -141,6 +147,65 @@ func TestApplyPatchToolRejectsMultiplePatchFormats(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "exactly one") {
 		t.Fatalf("Execute error = %v, want one-format validation", err)
+	}
+}
+
+func TestApplyPatchToolReviewerDeniesWithoutMutation(t *testing.T) {
+	store := workspace.NewMemoryStore(map[string]string{"README.md": "hello"})
+	var got PatchReviewRequest
+	reviewer := PatchReviewerFunc(func(_ context.Context, req PatchReviewRequest) PatchReviewDecision {
+		got = req
+		return PatchReviewDecision{Allow: false, Reason: "README edits need approval"}
+	})
+	result, err := NewApplyPatchToolWithReview(store, reviewer).Execute(context.Background(), tool.Call{
+		Use: model.ToolUse{
+			ID:    "patch-1",
+			Name:  ApplyPatchToolName,
+			Input: json.RawMessage(`{"operations":[{"path":"README.md","old_content":"hello","new_content":"changed"}]}`),
+		},
+	})
+	if err == nil {
+		t.Fatalf("Execute returned nil error with result %#v, want reviewer denial", result)
+	}
+	if !strings.Contains(err.Error(), "README edits need approval") {
+		t.Fatalf("Execute error = %v, want reviewer reason", err)
+	}
+	if got.ToolUse.ID != "patch-1" || got.DryRun || got.Summary.Modified != 1 || got.Summary.Files != 1 {
+		t.Fatalf("review request = %#v, want mutation preview summary", got)
+	}
+	content, readErr := store.ReadFile(context.Background(), "README.md")
+	if readErr != nil {
+		t.Fatalf("ReadFile returned error: %v", readErr)
+	}
+	if content != "hello" {
+		t.Fatalf("content = %q, want reviewer denial to leave file unchanged", content)
+	}
+}
+
+func TestApplyPatchToolReviewerObservesDryRun(t *testing.T) {
+	store := workspace.NewMemoryStore(map[string]string{"README.md": "hello"})
+	var got PatchReviewRequest
+	reviewer := PatchReviewerFunc(func(_ context.Context, req PatchReviewRequest) PatchReviewDecision {
+		got = req
+		return PatchReviewDecision{Allow: true}
+	})
+	result := mustExecute(t, NewApplyPatchToolWithReview(store, reviewer), model.ToolUse{
+		ID:    "patch-1",
+		Name:  ApplyPatchToolName,
+		Input: json.RawMessage(`{"dry_run":true,"operations":[{"path":"README.md","old_content":"hello","new_content":"changed"}]}`),
+	})
+	if !strings.HasPrefix(result.Content, "dry run:") || result.Metadata["dry_run"] != true {
+		t.Fatalf("result = %#v, want dry-run preview", result)
+	}
+	if !got.DryRun || got.Summary.Modified != 1 {
+		t.Fatalf("review request = %#v, want dry-run review summary", got)
+	}
+	content, err := store.ReadFile(context.Background(), "README.md")
+	if err != nil {
+		t.Fatalf("ReadFile returned error: %v", err)
+	}
+	if content != "hello" {
+		t.Fatalf("content = %q, want dry-run to leave file unchanged", content)
 	}
 }
 

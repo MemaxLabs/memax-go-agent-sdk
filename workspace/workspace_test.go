@@ -126,6 +126,23 @@ func TestMemoryStoreUnifiedDiffDryRunDoesNotMutate(t *testing.T) {
 	}
 }
 
+func TestSummarizeChangesCountsPatchShape(t *testing.T) {
+	summary := SummarizeChanges([]Change{
+		{Path: "new.txt", Kind: ChangeAdded, After: "abc"},
+		{Path: "edit.txt", Kind: ChangeModified, Before: "old", After: "newer"},
+		{Path: "old.txt", Kind: ChangeDeleted, Before: "gone"},
+	})
+	if summary.Files != 3 || summary.Added != 1 || summary.Modified != 1 || summary.Deleted != 1 {
+		t.Fatalf("summary counts = %#v, want one add/modify/delete", summary)
+	}
+	if summary.BytesBefore != 7 || summary.BytesAfter != 8 || summary.ByteDelta != 1 {
+		t.Fatalf("summary bytes = %#v, want byte delta", summary)
+	}
+	if strings.Join(summary.Paths, ",") != "new.txt,edit.txt,old.txt" {
+		t.Fatalf("summary paths = %#v, want input order", summary.Paths)
+	}
+}
+
 func TestMemoryStoreUnifiedDiffConflictIncludesContextAndIsAtomic(t *testing.T) {
 	store := NewMemoryStore(map[string]string{
 		"README.md": "hello\nactual\nfooter",

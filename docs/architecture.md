@@ -146,9 +146,11 @@ implement the full mutation surface.
 Workspace paths use forward-slash, workspace-relative syntax at the SDK
 boundary. `workspace.Change` carries full before/after content for precise
 host-side review; large production backends should cap content, return handles,
-or provide summarized model-facing diffs when appropriate. Workspace tools mark
-results with provider-neutral metadata so the agent loop can emit first-class
-workspace events without importing the workspace package into core.
+or provide summarized model-facing diffs when appropriate. `workspace.PatchSummary`
+provides compact added/modified/deleted counts, byte deltas, and affected paths
+for events, telemetry, dry-run previews, and host approval prompts. Workspace
+tools mark results with provider-neutral metadata so the agent loop can emit
+first-class workspace events without importing the workspace package into core.
 
 The optional `toolkit/checkpointtools` package provides `create_checkpoint`, `list_checkpoints`, `restore_checkpoint`, and `delete_checkpoint` over the `checkpoint.Manager` interface. The SDK's in-memory manager stores checkpoint metadata and is useful for tests; production managers should connect these operations to a virtual workspace, filesystem snapshot service, database branch, or remote sandbox. Checkpoints are not stored inside session transcripts, but checkpoint records carry session and parent-session IDs for correlation.
 
