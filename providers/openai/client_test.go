@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -398,5 +399,24 @@ func TestClientMapsToolResultsToFunctionOutputs(t *testing.T) {
 	}
 	if body.Input[1]["type"] != "function_call_output" || body.Input[1]["output"] != "contents" {
 		t.Fatalf("function output item = %#v", body.Input[1])
+	}
+}
+
+func TestClientDoesNotSerializeMessageMetadata(t *testing.T) {
+	body := (&Client{Model: "test"}).requestBody(model.Request{
+		Messages: []model.Message{
+			{
+				Role:     model.RoleUser,
+				Content:  []model.ContentBlock{{Type: model.ContentText, Text: "hello"}},
+				Metadata: map[string]any{"context_summary": true},
+			},
+		},
+	})
+	data, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("Marshal returned error: %v", err)
+	}
+	if strings.Contains(string(data), "context_summary") || strings.Contains(string(data), "metadata") {
+		t.Fatalf("metadata leaked into provider payload: %s", data)
 	}
 }

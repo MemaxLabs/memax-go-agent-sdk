@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -425,5 +426,24 @@ func TestClientMergesConsecutiveToolResults(t *testing.T) {
 	}
 	if toolResults.Content[0]["tool_use_id"] != "toolu_1" || toolResults.Content[1]["tool_use_id"] != "toolu_2" {
 		t.Fatalf("tool result content = %#v", toolResults.Content)
+	}
+}
+
+func TestClientDoesNotSerializeMessageMetadata(t *testing.T) {
+	body := (&Client{Model: "test"}).requestBody(model.Request{
+		Messages: []model.Message{
+			{
+				Role:     model.RoleUser,
+				Content:  []model.ContentBlock{{Type: model.ContentText, Text: "hello"}},
+				Metadata: map[string]any{"context_summary": true},
+			},
+		},
+	})
+	data, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("Marshal returned error: %v", err)
+	}
+	if strings.Contains(string(data), "context_summary") || strings.Contains(string(data), "metadata") {
+		t.Fatalf("metadata leaked into provider payload: %s", data)
 	}
 }

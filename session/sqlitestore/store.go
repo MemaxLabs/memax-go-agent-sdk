@@ -231,9 +231,7 @@ func forkMessages(messages []model.Message, throughMessageID string) ([]model.Me
 			return nil, fmt.Errorf("message not found: %s", throughMessageID)
 		}
 	}
-	out := make([]model.Message, limit)
-	copy(out, messages[:limit])
-	return out, nil
+	return model.CloneMessages(messages[:limit]), nil
 }
 
 func newID() (string, error) {

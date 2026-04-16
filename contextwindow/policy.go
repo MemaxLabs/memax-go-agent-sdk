@@ -51,9 +51,13 @@ type CompactionRecord struct {
 	OriginalMessages   int
 	SentMessages       int
 	SummarizedMessages int
-	RetainedMessages   int
-	ReplacedSummaries  int
-	SummaryHash        string
+	// RetainedMessages is the number of messages prepended by a retention
+	// wrapper after the inner policy ran, not the total number of important
+	// messages present in the final prompt.
+	RetainedMessages  int
+	ReplacedSummaries int
+	SummaryHash       string
+	SummaryPreview    string
 }
 
 type RecentMessages struct {
@@ -65,10 +69,10 @@ func (p RecentMessages) Apply(_ context.Context, messages []model.Message) ([]mo
 		return nil, fmt.Errorf("contextwindow: MaxMessages must be positive")
 	}
 	if len(messages) <= p.MaxMessages {
-		return cloneMessages(messages), nil
+		return model.CloneMessages(messages), nil
 	}
 	start := dropLeadingToolResults(messages, len(messages)-p.MaxMessages)
-	return cloneMessages(messages[start:]), nil
+	return model.CloneMessages(messages[start:]), nil
 }
 
 type Estimator func(model.Message) int
@@ -91,7 +95,7 @@ func (p TokenBudget) Apply(_ context.Context, messages []model.Message) ([]model
 	if err != nil {
 		return nil, err
 	}
-	return cloneMessages(messages[start:]), nil
+	return model.CloneMessages(messages[start:]), nil
 }
 
 // PreserveImportant wraps another policy and prepends explicitly retained
@@ -120,7 +124,7 @@ func (p PreserveImportant) Apply(ctx context.Context, messages []model.Message) 
 }
 
 func (p PreserveImportant) ApplyWithResult(ctx context.Context, messages []model.Message) (PolicyResult, error) {
-	selected := cloneMessages(messages)
+	selected := model.CloneMessages(messages)
 	var record *CompactionRecord
 	var err error
 	if p.Policy != nil {
@@ -151,26 +155,26 @@ func (p PreserveImportant) ApplyWithResult(ctx context.Context, messages []model
 // input.
 func PreserveImportantMessages(original, selected []model.Message, maxMessages int) []model.Message {
 	if len(original) == 0 {
-		return cloneMessages(selected)
+		return model.CloneMessages(selected)
 	}
 	if maxMessages == 0 {
 		maxMessages = 8
 	}
 	if maxMessages < 0 {
-		return cloneMessages(selected)
+		return model.CloneMessages(selected)
 	}
 	groups := importantGroups(original, maxMessages)
 	if len(groups) == 0 {
-		return cloneMessages(selected)
+		return model.CloneMessages(selected)
 	}
 	out := make([]model.Message, 0, len(selected)+maxMessages)
 	for _, group := range groups {
 		if messageGroupContained(group, selected) {
 			continue
 		}
-		out = append(out, cloneMessages(group)...)
+		out = append(out, model.CloneMessages(group)...)
 	}
-	out = append(out, cloneMessages(selected)...)
+	out = append(out, model.CloneMessages(selected)...)
 	return out
 }
 
@@ -219,7 +223,7 @@ func (p SummarizingBudget) ApplyWithResult(ctx context.Context, messages []model
 		return PolicyResult{}, err
 	}
 	if total <= p.MaxTokens {
-		return PolicyResult{Messages: cloneMessages(messages)}, nil
+		return PolicyResult{Messages: model.CloneMessages(messages)}, nil
 	}
 	if p.Summarizer == nil {
 		return PolicyResult{}, fmt.Errorf("contextwindow: Summarizer is required")
@@ -234,9 +238,10 @@ func (p SummarizingBudget) ApplyWithResult(ctx context.Context, messages []model
 	if err != nil {
 		return PolicyResult{}, err
 	}
-	prefix := cloneMessages(messages[:start])
 	replacedSummaries := countSummaryMessages(messages)
-	recent := removeSummaryMessages(cloneMessages(messages[start:]))
+	recent, recentSummaries := splitSummaryMessages(messages[start:])
+	prefix := model.CloneMessages(messages[:start])
+	prefix = append(prefix, recentSummaries...)
 	summary, err := p.Summarizer.Summarize(ctx, prefix)
 	if err != nil {
 		return PolicyResult{}, fmt.Errorf("contextwindow: summarize compacted messages: %w", err)
@@ -257,6 +262,7 @@ func (p SummarizingBudget) ApplyWithResult(ctx context.Context, messages []model
 		SummarizedMessages: len(prefix),
 		ReplacedSummaries:  replacedSummaries,
 		SummaryHash:        metadataString(summaryMessage.Metadata, MetadataContextSummaryHash),
+		SummaryPreview:     previewText(summaryMessage.PlainText(), 200),
 	}
 	return PolicyResult{Messages: out, Compaction: record}, nil
 }
@@ -310,7 +316,7 @@ func (p SummarizingBudget) summaryMessage(summary string, maxTokens int, estimat
 	if err != nil {
 		return model.Message{}, err
 	}
-	msg.Metadata = cloneMetadata(msg.Metadata)
+	msg.Metadata = model.CloneMetadata(msg.Metadata)
 	msg.Metadata[MetadataContextSummaryHash] = hashText(msg.PlainText())
 	return msg, nil
 }
@@ -391,18 +397,17 @@ func countSummaryMessages(messages []model.Message) int {
 	return count
 }
 
-func removeSummaryMessages(messages []model.Message) []model.Message {
-	if len(messages) == 0 {
-		return nil
-	}
-	out := messages[:0]
+func splitSummaryMessages(messages []model.Message) ([]model.Message, []model.Message) {
+	var kept []model.Message
+	var summaries []model.Message
 	for _, msg := range messages {
 		if IsSummaryMessage(msg) {
+			summaries = append(summaries, model.CloneMessage(msg))
 			continue
 		}
-		out = append(out, msg)
+		kept = append(kept, model.CloneMessage(msg))
 	}
-	return out
+	return kept, summaries
 }
 
 func importantGroups(messages []model.Message, maxMessages int) [][]model.Message {
@@ -445,7 +450,7 @@ func importantGroups(messages []model.Message, maxMessages int) [][]model.Messag
 
 	out := make([][]model.Message, 0, len(selected))
 	for _, g := range selected {
-		out = append(out, cloneMessages(messages[g.start:g.end]))
+		out = append(out, model.CloneMessages(messages[g.start:g.end]))
 	}
 	return out
 }
@@ -551,25 +556,6 @@ func metadataBool(metadata map[string]any, key string) bool {
 	return value
 }
 
-func cloneMessages(messages []model.Message) []model.Message {
-	out := make([]model.Message, len(messages))
-	for i, msg := range messages {
-		out[i] = cloneMessage(msg)
-	}
-	return out
-}
-
-func cloneMessage(msg model.Message) model.Message {
-	msg.Content = cloneBlocks(msg.Content)
-	msg.Metadata = cloneMetadata(msg.Metadata)
-	if msg.ToolResult != nil {
-		result := *msg.ToolResult
-		result.Metadata = cloneMetadata(result.Metadata)
-		msg.ToolResult = &result
-	}
-	return msg
-}
-
 func truncateTextMessage(msg model.Message, maxTokens int, estimate Estimator) (model.Message, error) {
 	if len(msg.Content) == 0 {
 		return msg, nil
@@ -581,7 +567,7 @@ func truncateTextMessage(msg model.Message, maxTokens int, estimate Estimator) (
 	for low <= high {
 		mid := low + (high-low)/2
 		candidate := msg
-		candidate.Content = cloneBlocks(msg.Content)
+		candidate.Content = model.CloneContentBlocks(msg.Content)
 		candidate.Content[0].Text = string(runes[:mid])
 		count := estimate(candidate)
 		if count < 0 {
@@ -597,7 +583,7 @@ func truncateTextMessage(msg model.Message, maxTokens int, estimate Estimator) (
 	if best < 0 {
 		return model.Message{}, fmt.Errorf("contextwindow: summary cannot fit budget")
 	}
-	msg.Content = cloneBlocks(msg.Content)
+	msg.Content = model.CloneContentBlocks(msg.Content)
 	msg.Content[0].Text = string(runes[:best])
 	if strings.TrimSpace(msg.Content[0].Text) == "" {
 		return model.Message{}, fmt.Errorf("contextwindow: summary cannot fit budget")
@@ -605,31 +591,19 @@ func truncateTextMessage(msg model.Message, maxTokens int, estimate Estimator) (
 	return msg, nil
 }
 
-func cloneBlocks(blocks []model.ContentBlock) []model.ContentBlock {
-	out := make([]model.ContentBlock, len(blocks))
-	for i, block := range blocks {
-		out[i] = block
-		if block.ToolUse != nil {
-			use := *block.ToolUse
-			use.Input = append([]byte(nil), block.ToolUse.Input...)
-			out[i].ToolUse = &use
-		}
-	}
-	return out
-}
-
-func cloneMetadata(metadata map[string]any) map[string]any {
-	if metadata == nil {
-		return nil
-	}
-	out := make(map[string]any, len(metadata))
-	for key, value := range metadata {
-		out[key] = value
-	}
-	return out
-}
-
 func hashText(text string) string {
 	sum := sha256.Sum256([]byte(text))
 	return hex.EncodeToString(sum[:])
+}
+
+func previewText(text string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return ""
+	}
+	text = strings.TrimSpace(text)
+	runes := []rune(text)
+	if len(runes) <= maxRunes {
+		return text
+	}
+	return string(runes[:maxRunes])
 }

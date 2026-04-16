@@ -71,6 +71,8 @@ system prompt.
 - Add context compaction provenance. Initial `contextwindow.PolicyWithResult`,
   `contextwindow.CompactionRecord`, summary metadata, summary replacement, and
   `EventContextCompacted` support exist for inspectable compaction behavior.
+  Compaction records include stable counts, summary hashes, and bounded summary
+  previews.
 
 ## Phase 6: Ecosystem and Hardening
 

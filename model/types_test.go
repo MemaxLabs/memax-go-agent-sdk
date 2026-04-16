@@ -33,6 +33,60 @@ func TestToolSpecMaxResultBytesIsNotModelFacing(t *testing.T) {
 	}
 }
 
+func TestMessageMetadataIsJSONSerializedForSessionStores(t *testing.T) {
+	msg := Message{
+		Role:     RoleUser,
+		Content:  []ContentBlock{{Type: ContentText, Text: "hello"}},
+		Metadata: map[string]any{"context_summary": true},
+	}
+	data, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatalf("Marshal returned error: %v", err)
+	}
+	if !strings.Contains(string(data), "metadata") || !strings.Contains(string(data), "context_summary") {
+		t.Fatalf("metadata missing from JSON: %s", data)
+	}
+	var got Message
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("Unmarshal returned error: %v", err)
+	}
+	if got.Metadata["context_summary"] != true {
+		t.Fatalf("metadata = %#v, want context_summary true", got.Metadata)
+	}
+}
+
+func TestCloneMessagesReturnsDeepCopy(t *testing.T) {
+	messages := []Message{{
+		Role: RoleAssistant,
+		Content: []ContentBlock{{
+			Type:    ContentToolUse,
+			ToolUse: &ToolUse{ID: "tool-1", Name: "read", Input: []byte(`{"path":"README.md"}`)},
+		}},
+		Metadata: map[string]any{"context_summary": true},
+		ToolResult: &ToolResult{
+			ToolUseID: "tool-1",
+			Name:      "read",
+			Content:   "result",
+			Metadata:  map[string]any{"stored_result_id": "result-1"},
+		},
+	}}
+
+	got := CloneMessages(messages)
+	got[0].Content[0].ToolUse.Name = "mutated"
+	got[0].Metadata["context_summary"] = false
+	got[0].ToolResult.Metadata["stored_result_id"] = "mutated"
+
+	if messages[0].Content[0].ToolUse.Name != "read" {
+		t.Fatalf("tool use mutated: %#v", messages[0].Content[0].ToolUse)
+	}
+	if messages[0].Metadata["context_summary"] != true {
+		t.Fatalf("metadata mutated: %#v", messages[0].Metadata)
+	}
+	if messages[0].ToolResult.Metadata["stored_result_id"] != "result-1" {
+		t.Fatalf("tool result metadata mutated: %#v", messages[0].ToolResult.Metadata)
+	}
+}
+
 func TestIsContextWindowExceeded(t *testing.T) {
 	err := fmt.Errorf("stream model: %w", ErrContextWindowExceeded)
 	if !IsContextWindowExceeded(err) {

@@ -293,7 +293,7 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 				shouldStop = true
 				return
 			}
-			durableMessages := cloneMessages(messages)
+			durableMessages := model.CloneMessages(messages)
 			if opts.Context != nil {
 				originalMessages := messages
 				originalCount := len(messages)
@@ -525,7 +525,7 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 					shouldStop = true
 					return
 				}
-				durableMessages = append(durableMessages, cloneMessage(assistant))
+				durableMessages = append(durableMessages, model.CloneMessage(assistant))
 			}
 			if len(uses) == 0 {
 				result := assistant.PlainText()
@@ -945,7 +945,7 @@ func retryContextWindow(ctx context.Context, opts Options, memories *memoryLoade
 
 func applyContextPolicy(ctx context.Context, policy contextwindow.Policy, messages []model.Message) (contextwindow.PolicyResult, error) {
 	if policy == nil {
-		return contextwindow.PolicyResult{Messages: cloneMessages(messages)}, nil
+		return contextwindow.PolicyResult{Messages: model.CloneMessages(messages)}, nil
 	}
 	if richer, ok := policy.(contextwindow.PolicyWithResult); ok {
 		return richer.ApplyWithResult(ctx, messages)
@@ -996,60 +996,11 @@ func handleMemoryCandidates(ctx context.Context, opts Options, sessionID string,
 		SessionID:       sessionID,
 		ParentSessionID: opts.ParentSessionID,
 		Identity:        opts.Identity,
-		Messages:        cloneMessages(messages),
+		Messages:        model.CloneMessages(messages),
 		Plan:            plan,
 		Result:          result,
 		Candidates:      memory.CloneCandidates(candidates),
 	})
-}
-
-func cloneMessages(messages []model.Message) []model.Message {
-	if len(messages) == 0 {
-		return nil
-	}
-	out := make([]model.Message, len(messages))
-	for i, message := range messages {
-		out[i] = cloneMessage(message)
-	}
-	return out
-}
-
-func cloneMessage(message model.Message) model.Message {
-	message.Content = cloneContentBlocks(message.Content)
-	if len(message.Metadata) > 0 {
-		metadata := make(map[string]any, len(message.Metadata))
-		for key, value := range message.Metadata {
-			metadata[key] = value
-		}
-		message.Metadata = metadata
-	}
-	if message.ToolResult != nil {
-		result := *message.ToolResult
-		if len(result.Metadata) > 0 {
-			result.Metadata = make(map[string]any, len(message.ToolResult.Metadata))
-			for key, value := range message.ToolResult.Metadata {
-				result.Metadata[key] = value
-			}
-		}
-		message.ToolResult = &result
-	}
-	return message
-}
-
-func cloneContentBlocks(blocks []model.ContentBlock) []model.ContentBlock {
-	if len(blocks) == 0 {
-		return nil
-	}
-	out := make([]model.ContentBlock, len(blocks))
-	for i, block := range blocks {
-		out[i] = block
-		if block.ToolUse != nil {
-			toolUse := *block.ToolUse
-			toolUse.Input = append([]byte(nil), block.ToolUse.Input...)
-			out[i].ToolUse = &toolUse
-		}
-	}
-	return out
 }
 
 func memoryQuery(messages []model.Message) string {

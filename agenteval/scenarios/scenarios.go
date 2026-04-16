@@ -969,42 +969,9 @@ func (c *contextRetryClient) Requests() []model.Request {
 }
 
 func cloneRequest(req model.Request) model.Request {
-	req.Messages = cloneMessages(req.Messages)
+	req.Messages = model.CloneMessages(req.Messages)
 	req.Tools = cloneToolSpecs(req.Tools)
 	return req
-}
-
-func cloneMessages(messages []model.Message) []model.Message {
-	if len(messages) == 0 {
-		return nil
-	}
-	out := make([]model.Message, len(messages))
-	for i, msg := range messages {
-		out[i] = msg
-		out[i].Content = cloneContentBlocks(msg.Content)
-		if msg.ToolResult != nil {
-			toolResult := *msg.ToolResult
-			toolResult.Metadata = cloneMetadata(toolResult.Metadata)
-			out[i].ToolResult = &toolResult
-		}
-	}
-	return out
-}
-
-func cloneContentBlocks(blocks []model.ContentBlock) []model.ContentBlock {
-	if len(blocks) == 0 {
-		return nil
-	}
-	out := make([]model.ContentBlock, len(blocks))
-	for i, block := range blocks {
-		out[i] = block
-		if block.ToolUse != nil {
-			toolUse := *block.ToolUse
-			toolUse.Input = append([]byte(nil), block.ToolUse.Input...)
-			out[i].ToolUse = &toolUse
-		}
-	}
-	return out
 }
 
 func cloneToolSpecs(specs []model.ToolSpec) []model.ToolSpec {
@@ -1043,15 +1010,4 @@ func cloneSchemaValue(value any) any {
 	default:
 		return typed
 	}
-}
-
-func cloneMetadata(metadata map[string]any) map[string]any {
-	if len(metadata) == 0 {
-		return nil
-	}
-	out := make(map[string]any, len(metadata))
-	for key, value := range metadata {
-		out[key] = value
-	}
-	return out
 }

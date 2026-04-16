@@ -27,8 +27,9 @@ type Message struct {
 	Content    []ContentBlock `json:"content,omitempty"`
 	ToolResult *ToolResult    `json:"tool_result,omitempty"`
 	// Metadata carries SDK-owned message annotations such as context
-	// compaction provenance. Provider adapters must not serialize it unless a
-	// provider has an explicit compatible field.
+	// compaction provenance. Session stores may persist it, but provider
+	// adapters must intentionally omit it from provider request payloads unless
+	// a provider has an explicit compatible field.
 	Metadata map[string]any `json:"metadata,omitempty"`
 }
 
@@ -87,3 +88,60 @@ const (
 	// MetadataLoadedSkill marks a tool result as loaded skill instructions.
 	MetadataLoadedSkill = "loaded_skill"
 )
+
+// CloneMessages returns a deep copy of messages.
+func CloneMessages(messages []Message) []Message {
+	if len(messages) == 0 {
+		return nil
+	}
+	out := make([]Message, len(messages))
+	for i, msg := range messages {
+		out[i] = CloneMessage(msg)
+	}
+	return out
+}
+
+// CloneMessage returns a deep copy of msg.
+func CloneMessage(msg Message) Message {
+	if len(msg.Content) > 0 {
+		msg.Content = CloneContentBlocks(msg.Content)
+	}
+	if len(msg.Metadata) > 0 {
+		msg.Metadata = CloneMetadata(msg.Metadata)
+	}
+	if msg.ToolResult != nil {
+		result := *msg.ToolResult
+		result.Metadata = CloneMetadata(result.Metadata)
+		msg.ToolResult = &result
+	}
+	return msg
+}
+
+// CloneContentBlocks returns a deep copy of content blocks.
+func CloneContentBlocks(blocks []ContentBlock) []ContentBlock {
+	if len(blocks) == 0 {
+		return nil
+	}
+	out := make([]ContentBlock, len(blocks))
+	for i, block := range blocks {
+		out[i] = block
+		if block.ToolUse != nil {
+			use := *block.ToolUse
+			use.Input = append([]byte(nil), block.ToolUse.Input...)
+			out[i].ToolUse = &use
+		}
+	}
+	return out
+}
+
+// CloneMetadata returns a shallow copy of metadata values.
+func CloneMetadata(metadata map[string]any) map[string]any {
+	if len(metadata) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(metadata))
+	for key, value := range metadata {
+		out[key] = value
+	}
+	return out
+}

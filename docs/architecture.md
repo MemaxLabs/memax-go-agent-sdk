@@ -329,10 +329,11 @@ Context-window policies transform session messages before each model request wit
 Policies can optionally implement `contextwindow.PolicyWithResult` to return
 structured provenance with the transformed messages. `SummarizingBudget` emits a
 `CompactionRecord` with before/after message counts, summarized-message count,
-replaced-summary count, and a summary hash. The agent surfaces that record as
-`EventContextCompacted` and records context compaction metrics. Summary messages
-carry SDK-only metadata and provider adapters intentionally omit that metadata
-from wire requests.
+replaced-summary count, a summary hash, and a short summary preview. The agent
+surfaces that record as `EventContextCompacted` and records context compaction
+metrics. Summary messages carry SDK-owned metadata that session stores may
+persist for resume/debugging, while provider adapters intentionally omit that
+metadata from wire requests.
 
 `SummarizingBudget` marks its synthetic summary messages and replaces prior
 active SDK summaries on subsequent compactions. This keeps the model-visible
