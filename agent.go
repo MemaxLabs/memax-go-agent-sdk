@@ -501,8 +501,22 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 				telemetry.Int("memax.model.assistant_blocks", len(assistant.Content)),
 			)
 			if err != nil {
+				if len(uses) > 0 && len(assistant.Content) > 0 {
+					if appendErr := opts.Sessions.Append(turnCtx, sessionID, assistant); appendErr != nil {
+						appendErr = fmt.Errorf("append partial assistant message after stream error: %w", appendErr)
+						modelSpan.RecordError(appendErr)
+						modelSpan.End()
+						turnSpan.RecordError(appendErr)
+						emitError(turnCtx, emit, sessionID, turn, appendErr)
+						_ = finish(turn, hook.StopReasonError, appendErr)
+						shouldStop = true
+						return
+					}
+				}
 				cancelEarlyTools()
-				if !emitCanceledEarlyToolResults(turnCtx, emit, sessionID, turn, uses, earlyResults, err) {
+				if cleanupErr := emitCanceledEarlyToolResults(turnCtx, emit, opts.Sessions, sessionID, turn, uses, earlyResults, err); cleanupErr != nil {
+					turnSpan.RecordError(cleanupErr)
+					emitError(turnCtx, emit, sessionID, turn, cleanupErr)
 					modelSpan.End()
 					shouldStop = true
 					return
@@ -1067,14 +1081,15 @@ func bufferedToolResults(results <-chan model.ToolResult) <-chan model.ToolResul
 func emitCanceledEarlyToolResults(
 	ctx context.Context,
 	emit func(Event) bool,
+	store session.Store,
 	sessionID string,
 	turn int,
 	uses []model.ToolUse,
 	earlyResults map[int]<-chan model.ToolResult,
 	reason error,
-) bool {
+) error {
 	if len(earlyResults) == 0 {
-		return true
+		return nil
 	}
 	indices := make([]int, 0, len(earlyResults))
 	for index := range earlyResults {
@@ -1090,7 +1105,7 @@ func emitCanceledEarlyToolResults(
 		result := model.ToolResult{
 			ToolUseID: use.ID,
 			Name:      use.Name,
-			Content:   fmt.Sprintf("tool execution canceled because model streaming stopped: %v", reason),
+			Content:   "tool execution canceled because model streaming stopped",
 			IsError:   true,
 			Metadata: map[string]any{
 				"streaming_status": "canceled",
@@ -1102,20 +1117,34 @@ func emitCanceledEarlyToolResults(
 			if ok {
 				result = actual
 			}
-		default:
+		case <-time.After(10 * time.Millisecond):
 		}
 		event := newEvent(EventToolResult, sessionID, turn)
 		event.ToolResult = &result
 		if !emit(event) {
-			return false
+			return ctx.Err()
+		}
+		if store != nil {
+			if err := store.Append(ctx, sessionID, model.Message{
+				Role: model.RoleTool,
+				ToolResult: &model.ToolResult{
+					ToolUseID: result.ToolUseID,
+					Name:      result.Name,
+					Content:   result.Content,
+					IsError:   result.IsError,
+					Metadata:  result.Metadata,
+				},
+			}); err != nil {
+				return fmt.Errorf("append canceled early tool result: %w", err)
+			}
 		}
 		select {
 		case <-ctx.Done():
-			return false
+			return ctx.Err()
 		default:
 		}
 	}
-	return true
+	return nil
 }
 
 func memoryQuery(messages []model.Message) string {
@@ -1279,6 +1308,10 @@ func emitContextCompacted(
 	return true
 }
 
+// collectAssistant consumes a provider stream and returns the assistant message
+// plus any complete tool uses. On receive or emit errors it returns the partial
+// assistant state accumulated so far so callers can preserve tool-use/result
+// pairing and clean up any early-started tool executions.
 func collectAssistant(
 	ctx context.Context,
 	emit func(Event) bool,

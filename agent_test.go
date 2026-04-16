@@ -157,6 +157,7 @@ func TestQueryCancelsEarlyToolAndEmitsToolResultWhenStreamFails(t *testing.T) {
 			return model.ToolResult{Content: "observed cancel", IsError: true}, nil
 		},
 	})
+	store := session.NewMemoryStore()
 	events, err := Query(context.Background(), "lookup before stream failure", Options{
 		Model: &streamErrorModel{
 			started: started,
@@ -172,7 +173,8 @@ func TestQueryCancelsEarlyToolAndEmitsToolResultWhenStreamFails(t *testing.T) {
 			},
 			err: errors.New("stream exploded"),
 		},
-		Tools: registry,
+		Tools:    registry,
+		Sessions: store,
 	})
 	if err != nil {
 		t.Fatalf("Query returned error: %v", err)
@@ -201,6 +203,29 @@ func TestQueryCancelsEarlyToolAndEmitsToolResultWhenStreamFails(t *testing.T) {
 	}
 	if !strings.Contains(toolResult.Content, "model streaming stopped") {
 		t.Fatalf("tool result content = %q, want streaming cancellation reason", toolResult.Content)
+	}
+	sessions, err := store.List(context.Background())
+	if err != nil {
+		t.Fatalf("List returned error: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("sessions = %d, want 1", len(sessions))
+	}
+	messages, err := store.Messages(context.Background(), sessions[0].ID)
+	if err != nil {
+		t.Fatalf("Messages returned error: %v", err)
+	}
+	if len(messages) < 3 {
+		t.Fatalf("messages = %#v, want user, assistant, canceled tool result", messages)
+	}
+	if messages[1].Role != model.RoleAssistant || len(messages[1].Content) != 1 || messages[1].Content[0].ToolUse == nil {
+		t.Fatalf("assistant message = %#v, want persisted tool use", messages[1])
+	}
+	if messages[2].Role != model.RoleTool || messages[2].ToolResult == nil {
+		t.Fatalf("tool result message = %#v, want persisted cancellation result", messages[2])
+	}
+	if messages[2].ToolResult.ToolUseID != "tool-1" || !messages[2].ToolResult.IsError {
+		t.Fatalf("tool result message = %#v, want paired cancellation result", messages[2])
 	}
 	select {
 	case <-cancelled:
