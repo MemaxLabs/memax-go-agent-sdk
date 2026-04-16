@@ -120,3 +120,74 @@ func WorkspacePatchCheckpointRollback() agenteval.Case {
 		},
 	}
 }
+
+// WorkspaceUnifiedDiffRecovery returns a single-use scenario where a unified
+// diff conflicts, the model receives actionable diagnostics, and a corrected
+// diff succeeds on the next turn.
+func WorkspaceUnifiedDiffRecovery() agenteval.Case {
+	store := workspace.NewMemoryStore(map[string]string{
+		"README.md": "hello\nactual\nfooter",
+	})
+	tools, toolsErr := workspacetools.NewTools(store)
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "patch-1",
+				Name: workspacetools.ApplyPatchToolName,
+				Input: json.RawMessage(`{
+					"unified_diff":"--- a/README.md\n+++ b/README.md\n@@ -1,3 +1,3 @@\n hello\n-expected\n+changed\n footer"
+				}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "patch-2",
+				Name: workspacetools.ApplyPatchToolName,
+				Input: json.RawMessage(`{
+					"unified_diff":"--- a/README.md\n+++ b/README.md\n@@ -1,3 +1,3 @@\n hello\n-actual\n+changed\n footer"
+				}`),
+			},
+		}},
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "Unified diff repaired and applied."}},
+	)
+
+	return agenteval.Case{
+		Name:   "workspace_unified_diff_recovery",
+		Prompt: "Patch README.md using a unified diff. Recover if the patch is stale.",
+		Options: memaxagent.Options{
+			Model: modelClient,
+			Tools: tool.NewRegistry(tools...),
+		},
+		Assertions: []agenteval.Assertion{
+			toolConstructionSucceeded(toolsErr),
+			agenteval.ToolUsed(workspacetools.ApplyPatchToolName),
+			agenteval.FinalEquals("Unified diff repaired and applied."),
+			requestCountEquals(modelClient, 3),
+			{
+				Name: "conflict diagnostics guide repair",
+				Check: func(result agenteval.Result) error {
+					results := result.ToolResults()
+					if len(results) < 2 {
+						return fmt.Errorf("tool results = %#v, want conflict and success", results)
+					}
+					if !results[0].IsError || !strings.Contains(results[0].Content, "nearby current content") || !strings.Contains(results[0].Content, "expected") {
+						return fmt.Errorf("first patch result = %#v, want actionable conflict", results[0])
+					}
+					if results[1].IsError || !strings.Contains(results[1].Content, "modified README.md") {
+						return fmt.Errorf("second patch result = %#v, want successful patch", results[1])
+					}
+					content, err := store.ReadFile(context.Background(), "README.md")
+					if err != nil {
+						return err
+					}
+					if content != "hello\nchanged\nfooter" {
+						return fmt.Errorf("README.md = %q, want repaired unified diff applied", content)
+					}
+					return nil
+				},
+			},
+		},
+	}
+}

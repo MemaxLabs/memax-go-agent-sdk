@@ -49,9 +49,16 @@ type PatchOperation struct {
 	NewContent *string
 }
 
+// PatchOptions configures patch application extensions.
+type PatchOptions struct {
+	// DryRun validates and computes changes without mutating workspace state.
+	DryRun bool
+}
+
 // PatchResult describes the changes applied by ApplyPatch.
 type PatchResult struct {
 	Changes []Change
+	DryRun  bool
 }
 
 // Checkpoint is a restorable snapshot of workspace state.
@@ -214,6 +221,35 @@ func (s *MemoryStore) ListFiles(ctx context.Context, prefix string) ([]string, e
 // ApplyPatch applies all operations atomically. If any operation fails its
 // old-content guard or validation, no files are changed.
 func (s *MemoryStore) ApplyPatch(ctx context.Context, ops []PatchOperation) (PatchResult, error) {
+	return s.applyPatch(ctx, ops, PatchOptions{})
+}
+
+// PreviewPatch validates operations and returns the changes they would apply
+// without mutating workspace state.
+func (s *MemoryStore) PreviewPatch(ctx context.Context, ops []PatchOperation) (PatchResult, error) {
+	return s.applyPatch(ctx, ops, PatchOptions{DryRun: true})
+}
+
+// ApplyUnifiedDiff parses and applies a standard unified diff atomically. When
+// opts.DryRun is true, it validates and previews the change without mutating
+// workspace state.
+func (s *MemoryStore) ApplyUnifiedDiff(ctx context.Context, diff string, opts PatchOptions) (PatchResult, error) {
+	if err := contextError(ctx); err != nil {
+		return PatchResult{}, err
+	}
+	if s == nil {
+		return PatchResult{}, fmt.Errorf("workspace: nil MemoryStore")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ops, err := unifiedDiffOperations(diff, s.files)
+	if err != nil {
+		return PatchResult{}, err
+	}
+	return applyPatchToFiles(s.files, ops, opts)
+}
+
+func (s *MemoryStore) applyPatch(ctx context.Context, ops []PatchOperation, opts PatchOptions) (PatchResult, error) {
 	if err := contextError(ctx); err != nil {
 		return PatchResult{}, err
 	}
@@ -225,8 +261,11 @@ func (s *MemoryStore) ApplyPatch(ctx context.Context, ops []PatchOperation) (Pat
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return applyPatchToFiles(s.files, ops, opts)
+}
 
-	next := cloneFiles(s.files)
+func applyPatchToFiles(files map[string]string, ops []PatchOperation, opts PatchOptions) (PatchResult, error) {
+	next := cloneFiles(files)
 	changes := make([]Change, 0, len(ops))
 	for _, op := range ops {
 		name := cleanPath(op.Path)
@@ -239,7 +278,7 @@ func (s *MemoryStore) ApplyPatch(ctx context.Context, ops []PatchOperation) (Pat
 				return PatchResult{}, fmt.Errorf("workspace: patch guard failed for %s: file does not exist", name)
 			}
 			if before != *op.OldContent {
-				return PatchResult{}, fmt.Errorf("workspace: patch guard failed for %s: content mismatch", name)
+				return PatchResult{}, fmt.Errorf("workspace: patch guard failed for %s: content mismatch: %s", name, contentMismatch(before, *op.OldContent))
 			}
 		}
 		if op.NewContent == nil {
@@ -258,8 +297,15 @@ func (s *MemoryStore) ApplyPatch(ctx context.Context, ops []PatchOperation) (Pat
 		next[name] = after
 		changes = append(changes, Change{Path: name, Kind: kind, Before: before, After: after})
 	}
-	s.files = next
-	return PatchResult{Changes: changes}, nil
+	if !opts.DryRun {
+		for name := range files {
+			delete(files, name)
+		}
+		for name, content := range next {
+			files[name] = content
+		}
+	}
+	return PatchResult{Changes: changes, DryRun: opts.DryRun}, nil
 }
 
 // Diff returns changes between a checkpoint and current state. Empty baseID

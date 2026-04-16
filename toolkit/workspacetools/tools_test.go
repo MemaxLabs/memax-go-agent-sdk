@@ -87,12 +87,74 @@ func TestApplyPatchToolRejectsAmbiguousOperation(t *testing.T) {
 	}
 }
 
+func TestApplyPatchToolAppliesUnifiedDiffAndDryRun(t *testing.T) {
+	store := workspace.NewMemoryStore(map[string]string{"README.md": "hello\nworld"})
+	dryRun := mustExecute(t, NewApplyPatchTool(store), model.ToolUse{
+		ID:   "patch-1",
+		Name: ApplyPatchToolName,
+		Input: json.RawMessage(`{
+			"dry_run": true,
+			"unified_diff": "--- a/README.md\n+++ b/README.md\n@@ -1,2 +1,2 @@\n hello\n-world\n+workspace"
+		}`),
+	})
+	if !strings.Contains(dryRun.Content, "modified README.md") || dryRun.Metadata["dry_run"] != true {
+		t.Fatalf("dry-run result = %#v, want preview metadata", dryRun)
+	}
+	content, err := store.ReadFile(context.Background(), "README.md")
+	if err != nil {
+		t.Fatalf("ReadFile returned error: %v", err)
+	}
+	if content != "hello\nworld" {
+		t.Fatalf("content = %q, want dry-run to leave file unchanged", content)
+	}
+
+	applied := mustExecute(t, NewApplyPatchTool(store), model.ToolUse{
+		ID:   "patch-2",
+		Name: ApplyPatchToolName,
+		Input: json.RawMessage(`{
+			"unified_diff": "--- a/README.md\n+++ b/README.md\n@@ -1,2 +1,2 @@\n hello\n-world\n+workspace"
+		}`),
+	})
+	if applied.Metadata[model.MetadataWorkspaceOperation] != "patch" || applied.Metadata[model.MetadataWorkspaceChanges] != 1 {
+		t.Fatalf("applied metadata = %#v, want workspace patch metadata", applied.Metadata)
+	}
+	content, err = store.ReadFile(context.Background(), "README.md")
+	if err != nil {
+		t.Fatalf("ReadFile returned error: %v", err)
+	}
+	if content != "hello\nworkspace" {
+		t.Fatalf("content = %q, want applied unified diff", content)
+	}
+}
+
+func TestApplyPatchToolRejectsMultiplePatchFormats(t *testing.T) {
+	store := workspace.NewMemoryStore(map[string]string{"README.md": "hello"})
+	_, err := NewApplyPatchTool(store).Execute(context.Background(), tool.Call{
+		Use: model.ToolUse{
+			ID:   "patch-1",
+			Name: ApplyPatchToolName,
+			Input: json.RawMessage(`{
+				"operations":[{"path":"README.md","new_content":"changed"}],
+				"unified_diff":"--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-hello\n+changed"
+			}`),
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "exactly one") {
+		t.Fatalf("Execute error = %v, want one-format validation", err)
+	}
+}
+
 func mustRun(t *testing.T, registry *tool.Registry, use model.ToolUse) model.ToolResult {
 	t.Helper()
 	impl, ok := registry.Get(use.Name)
 	if !ok {
 		t.Fatalf("tool %q not registered", use.Name)
 	}
+	return mustExecute(t, impl, use)
+}
+
+func mustExecute(t *testing.T, impl tool.Tool, use model.ToolUse) model.ToolResult {
+	t.Helper()
 	result, err := impl.Execute(context.Background(), tool.Call{Use: use})
 	if err != nil {
 		t.Fatalf("Execute %s returned error: %v", use.Name, err)

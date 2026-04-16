@@ -34,6 +34,18 @@ type Patcher interface {
 	ApplyPatch(context.Context, []workspace.PatchOperation) (workspace.PatchResult, error)
 }
 
+// PatchPreviewer is an optional extension that validates guarded operations
+// without mutating workspace state.
+type PatchPreviewer interface {
+	PreviewPatch(context.Context, []workspace.PatchOperation) (workspace.PatchResult, error)
+}
+
+// UnifiedDiffPatcher is an optional extension for applying standard unified
+// diffs. Stores that do not implement it can still use structured operations.
+type UnifiedDiffPatcher interface {
+	ApplyUnifiedDiff(context.Context, string, workspace.PatchOptions) (workspace.PatchResult, error)
+}
+
 // Differ is the diff capability required by NewDiffTool.
 type Differ interface {
 	Diff(context.Context, string) (workspace.Diff, error)
@@ -129,18 +141,19 @@ func NewListTool(store Lister) tool.Tool {
 }
 
 // NewApplyPatchTool returns a destructive tool for applying guarded atomic
-// workspace patches.
+// workspace patches. The tool accepts either structured operations or a
+// standard unified diff. Dry-run requests require a store that implements
+// PatchPreviewer for structured operations or UnifiedDiffPatcher for diffs.
 func NewApplyPatchTool(store Patcher) tool.Tool {
 	return tool.Definition{
 		ToolSpec: model.ToolSpec{
 			Name:           ApplyPatchToolName,
-			Description:    "Apply guarded file edits to the configured workspace.",
+			Description:    "Apply guarded file edits or a standard unified diff to the configured workspace. Set dry_run to validate and preview without mutating files.",
 			SearchHint:     "apply patch edit write workspace files source code",
 			Destructive:    true,
 			MaxResultBytes: 32 * 1024,
 			InputSchema: map[string]any{
 				"type":                 "object",
-				"required":             []any{"operations"},
 				"additionalProperties": false,
 				"properties": map[string]any{
 					"operations": map[string]any{
@@ -172,6 +185,15 @@ func NewApplyPatchTool(store Patcher) tool.Tool {
 							},
 						},
 					},
+					"unified_diff": map[string]any{
+						"type":        "string",
+						"description": "Standard unified diff with ---/+++ file headers and @@ hunks.",
+						"minLength":   1,
+					},
+					"dry_run": map[string]any{
+						"type":        "boolean",
+						"description": "Validate and preview the patch without mutating workspace state.",
+					},
 				},
 			},
 		},
@@ -180,11 +202,7 @@ func NewApplyPatchTool(store Patcher) tool.Tool {
 			if err != nil {
 				return model.ToolResult{}, err
 			}
-			ops, err := patchOperations(input.Operations)
-			if err != nil {
-				return model.ToolResult{}, err
-			}
-			result, err := store.ApplyPatch(ctx, ops)
+			result, err := applyPatchInput(ctx, store, input)
 			if err != nil {
 				return model.ToolResult{}, err
 			}
@@ -194,6 +212,7 @@ func NewApplyPatchTool(store Patcher) tool.Tool {
 					model.MetadataWorkspaceOperation: "patch",
 					model.MetadataWorkspaceChanges:   len(result.Changes),
 					model.MetadataWorkspacePaths:     changePaths(result.Changes),
+					"dry_run":                        result.DryRun,
 				},
 			}, nil
 		},
@@ -352,7 +371,9 @@ type checkpointInput struct {
 }
 
 type patchInput struct {
-	Operations []patchOperationInput `json:"operations"`
+	Operations  []patchOperationInput `json:"operations"`
+	UnifiedDiff string                `json:"unified_diff"`
+	DryRun      bool                  `json:"dry_run"`
 }
 
 type patchOperationInput struct {
@@ -381,6 +402,34 @@ func patchOperations(input []patchOperationInput) ([]workspace.PatchOperation, e
 		}
 	}
 	return out, nil
+}
+
+func applyPatchInput(ctx context.Context, store Patcher, input patchInput) (workspace.PatchResult, error) {
+	hasOperations := len(input.Operations) > 0
+	hasUnifiedDiff := strings.TrimSpace(input.UnifiedDiff) != ""
+	switch {
+	case hasOperations == hasUnifiedDiff:
+		return workspace.PatchResult{}, fmt.Errorf("workspacetools: provide exactly one of operations or unified_diff")
+	case hasUnifiedDiff:
+		unified, ok := store.(UnifiedDiffPatcher)
+		if !ok {
+			return workspace.PatchResult{}, fmt.Errorf("workspacetools: store does not support unified diff patches")
+		}
+		return unified.ApplyUnifiedDiff(ctx, input.UnifiedDiff, workspace.PatchOptions{DryRun: input.DryRun})
+	default:
+		ops, err := patchOperations(input.Operations)
+		if err != nil {
+			return workspace.PatchResult{}, err
+		}
+		if input.DryRun {
+			previewer, ok := store.(PatchPreviewer)
+			if !ok {
+				return workspace.PatchResult{}, fmt.Errorf("workspacetools: store does not support dry-run structured patches")
+			}
+			return previewer.PreviewPatch(ctx, ops)
+		}
+		return store.ApplyPatch(ctx, ops)
+	}
 }
 
 func formatChanges(changes []workspace.Change) string {

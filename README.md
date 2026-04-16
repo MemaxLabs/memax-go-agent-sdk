@@ -206,13 +206,16 @@ workspaceTools, err := workspacetools.NewTools(ws)
 registry := tool.NewRegistry(workspaceTools...)
 ```
 
-The standard workspace tools support read/list, guarded atomic patches, diffs,
-checkpoints, and restore through the normal tool, permission, hook, budget, and
-event pipeline. Use individual `workspacetools.New*Tool` constructors when a
-host wants to expose only a subset of capabilities. Workspace paths use
-forward-slash, workspace-relative syntax; OS-backed adapters should translate
-and contain paths at the adapter boundary. Patch, diff, checkpoint, and restore
-tools emit dedicated workspace lifecycle events derived from result metadata.
+The standard workspace tools support read/list, guarded atomic patches,
+standard unified diffs, dry-run patch previews, diffs, checkpoints, and restore
+through the normal tool, permission, hook, budget, and event pipeline. Unified
+diff failures include nearby current content so the model can repair stale
+patches instead of guessing. Use individual `workspacetools.New*Tool`
+constructors when a host wants to expose only a subset of capabilities.
+Workspace paths use forward-slash, workspace-relative syntax; OS-backed
+adapters should translate and contain paths at the adapter boundary. Patch,
+diff, checkpoint, and restore tools emit dedicated workspace lifecycle events
+derived from result metadata.
 
 To require a machine-readable final answer, configure `Options.Output` with a
 JSON Schema. The default prompt builder includes the contract, and `Query`

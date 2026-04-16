@@ -132,14 +132,17 @@ The optional `toolkit/tasktools` package provides `list_tasks`, `upsert_task`, a
 
 The optional `workspace` package provides a stronger coding-agent workspace
 contract than raw file reads and writes: file listing, guarded atomic patches,
-diffs against checkpoints, checkpoint creation, and restore. The in-memory
-implementation is for tests and examples; production embedders can implement
-the same interface over git worktrees, databases, object snapshots, or remote
-sandboxes. The core agent loop does not import `workspace`; hosts expose
-workspace capabilities only by registering tools such as
-`toolkit/workspacetools`. `workspace.Store` is the convenience full-surface
-interface; individual workspace tools accept smaller capability interfaces so
-hosts can expose read/list, patch, diff, checkpoint, or restore independently.
+standard unified diffs, dry-run patch previews, diffs against checkpoints,
+checkpoint creation, and restore. The in-memory implementation is for tests and
+examples; production embedders can implement the same interface over git
+worktrees, databases, object snapshots, or remote sandboxes. The core agent
+loop does not import `workspace`; hosts expose workspace capabilities only by
+registering tools such as `toolkit/workspacetools`. `workspace.Store` is the
+convenience full-surface interface; individual workspace tools accept smaller
+capability interfaces so hosts can expose read/list, patch, diff, checkpoint,
+or restore independently. Unified diff and dry-run support are optional
+extensions for patch-capable stores, so simple embedders are not forced to
+implement the full mutation surface.
 Workspace paths use forward-slash, workspace-relative syntax at the SDK
 boundary. `workspace.Change` carries full before/after content for precise
 host-side review; large production backends should cap content, return handles,
