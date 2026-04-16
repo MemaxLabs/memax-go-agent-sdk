@@ -93,9 +93,13 @@ func TestOSStoreRejectsPathEscapes(t *testing.T) {
 	for _, name := range []string{"../escape.txt", "/abs.txt", `dir\file.txt`} {
 		if err := store.WriteFile(context.Background(), name, "nope"); err == nil {
 			t.Fatalf("WriteFile %q returned nil, want invalid path", name)
+		} else if strings.Contains(name, `\`) && !strings.Contains(err.Error(), "use forward slashes") {
+			t.Fatalf("WriteFile %q error = %v, want forward-slash guidance", name, err)
 		}
 		if _, err := store.ReadFile(context.Background(), name); err == nil {
 			t.Fatalf("ReadFile %q returned nil, want invalid path", name)
+		} else if strings.Contains(name, `\`) && !strings.Contains(err.Error(), "use forward slashes") {
+			t.Fatalf("ReadFile %q error = %v, want forward-slash guidance", name, err)
 		}
 	}
 }

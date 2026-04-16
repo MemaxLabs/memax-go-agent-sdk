@@ -136,8 +136,12 @@ standard unified diffs, dry-run patch previews, diffs against checkpoints,
 checkpoint creation, and restore. The in-memory implementation is for tests and
 examples. `workspace.OSStore` adapts a root-confined host directory with
 symlink containment enabled by default, in-memory checkpoints, unified diffs,
-dry-run previews, and restore. Production embedders can also implement the same
-interface over git worktrees, databases, object snapshots, or remote sandboxes.
+dry-run previews, and restore. It is a reference adapter: its mutex protects
+SDK calls through the store, but it does not stop external processes from
+mutating the same directory, and restore is best-effort if the underlying
+filesystem returns I/O errors mid-write. Production embedders can also
+implement the same interface over git worktrees, databases, object snapshots,
+or remote sandboxes.
 The core agent loop does not import `workspace`; hosts expose workspace
 capabilities only by registering tools such as `toolkit/workspacetools`.
 `workspace.Store` is the convenience full-surface interface; individual

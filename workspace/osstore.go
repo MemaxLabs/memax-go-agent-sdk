@@ -24,6 +24,13 @@ const (
 // Symlink containment is enabled by default. Existing paths and deepest
 // existing parents for new paths are resolved with filepath.EvalSymlinks and
 // must remain inside the configured root.
+//
+// OSStore is a reference adapter, not a transactional filesystem. Its mutex
+// protects concurrent SDK calls through the store, but it cannot prevent
+// external processes from changing the same directory. Checkpoints are in-memory
+// snapshots and patch/diff/restore operations read the full workspace content.
+// Restore attempts rollback after I/O failures, but filesystem failures such as
+// disk-full or permission errors can still leave partial writes.
 type OSStore struct {
 	mu              sync.Mutex
 	root            string
@@ -159,8 +166,11 @@ func (s *OSStore) ListFiles(ctx context.Context, prefix string) ([]string, error
 	return s.listFilesLocked(ctx, prefix)
 }
 
-// ApplyPatch applies all operations under the store lock. If a write/delete
-// fails after validation, OSStore attempts to restore the affected files.
+// ApplyPatch applies all operations under the store lock. Validation is atomic
+// against the snapshot OSStore reads before mutation. The final filesystem
+// writes are best-effort; OSStore attempts to restore the previous snapshot if
+// a write/delete fails, but external filesystem changes and I/O failures are
+// outside the store's transactional boundary.
 func (s *OSStore) ApplyPatch(ctx context.Context, ops []PatchOperation) (PatchResult, error) {
 	return s.applyPatch(ctx, ops, PatchOptions{})
 }
@@ -245,7 +255,10 @@ func (s *OSStore) Checkpoint(ctx context.Context, opts CheckpointOptions) (Check
 	return cloneCheckpoint(cp), nil
 }
 
-// Restore resets current files to a checkpoint snapshot.
+// Restore resets current files to a checkpoint snapshot. Restore is best-effort
+// on OS-backed filesystems: if deleting or rewriting files fails, OSStore
+// attempts to roll back to the pre-restore snapshot, but rollback can also fail
+// under the same I/O condition.
 func (s *OSStore) Restore(ctx context.Context, id string) (Checkpoint, error) {
 	if err := contextError(ctx); err != nil {
 		return Checkpoint{}, err
@@ -571,7 +584,10 @@ func cleanWorkspacePathStrict(name string) (string, error) {
 	if original == "" {
 		return ".", nil
 	}
-	if strings.Contains(original, `\`) || strings.HasPrefix(original, "/") || filepath.IsAbs(original) {
+	if strings.Contains(original, `\`) {
+		return "", fmt.Errorf("workspace: invalid file path %q: use forward slashes", name)
+	}
+	if strings.HasPrefix(original, "/") || filepath.IsAbs(original) {
 		return "", fmt.Errorf("workspace: invalid file path: %s", name)
 	}
 	clean := cleanPath(original)
