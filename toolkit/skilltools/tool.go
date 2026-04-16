@@ -22,12 +22,17 @@ type Config struct {
 	Source         skill.Source
 	MaxResultBytes int
 	DefaultLimit   int
+	// IncludeContent makes search results include full skill instructions. The
+	// default is metadata-only so search remains a discovery surface; use
+	// load_skill for progressive instruction loading.
+	IncludeContent bool
 }
 
 type searchTool struct {
-	spec         model.ToolSpec
-	source       skill.Source
-	defaultLimit int
+	spec           model.ToolSpec
+	source         skill.Source
+	defaultLimit   int
+	includeContent bool
 }
 
 type searchInput struct {
@@ -46,7 +51,7 @@ func NewSearchTool(config Config) (tool.Tool, error) {
 	}
 	description := config.Description
 	if description == "" {
-		description = "Search available skills and return relevant instructions."
+		description = "Search available skills and return relevant metadata. Use load_skill to load full instructions."
 	}
 	maxResultBytes := config.MaxResultBytes
 	if maxResultBytes <= 0 {
@@ -67,8 +72,9 @@ func NewSearchTool(config Config) (tool.Tool, error) {
 			AlwaysLoad:      true,
 			MaxResultBytes:  maxResultBytes,
 		},
-		source:       config.Source,
-		defaultLimit: defaultLimit,
+		source:         config.Source,
+		defaultLimit:   defaultLimit,
+		includeContent: config.IncludeContent,
 	}, nil
 }
 
@@ -98,7 +104,7 @@ func (t *searchTool) Execute(ctx context.Context, use tool.Call) (model.ToolResu
 	}
 	selected := (skill.Selector{MaxSkills: limit}).Select(skills, input.Query)
 	return model.ToolResult{
-		Content: formatSkills(selected),
+		Content: formatSkills(selected, t.includeContent),
 		Metadata: map[string]any{
 			"query":   input.Query,
 			"matches": len(selected),
@@ -125,7 +131,7 @@ func searchInputSchema() map[string]any {
 	}
 }
 
-func formatSkills(skills []skill.Skill) string {
+func formatSkills(skills []skill.Skill, includeContent bool) string {
 	if len(skills) == 0 {
 		return "No matching skills."
 	}
@@ -141,10 +147,37 @@ func formatSkills(skills []skill.Skill) string {
 		if len(item.Tags) > 0 {
 			fmt.Fprintf(&b, "\n  Tags: %s", strings.Join(item.Tags, ", "))
 		}
-		if item.Content != "" {
+		if len(item.Resources) > 0 {
+			b.WriteString("\n  Resources:")
+			for _, ref := range item.Resources {
+				fmt.Fprintf(&b, "\n    - %s", firstNonEmpty(ref.Name, ref.Path))
+				if ref.Description != "" {
+					fmt.Fprintf(&b, ": %s", ref.Description)
+				}
+				if ref.Path != "" && ref.Path != ref.Name {
+					fmt.Fprintf(&b, " (path: %s)", ref.Path)
+				}
+				if ref.MIMEType != "" {
+					fmt.Fprintf(&b, " [%s]", ref.MIMEType)
+				}
+				if ref.Bytes > 0 {
+					fmt.Fprintf(&b, " [%d bytes]", ref.Bytes)
+				}
+			}
+		}
+		if includeContent && item.Content != "" {
 			fmt.Fprintf(&b, "\n  Instructions: %s", item.Content)
 		}
 		b.WriteByte('\n')
 	}
 	return strings.TrimSpace(b.String())
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }

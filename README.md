@@ -276,7 +276,8 @@ source := &skill.PrefetchSource{
 ```
 
 To let the model discover skills through the normal tool layer, register
-`toolkit/skilltools`:
+`toolkit/skilltools`. Search results are metadata-only by default; use
+`load_skill` for the full instructions.
 
 ```go
 searchSkills, err := skilltools.NewSearchTool(skilltools.Config{

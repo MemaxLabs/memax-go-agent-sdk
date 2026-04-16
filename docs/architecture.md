@@ -306,9 +306,11 @@ metadata discovery is bounded by default by both selected item count and prompt
 bytes so large catalogs do not turn into prompt stuffing; hosts can override the
 selector and byte budgets through a custom prompt builder. When metadata is
 omitted, hosts can register `toolkit/skilltools` search against the same source
-so the model can query the full catalog before calling `load_skill`. Loading a
-skill returns the full instructions as a normal tool result, making skill use
-visible in events and durable session history. Skills may advertise lightweight
+so the model can query metadata for the full catalog before calling
+`load_skill`. Skill search is metadata-only by default; full skill bodies stay
+behind `load_skill` unless a host explicitly enables full-content search.
+Loading a skill returns the full instructions as a normal tool result, making
+skill use visible in events and durable session history. Skills may advertise lightweight
 supporting `skill.ResourceRef` metadata. If
 `Options.SkillResourceSource` is configured, progressive mode also exposes
 `read_skill_resource`, which loads host-owned resource content through the tool

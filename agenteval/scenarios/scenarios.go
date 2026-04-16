@@ -220,7 +220,8 @@ func ProgressiveSkillSearchRecovery() agenteval.Case {
 						switch toolResult.Name {
 						case "search_skills":
 							if strings.Contains(toolResult.Content, "semantic-rollback-risk") &&
-								strings.Contains(toolResult.Content, "semantic rollback hazards") {
+								strings.Contains(toolResult.Content, "semantic rollback hazards") &&
+								!strings.Contains(toolResult.Content, "Deep risk instructions") {
 								found = true
 							}
 						case skill.LoadToolName:

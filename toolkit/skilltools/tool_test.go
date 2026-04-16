@@ -14,7 +14,18 @@ import (
 func TestSearchToolReturnsRelevantSkills(t *testing.T) {
 	search, err := NewSearchTool(Config{
 		Source: skill.StaticSource{
-			{Name: "database-review", Description: "SQL migration review", Content: "Check rollback."},
+			{
+				Name:        "database-review",
+				Description: "SQL migration review",
+				Content:     "Check rollback.",
+				Resources: []skill.ResourceRef{{
+					Name:        "migration-checklist",
+					Description: "Migration checklist.",
+					Path:        "resources/migration.md",
+					MIMEType:    "text/markdown",
+					Bytes:       128,
+				}},
+			},
 			{Name: "frontend-review", Description: "CSS review"},
 		},
 	})
@@ -35,8 +46,40 @@ func TestSearchToolReturnsRelevantSkills(t *testing.T) {
 	if !strings.Contains(result.Content, "database-review") || strings.Contains(result.Content, "frontend-review") {
 		t.Fatalf("result = %q, want only database skill", result.Content)
 	}
+	if strings.Contains(result.Content, "Check rollback.") || strings.Contains(result.Content, "Instructions:") {
+		t.Fatalf("result = %q, want metadata-only search by default", result.Content)
+	}
+	if !strings.Contains(result.Content, "migration-checklist") || !strings.Contains(result.Content, "resources/migration.md") {
+		t.Fatalf("result = %q, want resource metadata", result.Content)
+	}
 	if result.Metadata["matches"] != 1 {
 		t.Fatalf("metadata = %#v, want one match", result.Metadata)
+	}
+}
+
+func TestSearchToolCanIncludeContent(t *testing.T) {
+	search, err := NewSearchTool(Config{
+		IncludeContent: true,
+		Source: skill.StaticSource{
+			{Name: "database-review", Description: "SQL migration review", Content: "Check rollback."},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewSearchTool returned error: %v", err)
+	}
+
+	result, err := search.Execute(context.Background(), tool.Call{
+		Use: model.ToolUse{
+			ID:    "tool-1",
+			Name:  "search_skills",
+			Input: json.RawMessage(`{"query":"SQL migration"}`),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if !strings.Contains(result.Content, "Instructions: Check rollback.") {
+		t.Fatalf("result = %q, want opt-in instructions", result.Content)
 	}
 }
 

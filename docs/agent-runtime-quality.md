@@ -118,7 +118,7 @@ tool and filesystem-backed progressive disclosure.
 - Skill content can be cached per run/session with event visibility. Initial
   per-run loading exists through the skill loader.
 - Omitted catalog entries remain reachable through explicit skill search.
-  Initial eval coverage exists for search-to-load recovery.
+  Initial eval coverage exists for metadata-only search-to-load recovery.
 - Existing direct injection remains as a backward-compatible mode.
 
 **Current API plus likely resource extension:**
