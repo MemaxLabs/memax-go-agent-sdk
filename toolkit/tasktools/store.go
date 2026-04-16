@@ -19,11 +19,12 @@ const (
 )
 
 type Task struct {
-	ID       string `json:"id"`
-	Title    string `json:"title"`
-	Status   Status `json:"status"`
-	Notes    string `json:"notes,omitempty"`
-	Priority int    `json:"priority,omitempty"`
+	ID       string   `json:"id"`
+	Title    string   `json:"title"`
+	Status   Status   `json:"status"`
+	Notes    string   `json:"notes,omitempty"`
+	Priority int      `json:"priority,omitempty"`
+	Evidence []string `json:"evidence,omitempty"`
 }
 
 type Store interface {
@@ -47,23 +48,30 @@ func NewMemoryStore(tasks []Task) *MemoryStore {
 	return store
 }
 
-func (s *MemoryStore) List(context.Context) ([]Task, error) {
+func (s *MemoryStore) List(ctx context.Context) ([]Task, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := make([]Task, 0, len(s.order))
 	for _, id := range s.order {
 		task, ok := s.tasks[id]
 		if ok {
-			out = append(out, task)
+			out = append(out, cloneTask(task))
 		}
 	}
 	return out, nil
 }
 
-func (s *MemoryStore) Upsert(_ context.Context, task Task) (Task, error) {
+func (s *MemoryStore) Upsert(ctx context.Context, task Task) (Task, error) {
+	if err := ctx.Err(); err != nil {
+		return Task{}, err
+	}
 	task.ID = strings.TrimSpace(task.ID)
 	task.Title = strings.TrimSpace(task.Title)
 	task.Notes = strings.TrimSpace(task.Notes)
+	task.Evidence = nonEmptyStrings(task.Evidence)
 	if !isValidStatus(task.Status) {
 		return Task{}, fmt.Errorf("invalid task status: %s", task.Status)
 	}
@@ -91,12 +99,15 @@ func (s *MemoryStore) Upsert(_ context.Context, task Task) (Task, error) {
 	if _, ok := s.tasks[task.ID]; !ok {
 		s.order = append(s.order, task.ID)
 	}
-	s.tasks[task.ID] = task
+	s.tasks[task.ID] = cloneTask(task)
 	s.bumpNextLocked(task.ID)
-	return task, nil
+	return cloneTask(task), nil
 }
 
-func (s *MemoryStore) Delete(_ context.Context, id string) error {
+func (s *MemoryStore) Delete(ctx context.Context, id string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return fmt.Errorf("task id is required")
@@ -146,6 +157,9 @@ func mergeTask(existing Task, update Task) Task {
 	if update.Priority > 0 {
 		existing.Priority = update.Priority
 	}
+	if len(update.Evidence) > 0 {
+		existing.Evidence = append([]string(nil), update.Evidence...)
+	}
 	return existing
 }
 
@@ -156,6 +170,22 @@ func isValidStatus(status Status) bool {
 	default:
 		return false
 	}
+}
+
+func cloneTask(task Task) Task {
+	task.Evidence = append([]string(nil), task.Evidence...)
+	return task
+}
+
+func nonEmptyStrings(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			out = append(out, value)
+		}
+	}
+	return out
 }
 
 func sortTasks(tasks []Task) []Task {

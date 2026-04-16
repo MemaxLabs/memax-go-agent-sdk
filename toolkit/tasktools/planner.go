@@ -36,6 +36,7 @@ func (s taskSource) Tasks(ctx context.Context, _ planner.Request) ([]planner.Tas
 			Status:   planner.Status(task.Status),
 			Notes:    task.Notes,
 			Priority: task.Priority,
+			Evidence: append([]string(nil), task.Evidence...),
 		})
 	}
 	return out, nil

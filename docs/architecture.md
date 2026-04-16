@@ -299,6 +299,15 @@ per-task evidence, tool hints, and verification hints. The optional
 store can be prompt-visible plan context and model-editable state through
 `list_tasks` and `upsert_task`.
 
+Task progress from verification remains explicit and host-owned. The
+`toolkit/tasktools.NewVerificationProgressVerifier` helper wraps a
+`verifytools.Verifier` and updates a task only when the verification request
+metadata includes `task_id`. The verification result still flows through
+`workspace_verify` as a normal tool result; task update failures are recorded in
+result metadata instead of hiding verification diagnostics from the model. This
+keeps the control loop observable: verify, update task state, reload planner on
+the next turn.
+
 `memory.Source` is the source-neutral loading contract for durable host context
 such as project rules, user preferences, session notes, or organization policy.
 Callers can pass explicit `Options.Memories` or a dynamic `Options.MemorySource`.

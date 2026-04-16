@@ -281,8 +281,8 @@ retrieval, usage, and review infrastructure.
 
 ### 6. Planner and Task Policy Stack
 
-**Current state:** planner policies, task-derived plans, and plan-visible
-verification hints exist.
+**Current state:** planner policies, task-derived plans, plan-visible
+verification hints, and opt-in verification-to-task progress updates exist.
 
 **Gap:** The SDK lacks explicit policies for when to plan, update, delegate,
 verify, ask the user, or stop.
@@ -300,7 +300,8 @@ verify, ask the user, or stop.
 - Multi-step task updates plan after each tool result.
 - Blocked plan asks for user input rather than hallucinating.
 - Delegation happens only for scoped subtasks.
-- Verification hints guide the model to run host verification, and verification
+- Verification hints guide the model to run host verification, verification
+  outcomes update task progress when explicitly configured, and verification
   failure triggers repair.
 
 ### 7. Provider Fidelity and Compatibility

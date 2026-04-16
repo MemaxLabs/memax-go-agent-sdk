@@ -91,6 +91,13 @@ func NewUpsertTool(store Store) tool.Tool {
 						"description": "Optional priority where lower numbers are more important.",
 						"minimum":     0,
 					},
+					"evidence": map[string]any{
+						"type":        "array",
+						"description": "Optional evidence proving task progress, such as paths, checks, or verification names.",
+						"items": map[string]any{
+							"type": "string",
+						},
+					},
 				},
 			},
 		},
@@ -105,6 +112,7 @@ func NewUpsertTool(store Store) tool.Tool {
 				Status:   input.Status,
 				Notes:    input.Notes,
 				Priority: input.Priority,
+				Evidence: input.Evidence,
 			})
 			if err != nil {
 				return model.ToolResult{}, err
@@ -156,11 +164,12 @@ type listInput struct {
 }
 
 type upsertInput struct {
-	ID       string `json:"id"`
-	Title    string `json:"title"`
-	Status   Status `json:"status"`
-	Notes    string `json:"notes"`
-	Priority int    `json:"priority"`
+	ID       string   `json:"id"`
+	Title    string   `json:"title"`
+	Status   Status   `json:"status"`
+	Notes    string   `json:"notes"`
+	Priority int      `json:"priority"`
+	Evidence []string `json:"evidence"`
 }
 
 type deleteInput struct {
@@ -202,6 +211,10 @@ func formatTasks(tasks []Task) string {
 			b.WriteString(" - ")
 			b.WriteString(task.Notes)
 		}
+		if len(task.Evidence) > 0 {
+			b.WriteString(" evidence: ")
+			b.WriteString(strings.Join(task.Evidence, ", "))
+		}
 	}
 	return b.String()
 }
@@ -213,6 +226,7 @@ func taskMetadata(task Task) map[string]any {
 		"status":   string(task.Status),
 		"notes":    task.Notes,
 		"priority": task.Priority,
+		"evidence": append([]string(nil), task.Evidence...),
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/planner"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
+	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/tasktools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/verifytools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/workspacetools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/workspace"
@@ -355,6 +356,132 @@ func WorkspaceOSStorePatchRollback() agenteval.Case {
 					}
 					if string(content) != "version one" {
 						return fmt.Errorf("README.md = %q, want restored version one", content)
+					}
+					return nil
+				},
+			},
+		},
+	}
+}
+
+// PlannerTaskProgressFromVerification returns a single-use scenario where
+// verification results update task state and the next planner prompt reflects
+// completed progress before the model finalizes.
+func PlannerTaskProgressFromVerification() agenteval.Case {
+	workspaceStore := workspace.NewMemoryStore(map[string]string{
+		"README.md": "status: broken",
+	})
+	taskStore := tasktools.NewMemoryStore([]tasktools.Task{{
+		ID:     "task-1",
+		Title:  "repair README status",
+		Status: tasktools.StatusInProgress,
+	}})
+	workspaceTools, toolsErr := workspacetools.NewTools(workspaceStore)
+	verifyTool := verifytools.NewTool(verifytools.Config{
+		Verifier: tasktools.NewVerificationProgressVerifier(
+			taskStore,
+			verifierForReadmeStatus(workspaceStore, "status: fixed"),
+			tasktools.WithVerificationFailStatus(tasktools.StatusInProgress),
+		),
+	})
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "patch-1",
+				Name: workspacetools.ApplyPatchToolName,
+				Input: json.RawMessage(`{"operations":[
+					{"path":"README.md","old_content":"status: broken","new_content":"status: almost"}
+				]}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "verify-1",
+				Name: verifytools.ToolName,
+				Input: json.RawMessage(`{
+					"name":"test",
+					"target":"README.md",
+					"metadata":{"task_id":"task-1"}
+				}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "patch-2",
+				Name: workspacetools.ApplyPatchToolName,
+				Input: json.RawMessage(`{"operations":[
+					{"path":"README.md","old_content":"status: almost","new_content":"status: fixed"}
+				]}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "verify-2",
+				Name: verifytools.ToolName,
+				Input: json.RawMessage(`{
+					"name":"test",
+					"target":"README.md",
+					"metadata":{"task_id":"task-1"}
+				}`),
+			},
+		}},
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "Task completed after verification."}},
+	)
+
+	return agenteval.Case{
+		Name:   "planner_task_progress_from_verification",
+		Prompt: "Repair README.md, verify it, and keep task progress current.",
+		Options: memaxagent.Options{
+			Model: modelClient,
+			Tools: tool.NewRegistry(append(workspaceTools, verifyTool)...),
+			Planner: tasktools.Planner(taskStore,
+				planner.WithTaskGoal("repair README with verified evidence"),
+				planner.WithTaskToolHints(workspacetools.ApplyPatchToolName, verifytools.ToolName),
+				planner.WithTaskVerificationHints("call workspace_verify with metadata.task_id before final answer"),
+			),
+		},
+		Assertions: []agenteval.Assertion{
+			toolConstructionSucceeded(toolsErr),
+			agenteval.ToolUsed(workspacetools.ApplyPatchToolName),
+			agenteval.ToolUsed(verifytools.ToolName),
+			agenteval.FinalEquals("Task completed after verification."),
+			requestCountEquals(modelClient, 5),
+			{
+				Name: "verification updates task progress before final prompt",
+				Check: func(result agenteval.Result) error {
+					results := result.ToolResults()
+					if len(results) < 4 {
+						return fmt.Errorf("tool results = %#v, want patch verify patch verify", results)
+					}
+					if results[1].Metadata[model.MetadataTaskStatus] != string(tasktools.StatusInProgress) {
+						return fmt.Errorf("first verification metadata = %#v, want in-progress task update", results[1].Metadata)
+					}
+					if results[3].Metadata[model.MetadataTaskStatus] != string(tasktools.StatusCompleted) {
+						return fmt.Errorf("second verification metadata = %#v, want completed task update", results[3].Metadata)
+					}
+					tasks, err := taskStore.List(context.Background())
+					if err != nil {
+						return err
+					}
+					if len(tasks) != 1 || tasks[0].Status != tasktools.StatusCompleted {
+						return fmt.Errorf("tasks = %#v, want completed task", tasks)
+					}
+					if len(tasks[0].Evidence) == 0 || !strings.Contains(strings.Join(tasks[0].Evidence, ","), "verification:test") {
+						return fmt.Errorf("task evidence = %#v, want verification evidence", tasks[0].Evidence)
+					}
+					requests := modelClient.Requests()
+					if len(requests) < 5 {
+						return fmt.Errorf("requests = %d, want final request after verification", len(requests))
+					}
+					finalPrompt := requests[4].SystemPrompt
+					for _, want := range []string{"[completed] task-1", "verification test passed", "verification:test"} {
+						if !strings.Contains(finalPrompt, want) {
+							return fmt.Errorf("final prompt missing %q:\n%s", want, finalPrompt)
+						}
 					}
 					return nil
 				},

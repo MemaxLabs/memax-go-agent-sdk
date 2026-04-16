@@ -491,6 +491,13 @@ events, err := memaxagent.Query(ctx, "Continue the review.", memaxagent.Options{
 })
 ```
 
+Verification can also feed task progress when the host opts in. Wrap a
+`verifytools.Verifier` with `tasktools.NewVerificationProgressVerifier` and ask
+the model to include `metadata.task_id` in the verification request. Passing
+checks mark the task completed by default; failing checks keep it in progress
+unless configured otherwise. The next planner turn reloads the task store and
+shows the updated status, notes, and evidence.
+
 To regression-test agent behavior without a live model, use `agenteval` with a
 scripted model and assertions:
 

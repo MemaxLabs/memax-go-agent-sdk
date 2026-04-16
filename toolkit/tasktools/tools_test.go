@@ -16,7 +16,7 @@ func TestTaskToolsCreateListUpdateDelete(t *testing.T) {
 	first := mustRunTool(t, NewUpsertTool(store), model.ToolUse{
 		ID:    "upsert-1",
 		Name:  UpsertToolName,
-		Input: json.RawMessage(`{"title":"inspect session API","status":"in_progress","priority":2}`),
+		Input: json.RawMessage(`{"title":"inspect session API","status":"in_progress","priority":2,"evidence":["README.md"]}`),
 	})
 	if first.Content != "upserted task-1" {
 		t.Fatalf("first content = %q, want upsert confirmation", first.Content)
@@ -35,7 +35,7 @@ func TestTaskToolsCreateListUpdateDelete(t *testing.T) {
 		Name:  ListToolName,
 		Input: json.RawMessage(`{}`),
 	})
-	want := "- [pending] task-2 p1: write tests - cover ordering\n- [in_progress] task-1 p2: inspect session API"
+	want := "- [pending] task-2 p1: write tests - cover ordering\n- [in_progress] task-1 p2: inspect session API evidence: README.md"
 	if list.Content != want {
 		t.Fatalf("list content = %q, want %q", list.Content, want)
 	}
@@ -50,6 +50,10 @@ func TestTaskToolsCreateListUpdateDelete(t *testing.T) {
 	}
 	if update.Metadata["title"] != "inspect session API" {
 		t.Fatalf("update metadata = %#v, want preserved title", update.Metadata)
+	}
+	evidence, ok := update.Metadata["evidence"].([]string)
+	if !ok || len(evidence) != 1 || evidence[0] != "README.md" {
+		t.Fatalf("update metadata = %#v, want preserved evidence", update.Metadata)
 	}
 
 	filtered := mustRunTool(t, NewListTool(store), model.ToolUse{
@@ -90,6 +94,36 @@ func TestMemoryStorePreservesExplicitIDsAndNextGeneratedID(t *testing.T) {
 	}
 	if task.ID != "task-8" {
 		t.Fatalf("ID = %q, want task-8", task.ID)
+	}
+}
+
+func TestMemoryStoreReturnsDefensiveTaskCopies(t *testing.T) {
+	store := NewMemoryStore([]Task{{ID: "task-1", Title: "existing", Evidence: []string{"README.md"}}})
+	tasks, err := store.List(context.Background())
+	if err != nil {
+		t.Fatalf("List returned error: %v", err)
+	}
+	tasks[0].Evidence[0] = "mutated"
+
+	tasks, err = store.List(context.Background())
+	if err != nil {
+		t.Fatalf("List returned error: %v", err)
+	}
+	if tasks[0].Evidence[0] != "README.md" {
+		t.Fatalf("tasks = %#v, want defensive evidence copy", tasks)
+	}
+
+	task, err := store.Upsert(context.Background(), Task{ID: "task-1", Evidence: []string{"verified"}})
+	if err != nil {
+		t.Fatalf("Upsert returned error: %v", err)
+	}
+	task.Evidence[0] = "mutated"
+	tasks, err = store.List(context.Background())
+	if err != nil {
+		t.Fatalf("List returned error: %v", err)
+	}
+	if tasks[0].Evidence[0] != "verified" {
+		t.Fatalf("tasks = %#v, want stored evidence isolated from returned task", tasks)
 	}
 }
 

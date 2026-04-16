@@ -131,6 +131,15 @@ const (
 	// MetadataVerificationPaths carries workspace-relative paths mentioned by
 	// verification diagnostics.
 	MetadataVerificationPaths = "verification_paths"
+	// MetadataTaskID identifies the task affected by a tool result or requested
+	// operation.
+	MetadataTaskID = "task_id"
+	// MetadataTaskStatus carries the task status after a progress update.
+	MetadataTaskStatus = "task_status"
+	// MetadataTaskEvidence carries evidence attached to a task progress update.
+	MetadataTaskEvidence = "task_evidence"
+	// MetadataTaskProgressError carries a non-fatal task progress update error.
+	MetadataTaskProgressError = "task_progress_error"
 )
 
 // CloneMessages returns a deep copy of messages.

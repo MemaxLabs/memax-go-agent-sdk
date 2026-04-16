@@ -10,7 +10,7 @@ import (
 func TestPlannerAdaptsTaskStore(t *testing.T) {
 	store := NewMemoryStore([]Task{
 		{ID: "task-2", Title: "write summary", Status: StatusPending, Priority: 2},
-		{ID: "task-1", Title: "read migration", Status: StatusInProgress, Notes: "check rollback", Priority: 1},
+		{ID: "task-1", Title: "read migration", Status: StatusInProgress, Notes: "check rollback", Priority: 1, Evidence: []string{"README.md"}},
 	})
 	policy := Planner(store,
 		planner.WithTaskGoal("review safely"),
@@ -34,5 +34,8 @@ func TestPlannerAdaptsTaskStore(t *testing.T) {
 	}
 	if len(plan.Steps[0].VerificationHints) != 1 || plan.Steps[0].VerificationHints[0] != "workspace_verify test" {
 		t.Fatalf("verification hints = %#v, want task verification hint", plan.Steps[0].VerificationHints)
+	}
+	if len(plan.Steps[0].Evidence) != 1 || plan.Steps[0].Evidence[0] != "README.md" {
+		t.Fatalf("evidence = %#v, want mapped task evidence", plan.Steps[0].Evidence)
 	}
 }
