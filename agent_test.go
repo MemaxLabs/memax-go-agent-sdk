@@ -16,6 +16,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/memory"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/output"
+	"github.com/MemaxLabs/memax-go-agent-sdk/planner"
 	"github.com/MemaxLabs/memax-go-agent-sdk/resultstore"
 	"github.com/MemaxLabs/memax-go-agent-sdk/session"
 	"github.com/MemaxLabs/memax-go-agent-sdk/skill"
@@ -867,6 +868,68 @@ func TestQueryLoadsMemorySourceOncePerRun(t *testing.T) {
 	}
 	if got.Query != "inspect billing code" {
 		t.Fatalf("memory source query = %q, want user prompt only", got.Query)
+	}
+}
+
+func TestQueryLoadsPlannerWithSessionContext(t *testing.T) {
+	fake := &fakeModel{turns: [][]model.StreamEvent{{{Kind: model.StreamText, Text: "done"}}}}
+	var got planner.Request
+	events, err := Query(context.Background(), "inspect billing code", Options{
+		Model:           fake,
+		ParentSessionID: "parent-session",
+		Identity:        identity.Identity{Name: "planner-agent"},
+		Planner: planner.PolicyFunc(func(_ context.Context, req planner.Request) (planner.Plan, error) {
+			got = req
+			return planner.Plan{
+				Goal: "inspect billing code safely",
+				Steps: []planner.Step{{
+					ID:        "step-1",
+					Title:     "read relevant files",
+					Status:    planner.StatusInProgress,
+					ToolHints: []string{"read_file"},
+				}},
+			}, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+	if _, err := Drain(events); err != nil {
+		t.Fatalf("Drain returned error: %v", err)
+	}
+	if got.SessionID == "" {
+		t.Fatal("planner did not receive active session id")
+	}
+	if got.ParentSessionID != "parent-session" {
+		t.Fatalf("planner parent session = %q, want parent-session", got.ParentSessionID)
+	}
+	if got.Identity.Name != "planner-agent" {
+		t.Fatalf("planner identity = %#v, want planner-agent", got.Identity)
+	}
+	if len(got.Messages) != 1 || got.Messages[0].PlainText() != "inspect billing code" {
+		t.Fatalf("planner messages = %#v, want current prompt", got.Messages)
+	}
+	if got.Query != "inspect billing code" {
+		t.Fatalf("planner query = %q, want user prompt", got.Query)
+	}
+	if len(fake.requests) != 1 || !strings.Contains(fake.requests[0].SystemPrompt, "inspect billing code safely") {
+		t.Fatalf("system prompt = %q, want plan injection", fake.requests[0].SystemPrompt)
+	}
+}
+
+func TestQueryPlannerErrorStopsRun(t *testing.T) {
+	plannerErr := errors.New("planner unavailable")
+	events, err := Query(context.Background(), "start", Options{
+		Model: &fakeModel{},
+		Planner: planner.PolicyFunc(func(context.Context, planner.Request) (planner.Plan, error) {
+			return planner.Plan{}, plannerErr
+		}),
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+	if _, err := Drain(events); err == nil || !strings.Contains(err.Error(), "build prompt") || !errors.Is(err, plannerErr) {
+		t.Fatalf("Drain error = %v, want planner error", err)
 	}
 }
 

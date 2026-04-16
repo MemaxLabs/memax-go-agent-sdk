@@ -13,6 +13,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/memory"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/output"
+	"github.com/MemaxLabs/memax-go-agent-sdk/planner"
 	promptpkg "github.com/MemaxLabs/memax-go-agent-sdk/prompt"
 	"github.com/MemaxLabs/memax-go-agent-sdk/session"
 	skillpkg "github.com/MemaxLabs/memax-go-agent-sdk/skill"
@@ -337,7 +338,7 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 				telemetry.Int("memax.tools.available", len(opts.Tools.Specs())),
 				telemetry.Int("memax.tools.selected", len(toolSpecs)),
 			)
-			promptResult, err := buildPrompt(turnCtx, opts, &memories, messages, toolSpecs)
+			promptResult, err := buildPrompt(turnCtx, opts, &memories, sessionID, messages, toolSpecs)
 			if err != nil {
 				err = fmt.Errorf("build prompt: %w", err)
 				turnSpan.RecordError(err)
@@ -375,7 +376,7 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 			})
 			if err != nil {
 				if opts.ContextRetry != nil && model.IsContextWindowExceeded(err) {
-					retryMessages, retryTools, retryPrompt, retryErr := retryContextWindow(modelCtx, opts, &memories, messages)
+					retryMessages, retryTools, retryPrompt, retryErr := retryContextWindow(modelCtx, opts, &memories, sessionID, messages)
 					if retryErr == nil {
 						if !reflect.DeepEqual(retryMessages, messages) {
 							if ok, applyErr := emitContextApplied(turnCtx, emit, opts, sessionID, turn, len(messages), len(retryMessages)); applyErr != nil {
@@ -610,8 +611,8 @@ type builtPrompt struct {
 	Parts              []promptpkg.Part
 }
 
-func buildPrompt(ctx context.Context, opts Options, memories *memoryLoader, messages []model.Message, tools []model.ToolSpec) (builtPrompt, error) {
-	if opts.PromptBuilder == nil && opts.PromptProfile == "" && opts.Identity.IsZero() && !opts.Output.Enabled() && opts.MemorySource == nil && len(opts.Memories) == 0 && opts.SkillSource == nil && len(opts.Skills) == 0 {
+func buildPrompt(ctx context.Context, opts Options, memories *memoryLoader, sessionID string, messages []model.Message, tools []model.ToolSpec) (builtPrompt, error) {
+	if opts.PromptBuilder == nil && opts.PromptProfile == "" && opts.Identity.IsZero() && opts.Planner == nil && !opts.Output.Enabled() && opts.MemorySource == nil && len(opts.Memories) == 0 && opts.SkillSource == nil && len(opts.Skills) == 0 {
 		return builtPrompt{
 			SystemPrompt:       opts.SystemPrompt,
 			AppendSystemPrompt: opts.AppendSystemPrompt,
@@ -633,12 +634,17 @@ func buildPrompt(ctx context.Context, opts Options, memories *memoryLoader, mess
 		}
 		skills = append(skills, loaded...)
 	}
+	plan, err := loadPlan(ctx, opts, sessionID, messages)
+	if err != nil {
+		return builtPrompt{}, err
+	}
 	result, err := builder.Build(ctx, promptpkg.Request{
 		Identity:           opts.Identity,
 		SystemPrompt:       opts.SystemPrompt,
 		AppendSystemPrompt: opts.AppendSystemPrompt,
 		Messages:           messages,
 		Tools:              tools,
+		Plan:               plan,
 		Memories:           loadedMemories,
 		Skills:             skills,
 		OutputSchema:       opts.Output.Schema,
@@ -690,7 +696,7 @@ func (l *memoryLoader) Load(ctx context.Context, messages []model.Message) ([]me
 	return memory.StaticSource(l.memories).Memories(ctx, memory.Request{})
 }
 
-func retryContextWindow(ctx context.Context, opts Options, memories *memoryLoader, messages []model.Message) ([]model.Message, []model.ToolSpec, builtPrompt, error) {
+func retryContextWindow(ctx context.Context, opts Options, memories *memoryLoader, sessionID string, messages []model.Message) ([]model.Message, []model.ToolSpec, builtPrompt, error) {
 	retryMessages, err := opts.ContextRetry.Apply(ctx, messages)
 	if err != nil {
 		return nil, nil, builtPrompt{}, err
@@ -699,11 +705,24 @@ func retryContextWindow(ctx context.Context, opts Options, memories *memoryLoade
 	if err != nil {
 		return nil, nil, builtPrompt{}, err
 	}
-	retryPrompt, err := buildPrompt(ctx, opts, memories, retryMessages, retryTools)
+	retryPrompt, err := buildPrompt(ctx, opts, memories, sessionID, retryMessages, retryTools)
 	if err != nil {
 		return nil, nil, builtPrompt{}, err
 	}
 	return retryMessages, retryTools, retryPrompt, nil
+}
+
+func loadPlan(ctx context.Context, opts Options, sessionID string, messages []model.Message) (planner.Plan, error) {
+	if opts.Planner == nil {
+		return planner.Plan{}, nil
+	}
+	return opts.Planner.Prepare(ctx, planner.Request{
+		SessionID:       sessionID,
+		ParentSessionID: opts.ParentSessionID,
+		Identity:        opts.Identity,
+		Messages:        messages,
+		Query:           memoryQuery(messages),
+	})
 }
 
 func memoryQuery(messages []model.Message) string {

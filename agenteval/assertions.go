@@ -63,6 +63,23 @@ func NoToolErrors() Assertion {
 	}
 }
 
+// RunErrorContains requires the agent run to stop with an error containing
+// substring.
+func RunErrorContains(substring string) Assertion {
+	return Assertion{
+		Name: "run error contains",
+		Check: func(result Result) error {
+			if result.RunErr == nil {
+				return fmt.Errorf("run error is nil, want substring %q", substring)
+			}
+			if !strings.Contains(result.RunErr.Error(), substring) {
+				return fmt.Errorf("run error = %q, want substring %q", result.RunErr.Error(), substring)
+			}
+			return nil
+		},
+	}
+}
+
 // EventKindEmitted requires the run to emit at least one event of kind.
 func EventKindEmitted(kind memaxagent.EventKind) Assertion {
 	return Assertion{

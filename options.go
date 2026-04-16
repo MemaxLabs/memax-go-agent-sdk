@@ -11,6 +11,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/output"
 	"github.com/MemaxLabs/memax-go-agent-sdk/permission"
+	"github.com/MemaxLabs/memax-go-agent-sdk/planner"
 	"github.com/MemaxLabs/memax-go-agent-sdk/prompt"
 	"github.com/MemaxLabs/memax-go-agent-sdk/resultstore"
 	"github.com/MemaxLabs/memax-go-agent-sdk/session"
@@ -40,6 +41,7 @@ type Options struct {
 	PromptBuilder prompt.Builder
 	PromptProfile prompt.Profile
 	Identity      identity.Identity
+	Planner       planner.Policy
 	MemorySource  memory.Source
 	Memories      []memory.Memory
 	SkillSource   skill.Source
@@ -106,6 +108,9 @@ func (o Options) Merge(override Options) Options {
 	}
 	if !override.Identity.IsZero() {
 		o.Identity = override.Identity
+	}
+	if override.Planner != nil {
+		o.Planner = override.Planner
 	}
 	if override.MemorySource != nil {
 		o.MemorySource = override.MemorySource

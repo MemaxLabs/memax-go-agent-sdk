@@ -15,6 +15,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/memory"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/output"
+	"github.com/MemaxLabs/memax-go-agent-sdk/planner"
 	"github.com/MemaxLabs/memax-go-agent-sdk/session"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/memorytools"
@@ -31,6 +32,7 @@ func All() []agenteval.Case {
 		SessionResume(),
 		ContextRetry(),
 		SubagentDelegation(),
+		PlannerGuidedToolUse(),
 		OpenAIProviderTextAndUsage(),
 		AnthropicProviderTextAndUsage(),
 		OpenAIProviderToolUseRoundTrip(),
@@ -38,7 +40,70 @@ func All() []agenteval.Case {
 		PermissionDenialRecovery(),
 		HookDenialRecovery(),
 		LargeResultStorageRecovery(),
+		BudgetStopsBeforeSecondModelCall(),
+		BudgetStopsBeforeToolBatch(),
+		BudgetStopsAfterTokenUsage(),
 		DeferredToolDiscoveryRecovery(),
+	}
+}
+
+// PlannerGuidedToolUse returns a single-use scenario where host-provided plan
+// context is injected into the prompt and the model follows the planned tool
+// path.
+func PlannerGuidedToolUse() agenteval.Case {
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "tool-1",
+				Name:  "read_file",
+				Input: json.RawMessage(`{"path":"migrations/001.sql"}`),
+			},
+		}},
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "planner-guided review complete"}},
+	)
+
+	return agenteval.Case{
+		Name:   "planner_guided_tool_use",
+		Prompt: "Review the migration using the host plan.",
+		Options: memaxagent.Options{
+			Model: modelClient,
+			Tools: tool.NewRegistry(readFileTool()),
+			Planner: planner.Static(planner.Plan{
+				Goal:        "review migration safely",
+				State:       planner.StateActive,
+				Constraints: []string{"inspect the migration before judging risk"},
+				Steps: []planner.Step{{
+					ID:        "step-1",
+					Title:     "read migration file",
+					Status:    planner.StatusInProgress,
+					ToolHints: []string{"read_file"},
+					Evidence:  []string{"migrations/001.sql"},
+				}},
+			}),
+		},
+		Assertions: []agenteval.Assertion{
+			agenteval.ToolUsed("read_file"),
+			toolResultContains("read_file", false, "read migrations/001.sql"),
+			agenteval.FinalEquals("planner-guided review complete"),
+			requestCountEquals(modelClient, 2),
+			{
+				Name: "plan injected into prompt",
+				Check: func(agenteval.Result) error {
+					requests := modelClient.Requests()
+					if len(requests) == 0 {
+						return fmt.Errorf("missing model request")
+					}
+					prompt := requests[0].SystemPrompt
+					for _, want := range []string{"Host-provided plan", "review migration safely", "read_file", "migrations/001.sql"} {
+						if !strings.Contains(prompt, want) {
+							return fmt.Errorf("system prompt missing %q:\n%s", want, prompt)
+						}
+					}
+					return nil
+				},
+			},
+		},
 	}
 }
 

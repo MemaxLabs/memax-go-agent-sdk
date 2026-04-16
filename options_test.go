@@ -10,6 +10,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/memory"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/output"
+	"github.com/MemaxLabs/memax-go-agent-sdk/planner"
 	"github.com/MemaxLabs/memax-go-agent-sdk/session"
 	"github.com/MemaxLabs/memax-go-agent-sdk/skill"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
@@ -23,6 +24,7 @@ func TestOptionsMergeAppliesOverridesAndCopiesSlices(t *testing.T) {
 		Output:             output.Contract{Schema: map[string]any{"type": "string"}},
 		Budget:             budget.Policy{MaxTurns: 1},
 		Identity:           identity.Identity{Name: "base"},
+		Planner:            planner.Static(planner.Plan{Goal: "base"}),
 		Memories:           []memory.Memory{{Name: "base"}},
 		Skills:             []skill.Skill{{Name: "base"}},
 		SystemPrompt:       "base system",
@@ -38,6 +40,7 @@ func TestOptionsMergeAppliesOverridesAndCopiesSlices(t *testing.T) {
 		Output:             output.Contract{MaxRetries: -1},
 		Budget:             budget.Policy{MaxModelCalls: 1},
 		Identity:           identity.Identity{Name: "override"},
+		Planner:            planner.Static(planner.Plan{Goal: "override"}),
 		Memories:           overrideMemories,
 		Skills:             overrideSkills,
 		SystemPrompt:       "override system",
@@ -62,6 +65,13 @@ func TestOptionsMergeAppliesOverridesAndCopiesSlices(t *testing.T) {
 	}
 	if got.Identity.Name != "override" {
 		t.Fatalf("Identity = %#v, want override", got.Identity)
+	}
+	plan, err := got.Planner.Prepare(context.Background(), planner.Request{})
+	if err != nil {
+		t.Fatalf("Planner returned error: %v", err)
+	}
+	if plan.Goal != "override" {
+		t.Fatalf("Plan = %#v, want override", plan)
 	}
 	if got.Memories[0].Name != "override" {
 		t.Fatalf("Memories = %#v, want copied override", got.Memories)

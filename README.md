@@ -23,6 +23,7 @@ Implemented foundation:
 - memory-backed, OS-backed, and `io/fs`-backed file tools for examples and tests
 - bounded subagent tool with parent/child session correlation
 - task state tools for agent planning and progress tracking
+- host-owned planner policies with deterministic prompt plan injection
 - opt-in tool selection and search for deferred tool loading
 - agent identity profiles, deterministic prompt assembly, and local skill manifests
 - project, user, and session memory injection through source-neutral prompt memory sources
@@ -341,6 +342,30 @@ reported model usage, before a tool batch, and at turn start. Custom governors
 can implement `budget.Governor` for tenant-specific quotas or hosted cost
 systems.
 
+To provide an inspectable host plan without giving the model hidden state, set
+`Options.Planner`:
+
+```go
+events, err := memaxagent.Query(ctx, "Review the migration.", memaxagent.Options{
+    Model: client,
+    Tools: registry,
+    Planner: planner.Static(planner.Plan{
+        Goal:        "review migration safely",
+        Constraints: []string{"inspect files before judging risk"},
+        Steps: []planner.Step{{
+            ID:        "step-1",
+            Title:     "read migration file",
+            Status:    planner.StatusInProgress,
+            ToolHints: []string{"read_file"},
+        }},
+    }),
+})
+```
+
+Planner policies receive the active session ID, parent session ID, identity,
+messages, and recent user-query text. The default prompt builder injects the
+returned plan as the named `memax.plan` prompt part.
+
 To regression-test agent behavior without a live model, use `agenteval` with a
 scripted model and assertions:
 
@@ -369,13 +394,17 @@ if err := report.Error(); err != nil {
 
 The `agenteval/scenarios` package includes reusable deterministic cases for
 tool recovery, structured output repair, memory search/save, session resume,
-context retry, subagent delegation, provider usage mapping, and provider
-tool-use round trips. It also covers governance recovery for permission
-denials, hook denials, oversized tool results, and deferred tool discovery:
+context retry, subagent delegation, planner-guided tool use, provider usage
+mapping, and provider tool-use round trips. It also covers governance recovery for permission
+denials, hook denials, oversized tool results, budget stops, and deferred tool
+discovery:
 
 ```go
 report := agenteval.Runner{}.Run(ctx, scenarios.All()...)
 ```
+
+Cases that intentionally stop with an agent error can set `AllowError: true`
+and assert `Result.RunErr`, for example with `agenteval.RunErrorContains`.
 
 Next implementation work is tracked in [docs/roadmap.md](docs/roadmap.md).
 Server embedding guidance is available in [docs/server.md](docs/server.md).

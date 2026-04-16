@@ -8,6 +8,7 @@ import (
 
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
 	"github.com/MemaxLabs/memax-go-agent-sdk/agenteval"
+	"github.com/MemaxLabs/memax-go-agent-sdk/budget"
 	"github.com/MemaxLabs/memax-go-agent-sdk/hook"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/permission"
@@ -180,6 +181,138 @@ func LargeResultStorageRecovery() agenteval.Case {
 					return nil
 				},
 			},
+		},
+	}
+}
+
+// BudgetStopsBeforeSecondModelCall returns a single-use scenario where the
+// first turn executes a tool, then the budget governor blocks the follow-up
+// model call before it starts.
+func BudgetStopsBeforeSecondModelCall() agenteval.Case {
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "tool-1",
+				Name:  "read_file",
+				Input: json.RawMessage(`{"path":"README.md"}`),
+			},
+		}},
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "should not run"}},
+	)
+
+	return agenteval.Case{
+		Name:       "budget_stops_before_second_model_call",
+		Prompt:     "Read a file, then continue.",
+		AllowError: true,
+		Options: memaxagent.Options{
+			Model:  modelClient,
+			Tools:  tool.NewRegistry(readFileTool()),
+			Budget: budget.Policy{MaxModelCalls: 1},
+		},
+		Assertions: []agenteval.Assertion{
+			agenteval.ToolUsed("read_file"),
+			toolResultContains("read_file", false, "read README.md"),
+			agenteval.RunErrorContains("max model calls"),
+			requestCountEquals(modelClient, 1),
+		},
+	}
+}
+
+// BudgetStopsBeforeToolBatch returns a single-use scenario where the model asks
+// for more tool calls than the configured budget allows and no handler runs.
+func BudgetStopsBeforeToolBatch() agenteval.Case {
+	runCount := 0
+	guardedRead := tool.Definition{
+		ToolSpec: model.ToolSpec{
+			Name:        "read_file",
+			Description: "Read a workspace file.",
+			ReadOnly:    true,
+			InputSchema: stringFieldSchema("path"),
+		},
+		Handler: func(context.Context, tool.Call) (model.ToolResult, error) {
+			runCount++
+			return model.ToolResult{Content: "handler should not run"}, nil
+		},
+	}
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "tool-1",
+				Name:  "read_file",
+				Input: json.RawMessage(`{"path":"README.md"}`),
+			},
+		}, {
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "tool-2",
+				Name:  "read_file",
+				Input: json.RawMessage(`{"path":"docs/architecture.md"}`),
+			},
+		}},
+	)
+
+	return agenteval.Case{
+		Name:       "budget_stops_before_tool_batch",
+		Prompt:     "Read two files.",
+		AllowError: true,
+		Options: memaxagent.Options{
+			Model:  modelClient,
+			Tools:  tool.NewRegistry(guardedRead),
+			Budget: budget.Policy{MaxToolCalls: 1},
+		},
+		Assertions: []agenteval.Assertion{
+			agenteval.ToolUsed("read_file"),
+			agenteval.RunErrorContains("max tool calls"),
+			{
+				Name: "tool handlers did not run",
+				Check: func(agenteval.Result) error {
+					if runCount != 0 {
+						return fmt.Errorf("tool handlers ran %d times, want 0", runCount)
+					}
+					return nil
+				},
+			},
+			requestCountEquals(modelClient, 1),
+		},
+	}
+}
+
+// BudgetStopsAfterTokenUsage returns a single-use scenario where reported usage
+// exceeds the token budget and the run stops before producing a final result.
+func BudgetStopsAfterTokenUsage() agenteval.Case {
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{
+			Kind: model.StreamText,
+			Text: "expensive answer",
+		}, {
+			Kind:  model.StreamUsage,
+			Usage: &model.Usage{InputTokens: 6, OutputTokens: 5, TotalTokens: 11},
+		}},
+	)
+
+	return agenteval.Case{
+		Name:       "budget_stops_after_token_usage",
+		Prompt:     "Answer with usage.",
+		AllowError: true,
+		Options: memaxagent.Options{
+			Model:  modelClient,
+			Budget: budget.Policy{MaxTotalTokens: 10},
+		},
+		Assertions: []agenteval.Assertion{
+			agenteval.EventKindEmitted(memaxagent.EventUsage),
+			agenteval.RunErrorContains("max total tokens"),
+			{
+				Name: "no final result emitted",
+				Check: func(result agenteval.Result) error {
+					if result.Final != "" {
+						return fmt.Errorf("final = %q, want empty result after budget stop", result.Final)
+					}
+					return nil
+				},
+			},
+			requestCountEquals(modelClient, 1),
 		},
 	}
 }

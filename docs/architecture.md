@@ -145,10 +145,14 @@ credentials. This keeps autonomy quality executable while preserving the same
 provider-neutral core loop used in production.
 `agenteval/scenarios` contains reusable baseline cases for core behaviors such
 as tool validation recovery, structured-output repair, memory search/save,
-session resume, context retry, subagent delegation, provider usage mapping, and
-provider tool-use round trips. Governance scenarios cover permission denial,
-before-hook denial, oversized result storage, and deferred tool discovery
-recovery.
+session resume, context retry, subagent delegation, planner-guided tool use,
+provider usage mapping, and provider tool-use round trips. Governance scenarios cover permission denial,
+before-hook denial, oversized result storage, budget stops, and deferred tool
+discovery recovery.
+
+Eval cases can set `AllowError` when an agent error is the expected behavior.
+The runner stores that error in `Result.RunErr` and still runs assertions,
+while unexpected run errors continue to fail the case before assertions.
 
 ## Permissions
 
@@ -158,11 +162,11 @@ If no structured rule matches, `Policy` denies by default unless an explicit def
 
 Hooks complement permissions. Permissions answer "may this run?" while hooks let host applications add policy, audit, tracing, and future input rewriting without changing tool implementations.
 
-## Prompt, Identity, Memories, and Skills
+## Prompt, Identity, Plans, Memories, and Skills
 
 The prompt layer is a first-class part of the orchestration contract. Applications
 can keep using raw `SystemPrompt` and `AppendSystemPrompt` fields for full
-control. When an identity, memories, skills, or a custom prompt builder are
+control. When an identity, planner, memories, skills, or a custom prompt builder are
 configured, the SDK builds a deterministic system prompt from named parts and
 passes that assembled prompt to the provider adapter.
 
@@ -172,13 +176,14 @@ The default identity is deliberately tool-bounded: it tells the model to operate
 only through host-provided tools and to prefer observable progress.
 
 `prompt.Builder` receives the identity, selected model-visible tools, session
-messages, configured memories, configured skills, configured final-output
+messages, configured plan, configured memories, configured skills, configured final-output
 contract, and host prompt text. The default builder emits:
 
 - core Memax runtime instructions
 - identity and constraints
 - tool-use guidance based on active tool count
 - final-output JSON Schema contract
+- host-provided plan context
 - durable host memory context
 - relevant skills
 - host system and append-system prompt text
@@ -200,6 +205,21 @@ structured output repair inside the same durable transcript, context policy,
 tool-selection, hook, and telemetry flow as every other turn. Zero-value output
 contracts are a no-op; `MaxRetries` zero uses the SDK default, and negative
 values disable repair retries.
+
+`planner.Policy` lets hosts provide explicit plan context without turning
+planning into hidden core state. The policy receives the active session ID,
+parent session ID, identity, current messages, and bounded recent user-query
+text. It returns a `planner.Plan` containing a goal, overall state,
+constraints, and ordered steps with status, evidence, and tool hints. The
+default builder injects non-empty plans as `memax.plan` before memories and
+skills, so the model sees the host strategy while every action still goes
+through normal tools, permissions, hooks, budgets, and telemetry.
+
+Planner policies are called on every model turn rather than cached for the
+whole run. This is intentional: a host planner may reflect task progress,
+external approvals, or other state that changes after tool results. Planners
+that talk to remote services should be fast, cached, prefetched, or
+timeout-bounded when per-turn freshness is not needed.
 
 `memory.Source` is the source-neutral loading contract for durable host context
 such as project rules, user preferences, session notes, or organization policy.

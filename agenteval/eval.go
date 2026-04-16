@@ -26,6 +26,10 @@ type Case struct {
 	Options    memaxagent.Options
 	Assertions []Assertion
 	Timeout    time.Duration
+	// AllowError lets assertions inspect an expected agent/query error without
+	// making the case fail before assertions run. Unexpected errors are still
+	// recorded as Result.RunErr and become Result.Err when AllowError is false.
+	AllowError bool
 	// Cleanup releases resources created for the case. It is called once after
 	// the event stream is drained or Query fails.
 	Cleanup func()
@@ -40,8 +44,11 @@ type Result struct {
 	SessionID       string
 	ParentSessionID string
 	Usage           model.Usage
-	Err             error
-	Duration        time.Duration
+	// RunErr is the error emitted by Query or returned while starting the run.
+	// It is separate from Err so cases can assert expected failures.
+	RunErr   error
+	Err      error
+	Duration time.Duration
 }
 
 // Passed reports whether the case completed and all assertions passed.
@@ -151,7 +158,10 @@ func (r Runner) runCase(ctx context.Context, c Case) (result Result) {
 
 	events, err := memaxagent.Query(ctx, c.Prompt, r.Options.Merge(c.Options))
 	if err != nil {
-		result.Err = err
+		result.RunErr = err
+		if !c.AllowError {
+			result.Err = err
+		}
 		return result
 	}
 	var eventUsage model.Usage
@@ -166,8 +176,8 @@ func (r Runner) runCase(ctx context.Context, c Case) (result Result) {
 		}
 		switch event.Kind {
 		case memaxagent.EventError:
-			if result.Err == nil {
-				result.Err = event.Err
+			if result.RunErr == nil {
+				result.RunErr = event.Err
 			}
 		case memaxagent.EventResult:
 			result.Final = event.Result
@@ -184,7 +194,8 @@ func (r Runner) runCase(ctx context.Context, c Case) (result Result) {
 	if !resultUsage {
 		result.Usage = eventUsage
 	}
-	if result.Err != nil {
+	if result.RunErr != nil && !c.AllowError {
+		result.Err = result.RunErr
 		return result
 	}
 	var assertionErrors []error

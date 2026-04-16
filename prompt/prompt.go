@@ -11,6 +11,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/identity"
 	"github.com/MemaxLabs/memax-go-agent-sdk/memory"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
+	"github.com/MemaxLabs/memax-go-agent-sdk/planner"
 	"github.com/MemaxLabs/memax-go-agent-sdk/skill"
 )
 
@@ -39,6 +40,7 @@ type Request struct {
 	AppendSystemPrompt string
 	Messages           []model.Message
 	Tools              []model.ToolSpec
+	Plan               planner.Plan
 	Memories           []memory.Memory
 	Skills             []skill.Skill
 	OutputSchema       map[string]any
@@ -83,6 +85,9 @@ func (b DefaultBuilder) Build(ctx context.Context, req Request) (Result, error) 
 	}
 	if len(req.OutputSchema) > 0 {
 		parts = append(parts, Part{Name: "memax.output_contract", Content: formatOutputContract(req.OutputSchema)})
+	}
+	if !req.Plan.Empty() {
+		parts = append(parts, Part{Name: "memax.plan", Content: formatPlan(req.Plan)})
 	}
 	if selected := b.MemorySelector.Select(req.Memories, requestQuery(req)); len(selected) > 0 {
 		parts = append(parts, Part{Name: "memax.memories", Content: formatMemories(selected)})
@@ -266,6 +271,61 @@ func formatMemories(memories []memory.Memory) string {
 		}
 	}
 	return b.String()
+}
+
+func formatPlan(plan planner.Plan) string {
+	var b strings.Builder
+	b.WriteString("Host-provided plan for this run:")
+	if value := strings.TrimSpace(plan.Goal); value != "" {
+		fmt.Fprintf(&b, "\nGoal: %s", value)
+	}
+	if plan.State != "" {
+		fmt.Fprintf(&b, "\nState: %s", plan.State)
+	}
+	if constraints := nonEmptyStrings(plan.Constraints); len(constraints) > 0 {
+		b.WriteString("\nConstraints:")
+		for _, constraint := range constraints {
+			fmt.Fprintf(&b, "\n- %s", constraint)
+		}
+	}
+	if len(plan.Steps) > 0 {
+		b.WriteString("\nSteps:")
+		for _, step := range plan.Steps {
+			title := strings.TrimSpace(step.Title)
+			if title == "" {
+				title = strings.TrimSpace(step.ID)
+			}
+			if title == "" {
+				continue
+			}
+			status := step.Status
+			if status == "" {
+				status = planner.StatusPending
+			}
+			if step.ID != "" {
+				fmt.Fprintf(&b, "\n- [%s] %s: %s", status, step.ID, title)
+			} else {
+				fmt.Fprintf(&b, "\n- [%s] %s", status, title)
+			}
+			if hints := nonEmptyStrings(step.ToolHints); len(hints) > 0 {
+				fmt.Fprintf(&b, "\n  Tool hints: %s", strings.Join(hints, ", "))
+			}
+			if evidence := nonEmptyStrings(step.Evidence); len(evidence) > 0 {
+				fmt.Fprintf(&b, "\n  Evidence: %s", strings.Join(evidence, "; "))
+			}
+		}
+	}
+	return b.String()
+}
+
+func nonEmptyStrings(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			out = append(out, value)
+		}
+	}
+	return out
 }
 
 func joinParts(parts []Part) string {

@@ -21,19 +21,27 @@ func main() {
 			passed++
 		}
 		fmt.Printf(
-			"%s %s events=%d tools=%s duration=%s result=%q\n",
+			"%s %s events=%d tools=%s duration=%s result=%q run_error=%q\n",
 			status,
 			result.Name,
 			len(result.Events),
 			toolNames(result),
 			result.Duration,
 			result.Final,
+			runError(result),
 		)
 	}
 	fmt.Printf("%d passed, %d failed\n", passed, len(report.Results)-passed)
 	if err := report.Error(); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func runError(result agenteval.Result) string {
+	if result.RunErr == nil {
+		return ""
+	}
+	return result.RunErr.Error()
 }
 
 func toolNames(result agenteval.Result) string {

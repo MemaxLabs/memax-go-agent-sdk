@@ -9,6 +9,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/identity"
 	"github.com/MemaxLabs/memax-go-agent-sdk/memory"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
+	"github.com/MemaxLabs/memax-go-agent-sdk/planner"
 	"github.com/MemaxLabs/memax-go-agent-sdk/skill"
 )
 
@@ -56,6 +57,31 @@ func TestDefaultBuilderIncludesSelectedMemories(t *testing.T) {
 	}
 	if strings.Contains(result.SystemPrompt, "Use accessible controls.") {
 		t.Fatalf("system prompt included irrelevant memory:\n%s", result.SystemPrompt)
+	}
+}
+
+func TestDefaultBuilderIncludesPlan(t *testing.T) {
+	result, err := (DefaultBuilder{}).Build(context.Background(), Request{
+		Plan: planner.Plan{
+			Goal:        "review migration safely",
+			State:       planner.StateActive,
+			Constraints: []string{"inspect before changing"},
+			Steps: []planner.Step{{
+				ID:        "step-1",
+				Title:     "read migration",
+				Status:    planner.StatusInProgress,
+				ToolHints: []string{"read_file"},
+				Evidence:  []string{"migrations/001.sql"},
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+	for _, want := range []string{"Host-provided plan", "review migration safely", "inspect before changing", "step-1", "read_file", "migrations/001.sql"} {
+		if !strings.Contains(result.SystemPrompt, want) {
+			t.Fatalf("system prompt missing %q:\n%s", want, result.SystemPrompt)
+		}
 	}
 }
 

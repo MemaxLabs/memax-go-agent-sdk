@@ -138,6 +138,26 @@ func TestRunnerUsesResultUsageWithoutDoubleCounting(t *testing.T) {
 	}
 }
 
+func TestRunnerAllowsExpectedRunErrorAssertions(t *testing.T) {
+	report := Runner{}.Run(context.Background(), Case{
+		Name:       "expected error",
+		Prompt:     "answer",
+		AllowError: true,
+		Options: memaxagent.Options{
+			Model: errorModel{err: errors.New("budget exceeded: max model calls")},
+		},
+		Assertions: []Assertion{
+			RunErrorContains("max model calls"),
+		},
+	})
+	if err := report.Error(); err != nil {
+		t.Fatalf("report error = %v", err)
+	}
+	if report.Results[0].RunErr == nil {
+		t.Fatalf("RunErr = nil, want captured model error")
+	}
+}
+
 func TestScriptedModelReturnsDefensiveRequestCopies(t *testing.T) {
 	client := NewScriptedModel([]model.StreamEvent{{Kind: model.StreamText, Text: "done"}})
 	_, err := client.Stream(context.Background(), model.Request{
@@ -164,4 +184,12 @@ func TestScriptedModelReturnsDefensiveRequestCopies(t *testing.T) {
 	if got := requests[0].Tools[0].InputSchema["properties"].(map[string]any)["path"]; got == "mutated" {
 		t.Fatalf("captured schema was mutated through Requests")
 	}
+}
+
+type errorModel struct {
+	err error
+}
+
+func (m errorModel) Stream(context.Context, model.Request) (model.Stream, error) {
+	return nil, m.err
 }
