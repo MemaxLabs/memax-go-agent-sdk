@@ -22,8 +22,9 @@ type Option func(*Client)
 type Client struct {
 	APIKey string
 	Model  string
-	// BaseURL is the provider API base URL. When set, requests are sent to
-	// BaseURL + "/responses". Endpoint takes precedence over BaseURL.
+	// BaseURL is the provider API-version base URL. When selected, requests are
+	// sent to BaseURL + "/responses". For OpenAI-compatible gateways, this is
+	// usually the root URL plus "/v1".
 	BaseURL string
 	// Endpoint is the full Responses API endpoint. It is primarily useful for
 	// tests, proxies, and gateways that do not follow the default path layout.
@@ -44,7 +45,8 @@ func New(apiKey string, modelName string, opts ...Option) *Client {
 }
 
 // NewFromEnv creates a client using OPENAI_API_KEY and OPENAI_BASE_URL. If
-// modelName is empty, it uses OPENAI_MODEL.
+// modelName is empty, it uses OPENAI_MODEL. Options passed to NewFromEnv take
+// precedence over environment-derived endpoint settings.
 func NewFromEnv(modelName string, opts ...Option) *Client {
 	if modelName == "" {
 		modelName = os.Getenv("OPENAI_MODEL")
@@ -57,16 +59,17 @@ func NewFromEnv(modelName string, opts ...Option) *Client {
 	return New(os.Getenv("OPENAI_API_KEY"), modelName, envOpts...)
 }
 
-// WithBaseURL sets the provider API base URL. Requests are sent to
-// BaseURL + "/responses" unless WithEndpoint is also configured.
+// WithBaseURL sets the provider API-version base URL. Requests are sent to
+// BaseURL + "/responses". For OpenAI-compatible gateways, this usually includes
+// "/v1", for example "https://gateway.example.com/v1".
 func WithBaseURL(baseURL string) Option {
 	return func(c *Client) {
 		c.BaseURL = baseURL
 	}
 }
 
-// WithEndpoint sets the full Responses API endpoint. It takes precedence over
-// BaseURL and is useful for tests, proxies, and gateways with custom paths.
+// WithEndpoint sets the full Responses API endpoint. It is useful for tests,
+// proxies, and gateways with custom paths.
 func WithEndpoint(endpoint string) Option {
 	return func(c *Client) {
 		c.Endpoint = endpoint

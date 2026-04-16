@@ -39,8 +39,13 @@ Current agent SDKs commonly expose autonomous file reading, command execution, w
 - `identity`: reusable agent identity profiles for role, mission, tone, autonomy, and constraints.
 - `permission`: reusable permission checkers and policy composition.
 - `prompt`: deterministic system prompt assembly from named parts, identity, tools, skills, and host guidance.
-- `providers/openai`: optional Responses API adapter for hosted model streaming and function calls. Supports constructor options, default hosted endpoints, `OPENAI_BASE_URL`, and explicit full-endpoint overrides.
-- `providers/anthropic`: optional Messages API adapter for hosted model streaming and tool-use blocks. Supports constructor options, default hosted endpoints, `ANTHROPIC_BASE_URL`, and explicit full-endpoint overrides.
+- `providers/openai`: optional Responses API adapter for hosted model streaming and function calls. Supports constructor options, default hosted endpoints, OpenAI-style `OPENAI_BASE_URL` API-version bases such as `/v1`, and explicit full-endpoint overrides.
+- `providers/anthropic`: optional Messages API adapter for hosted model streaming and tool-use blocks. Supports constructor options, default hosted endpoints, Anthropic-style `ANTHROPIC_BASE_URL` service roots without `/v1`, and explicit full-endpoint overrides.
+
+Provider base URL semantics intentionally follow each provider ecosystem rather
+than a single SDK-wide rule: OpenAI `BaseURL` is the API-version base and
+Anthropic `BaseURL` is the service root. Use the full `Endpoint` option when a
+gateway needs a nonstandard route.
 - `session`: session persistence interface plus in-memory and append-only JSONL implementations.
 - `session/sqlitestore`: optional SQLite-backed session store for embedded durable agents.
 - `skill`: local skill manifests, loaders, and relevance selection.

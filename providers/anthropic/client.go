@@ -26,8 +26,8 @@ type Option func(*Client)
 type Client struct {
 	APIKey string
 	Model  string
-	// BaseURL is the provider API base URL. When set, requests are sent to
-	// BaseURL + "/messages". Endpoint takes precedence over BaseURL.
+	// BaseURL is the Anthropic API service root. When set, requests are sent to
+	// BaseURL + "/v1/messages".
 	BaseURL string
 	// Endpoint is the full Messages API endpoint. It is primarily useful for
 	// tests, proxies, and gateways that do not follow the default path layout.
@@ -47,7 +47,8 @@ func New(apiKey string, modelName string, opts ...Option) *Client {
 }
 
 // NewFromEnv creates a client using ANTHROPIC_API_KEY and ANTHROPIC_BASE_URL.
-// If modelName is empty, it uses ANTHROPIC_MODEL.
+// If modelName is empty, it uses ANTHROPIC_MODEL. Options passed to NewFromEnv
+// take precedence over environment-derived endpoint settings.
 func NewFromEnv(modelName string, opts ...Option) *Client {
 	if modelName == "" {
 		modelName = os.Getenv("ANTHROPIC_MODEL")
@@ -60,16 +61,17 @@ func NewFromEnv(modelName string, opts ...Option) *Client {
 	return New(os.Getenv("ANTHROPIC_API_KEY"), modelName, envOpts...)
 }
 
-// WithBaseURL sets the provider API base URL. Requests are sent to
-// BaseURL + "/messages" unless WithEndpoint is also configured.
+// WithBaseURL sets the Anthropic API service root. Requests are sent to
+// BaseURL + "/v1/messages". This matches Anthropic SDK conventions where the
+// default base URL is "https://api.anthropic.com".
 func WithBaseURL(baseURL string) Option {
 	return func(c *Client) {
 		c.BaseURL = baseURL
 	}
 }
 
-// WithEndpoint sets the full Messages API endpoint. It takes precedence over
-// BaseURL and is useful for tests, proxies, and gateways with custom paths.
+// WithEndpoint sets the full Messages API endpoint. It is useful for tests,
+// proxies, and gateways with custom paths.
 func WithEndpoint(endpoint string) Option {
 	return func(c *Client) {
 		c.Endpoint = endpoint
@@ -192,7 +194,7 @@ func (c *Client) endpoint() string {
 		return c.Endpoint
 	}
 	if c.BaseURL != "" {
-		return strings.TrimRight(c.BaseURL, "/") + "/messages"
+		return strings.TrimRight(c.BaseURL, "/") + "/v1/messages"
 	}
 	return defaultEndpoint
 }

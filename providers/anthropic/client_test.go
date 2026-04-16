@@ -183,7 +183,7 @@ data: {"type":"message_stop"}
 	stream, err := (&Client{
 		APIKey:  "test-key",
 		Model:   "test-model",
-		BaseURL: server.URL + "/v1/",
+		BaseURL: server.URL + "/",
 	}).Stream(context.Background(), model.Request{})
 	if err != nil {
 		t.Fatalf("Stream returned error: %v", err)
@@ -196,7 +196,7 @@ data: {"type":"message_stop"}
 }
 
 func TestClientEndpointOverridesBaseURL(t *testing.T) {
-	if got := (&Client{Endpoint: "https://endpoint.test/messages", BaseURL: "https://base.test/v1"}).endpoint(); got != "https://endpoint.test/messages" {
+	if got := (&Client{Endpoint: "https://endpoint.test/messages", BaseURL: "https://base.test"}).endpoint(); got != "https://endpoint.test/messages" {
 		t.Fatalf("endpoint = %q, want explicit endpoint", got)
 	}
 }
@@ -204,7 +204,7 @@ func TestClientEndpointOverridesBaseURL(t *testing.T) {
 func TestNewFromEnvUsesBaseURL(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "env-key")
 	t.Setenv("ANTHROPIC_MODEL", "env-model")
-	t.Setenv("ANTHROPIC_BASE_URL", "https://gateway.test/v1")
+	t.Setenv("ANTHROPIC_BASE_URL", "https://gateway.test")
 
 	client := NewFromEnv("")
 	if client.APIKey != "env-key" {
@@ -213,7 +213,7 @@ func TestNewFromEnvUsesBaseURL(t *testing.T) {
 	if client.Model != "env-model" {
 		t.Fatalf("Model = %q, want env-model", client.Model)
 	}
-	if client.BaseURL != "https://gateway.test/v1" {
+	if client.BaseURL != "https://gateway.test" {
 		t.Fatalf("BaseURL = %q, want env value", client.BaseURL)
 	}
 	if got := client.endpoint(); got != "https://gateway.test/v1/messages" {
@@ -224,7 +224,7 @@ func TestNewFromEnvUsesBaseURL(t *testing.T) {
 func TestClientOptions(t *testing.T) {
 	httpClient := &http.Client{}
 	client := New("key", "model",
-		WithBaseURL("https://gateway.test/v1"),
+		WithBaseURL("https://gateway.test"),
 		WithEndpoint("https://endpoint.test/messages"),
 		WithHTTPClient(httpClient),
 		WithTimeout(3*time.Second),
@@ -237,7 +237,7 @@ func TestClientOptions(t *testing.T) {
 	if client.APIKey != "key" || client.Model != "model" {
 		t.Fatalf("client identity = %#v, want key/model", client)
 	}
-	if client.BaseURL != "https://gateway.test/v1" {
+	if client.BaseURL != "https://gateway.test" {
 		t.Fatalf("BaseURL = %q, want gateway", client.BaseURL)
 	}
 	if client.Endpoint != "https://endpoint.test/messages" {
@@ -263,14 +263,14 @@ func TestClientOptions(t *testing.T) {
 func TestNewFromEnvOptionsOverrideEnv(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "env-key")
 	t.Setenv("ANTHROPIC_MODEL", "env-model")
-	t.Setenv("ANTHROPIC_BASE_URL", "https://env.test/v1")
+	t.Setenv("ANTHROPIC_BASE_URL", "https://env.test")
 
-	client := NewFromEnv("", WithBaseURL("https://option.test/v1"))
+	client := NewFromEnv("", WithBaseURL("https://option.test"))
 	if client.APIKey != "env-key" || client.Model != "env-model" {
 		t.Fatalf("client = %#v, want env identity", client)
 	}
-	if client.BaseURL != "https://option.test/v1" {
-		t.Fatalf("BaseURL = %q, want option override", client.BaseURL)
+	if got := client.endpoint(); got != "https://option.test/v1/messages" {
+		t.Fatalf("endpoint = %q, want option override", got)
 	}
 }
 

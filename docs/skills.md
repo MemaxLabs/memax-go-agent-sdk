@@ -53,8 +53,20 @@ always_on: false
 tags: database, sql, migration
 ---
 
-Check lock behavior, rollback path, data safety, and observability.
+    Check lock behavior, rollback path, data safety, and observability.
 ```
+
+The portable authoring subset matches the common Agent Skills file shape:
+`SKILL.md` with frontmatter `name` and `description`, followed by Markdown
+instructions. That keeps skills easy to share with ecosystems that use
+filesystem skill bundles.
+
+Memax deliberately does not clone any provider-specific skill runtime. The SDK
+does not assume a real filesystem, Bash tool, or VM where the model can read
+additional bundled files on demand. Instead, the host owns skill loading through
+`skill.Source`, and selected skill content is injected as prompt context. If an
+application wants progressive file/resource loading, it should expose those
+resources through normal tools.
 
 Supported frontmatter fields:
 
@@ -65,8 +77,10 @@ Supported frontmatter fields:
 - `tags`
 - `policy` or `policy_hints`
 
-The parser intentionally supports only simple `key: value` metadata and
-comma-separated tags. It is not a full YAML parser.
+`name` and `description` are the standard portable fields. The other fields are
+Memax SDK extensions for local relevance selection and host policy. The parser
+intentionally supports only simple `key: value` metadata and comma-separated
+tags. It is not a full YAML parser.
 
 ## HTTP Format
 

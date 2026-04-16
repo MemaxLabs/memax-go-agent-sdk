@@ -8,6 +8,12 @@ changes should still be called out here with migration notes.
 
 ## Unreleased
 
+- Added provider constructor options for API base URLs, full endpoint
+  overrides, custom HTTP clients, request timeouts, and provider-specific
+  sampling/token controls. OpenAI `BaseURL` follows the OpenAI ecosystem
+  convention of an API-version base such as `/v1`; Anthropic `BaseURL` follows
+  the Anthropic ecosystem convention of a service root and appends
+  `/v1/messages`.
 - Added Phase 4 embedding examples for local, CI, scripted server, and live
   provider server usage.
 - Added golden event-stream compatibility coverage for a tool-using query run.

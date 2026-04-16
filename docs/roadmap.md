@@ -68,6 +68,15 @@ system prompt.
 
 ## Phase 6: Ecosystem and Hardening
 
+- Maintain `docs/agent-runtime-quality.md` as the standing competitive-agent
+  gap analysis. Each major subsystem should be compared against the local
+  TypeScript and Codex references before implementation, then moved from
+  Foundation to Competitive or Leading with eval coverage.
+- Add progressive skill disclosure. Metadata-only skill discovery, explicit
+  skill loading tools, optional resource loading, transcript-visible loaded
+  skill content, and skill-disclosure evals should replace prompt stuffing for
+  serious skill catalogs while preserving current direct-injection behavior for
+  compatibility.
 - Add more durable stores and workspace adapters, starting with production SQLite examples, object-store checkpoint managers, and git-backed workspace checkpoints.
 - Add MCP/tool bridge examples while keeping the core tool contract provider-neutral.
 - Add release automation, API compatibility checks, and generated reference docs.
