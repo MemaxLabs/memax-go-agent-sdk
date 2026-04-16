@@ -3,6 +3,7 @@ package workspacetools
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -153,9 +154,9 @@ func TestApplyPatchToolRejectsMultiplePatchFormats(t *testing.T) {
 func TestApplyPatchToolReviewerDeniesWithoutMutation(t *testing.T) {
 	store := workspace.NewMemoryStore(map[string]string{"README.md": "hello"})
 	var got PatchReviewRequest
-	reviewer := PatchReviewerFunc(func(_ context.Context, req PatchReviewRequest) PatchReviewDecision {
+	reviewer := PatchReviewerFunc(func(_ context.Context, req PatchReviewRequest) (PatchReviewDecision, error) {
 		got = req
-		return PatchReviewDecision{Allow: false, Reason: "README edits need approval"}
+		return PatchReviewDecision{Allow: false, Reason: "README edits need approval"}, nil
 	})
 	result, err := NewApplyPatchToolWithReview(store, reviewer).Execute(context.Background(), tool.Call{
 		Use: model.ToolUse{
@@ -185,9 +186,9 @@ func TestApplyPatchToolReviewerDeniesWithoutMutation(t *testing.T) {
 func TestApplyPatchToolReviewerObservesDryRun(t *testing.T) {
 	store := workspace.NewMemoryStore(map[string]string{"README.md": "hello"})
 	var got PatchReviewRequest
-	reviewer := PatchReviewerFunc(func(_ context.Context, req PatchReviewRequest) PatchReviewDecision {
+	reviewer := PatchReviewerFunc(func(_ context.Context, req PatchReviewRequest) (PatchReviewDecision, error) {
 		got = req
-		return PatchReviewDecision{Allow: true}
+		return PatchReviewDecision{Allow: true}, nil
 	})
 	result := mustExecute(t, NewApplyPatchToolWithReview(store, reviewer), model.ToolUse{
 		ID:    "patch-1",
@@ -206,6 +207,33 @@ func TestApplyPatchToolReviewerObservesDryRun(t *testing.T) {
 	}
 	if content != "hello" {
 		t.Fatalf("content = %q, want dry-run to leave file unchanged", content)
+	}
+}
+
+func TestApplyPatchToolReviewerErrorBlocksMutation(t *testing.T) {
+	store := workspace.NewMemoryStore(map[string]string{"README.md": "hello"})
+	reviewer := PatchReviewerFunc(func(context.Context, PatchReviewRequest) (PatchReviewDecision, error) {
+		return PatchReviewDecision{}, fmt.Errorf("policy service unavailable")
+	})
+	result, err := NewApplyPatchToolWithReview(store, reviewer).Execute(context.Background(), tool.Call{
+		Use: model.ToolUse{
+			ID:    "patch-1",
+			Name:  ApplyPatchToolName,
+			Input: json.RawMessage(`{"operations":[{"path":"README.md","old_content":"hello","new_content":"changed"}]}`),
+		},
+	})
+	if err == nil {
+		t.Fatalf("Execute returned nil error with result %#v, want reviewer error", result)
+	}
+	if !strings.Contains(err.Error(), "policy service unavailable") {
+		t.Fatalf("Execute error = %v, want wrapped reviewer error", err)
+	}
+	content, readErr := store.ReadFile(context.Background(), "README.md")
+	if readErr != nil {
+		t.Fatalf("ReadFile returned error: %v", readErr)
+	}
+	if content != "hello" {
+		t.Fatalf("content = %q, want reviewer error to leave file unchanged", content)
 	}
 }
 

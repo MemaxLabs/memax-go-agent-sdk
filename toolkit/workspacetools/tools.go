@@ -63,17 +63,18 @@ type PatchReviewDecision struct {
 
 // PatchReviewer optionally gates workspace patch mutation with structured
 // file-change context. A denied review returns a normal tool error, giving the
-// model a chance to recover without mutating the workspace.
+// model a chance to recover without mutating the workspace. Reviewer errors
+// represent infrastructure or policy-service failures and block the patch.
 type PatchReviewer interface {
-	ReviewPatch(context.Context, PatchReviewRequest) PatchReviewDecision
+	ReviewPatch(context.Context, PatchReviewRequest) (PatchReviewDecision, error)
 }
 
 // PatchReviewerFunc adapts a function into a PatchReviewer.
-type PatchReviewerFunc func(context.Context, PatchReviewRequest) PatchReviewDecision
+type PatchReviewerFunc func(context.Context, PatchReviewRequest) (PatchReviewDecision, error)
 
-func (f PatchReviewerFunc) ReviewPatch(ctx context.Context, req PatchReviewRequest) PatchReviewDecision {
+func (f PatchReviewerFunc) ReviewPatch(ctx context.Context, req PatchReviewRequest) (PatchReviewDecision, error) {
 	if f == nil {
-		return PatchReviewDecision{Allow: true}
+		return PatchReviewDecision{Allow: true}, nil
 	}
 	return f(ctx, req)
 }
@@ -184,6 +185,9 @@ func NewApplyPatchTool(store Patcher) tool.Tool {
 // and previews the requested change, passes the summary to reviewer, and only
 // mutates the workspace when the reviewer allows it. Dry-run requests never
 // mutate but still invoke the reviewer so hosts can audit proposed changes.
+// The actual mutation is re-validated after review; production stores with
+// external mutable state should treat review as advisory unless their adapter
+// performs preview, review, and apply inside one transaction or lease.
 func NewApplyPatchToolWithReview(store Patcher, reviewer PatchReviewer) tool.Tool {
 	return tool.Definition{
 		ToolSpec: model.ToolSpec{
@@ -515,12 +519,15 @@ func applyPatchInput(ctx context.Context, store Patcher, use model.ToolUse, inpu
 
 func reviewPatch(ctx context.Context, reviewer PatchReviewer, use model.ToolUse, result workspace.PatchResult, dryRun bool) (workspace.PatchResult, error) {
 	use.Input = append([]byte(nil), use.Input...)
-	decision := reviewer.ReviewPatch(ctx, PatchReviewRequest{
+	decision, err := reviewer.ReviewPatch(ctx, PatchReviewRequest{
 		ToolUse: use,
 		DryRun:  dryRun,
 		Summary: workspace.SummarizeChanges(result.Changes),
 		Changes: append([]workspace.Change(nil), result.Changes...),
 	})
+	if err != nil {
+		return workspace.PatchResult{}, fmt.Errorf("workspacetools: review workspace patch: %w", err)
+	}
 	if decision.Allow {
 		return result, nil
 	}

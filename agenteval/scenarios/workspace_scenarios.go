@@ -198,13 +198,13 @@ func WorkspacePatchReviewDenialRecovery() agenteval.Case {
 	store := workspace.NewMemoryStore(map[string]string{
 		"README.md": "locked",
 	})
-	reviewer := workspacetools.PatchReviewerFunc(func(_ context.Context, req workspacetools.PatchReviewRequest) workspacetools.PatchReviewDecision {
+	reviewer := workspacetools.PatchReviewerFunc(func(_ context.Context, req workspacetools.PatchReviewRequest) (workspacetools.PatchReviewDecision, error) {
 		for _, path := range req.Summary.Paths {
 			if path == "README.md" {
-				return workspacetools.PatchReviewDecision{Allow: false, Reason: "README.md is locked"}
+				return workspacetools.PatchReviewDecision{Allow: false, Reason: "README.md is locked"}, nil
 			}
 		}
-		return workspacetools.PatchReviewDecision{Allow: true}
+		return workspacetools.PatchReviewDecision{Allow: true}, nil
 	})
 	modelClient := agenteval.NewScriptedModel(
 		[]model.StreamEvent{{
