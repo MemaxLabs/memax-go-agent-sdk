@@ -422,6 +422,13 @@ delegate, err := subagents.NewTool(subagents.Config{
 })
 ```
 
+Subagent delegation can be scoped to host task state. Configure
+`PlanSource: tasktools.SubagentPlanner(tasks, ...)` so a call with `task_id`
+gives the child only that task's plan step, evidence, and verification hints.
+Configure `ResultHandler: tasktools.NewSubagentProgressHandler(tasks)` to
+record successful child results as task progress. Both hooks are opt-in; child
+runs remain normal bounded `Query` calls through the `run_subagent` tool.
+
 To bound an agent run across model calls, tool calls, tokens, turns, and wall
 time, set `Options.Budget`:
 

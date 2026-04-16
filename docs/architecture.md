@@ -413,6 +413,16 @@ Subagents are exposed through `toolkit/subagents`, not as a privileged orchestra
 
 Child runs set `ParentSessionID` to the calling tool runtime session. When the child uses a store that supports parent-aware creation, the transcript records that relationship. The tool result metadata also includes the parent session ID, child session ID, and selected worker name for audit trails and UI linking.
 
+Subagent plan scoping and progress return are explicit extension points.
+`subagents.PlanSource` can prepare a child-only `planner.Plan` from the tool
+input, such as a single task ID, before the child run starts.
+`subagents.ResultHandler` can attach metadata or update host state after the
+child run finishes. The `toolkit/tasktools` package provides
+`SubagentPlanner(store)` and `NewSubagentProgressHandler(store)` adapters, so a
+delegated task can appear as a scoped child plan and then return completion
+evidence to the parent task store. Handler errors are surfaced as tool result
+metadata, not hidden runtime side effects.
+
 ## Context Window
 
 Context-window policies transform session messages before each model request without mutating the durable session transcript. `RecentMessages` keeps a bounded suffix. `TokenBudget` keeps the newest messages under a caller-defined estimate budget. Both drop leading orphan tool-result messages after trimming.

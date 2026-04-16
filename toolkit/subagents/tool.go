@@ -7,6 +7,7 @@ import (
 
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
+	"github.com/MemaxLabs/memax-go-agent-sdk/planner"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
 )
 
@@ -28,8 +29,66 @@ type Config struct {
 	Description    string
 	Agents         []Agent
 	DefaultOptions memaxagent.Options
+	PlanSource     PlanSource
+	ResultHandler  ResultHandler
 	MaxPromptBytes int
 	MaxResultBytes int
+}
+
+// PlanRequest describes the scoped work item a child agent is about to run.
+type PlanRequest struct {
+	Agent           string
+	TaskID          string
+	Prompt          string
+	ParentSessionID string
+}
+
+// PlanSource prepares scoped child-agent plan context. Hosts can use this to
+// give a subagent only the task step, evidence, and verification hints relevant
+// to its delegated work.
+type PlanSource interface {
+	SubagentPlan(context.Context, PlanRequest) (planner.Plan, error)
+}
+
+// PlanSourceFunc adapts a function to PlanSource.
+type PlanSourceFunc func(context.Context, PlanRequest) (planner.Plan, error)
+
+// SubagentPlan calls f(ctx, req). A nil PlanSourceFunc returns an empty plan.
+func (f PlanSourceFunc) SubagentPlan(ctx context.Context, req PlanRequest) (planner.Plan, error) {
+	if f == nil {
+		return planner.Plan{}, nil
+	}
+	return f(ctx, req)
+}
+
+// ResultRequest describes the completed child-agent run passed to an optional
+// ResultHandler.
+type ResultRequest struct {
+	Agent           string
+	TaskID          string
+	Prompt          string
+	ParentSessionID string
+	ChildSessionID  string
+	Result          string
+	IsError         bool
+}
+
+// ResultHandler can attach metadata or update host-owned progress state from a
+// child-agent result. Handler errors are reported in tool result metadata, not
+// returned as tool execution errors.
+type ResultHandler interface {
+	HandleSubagentResult(context.Context, ResultRequest) (map[string]any, error)
+}
+
+// ResultHandlerFunc adapts a function to ResultHandler.
+type ResultHandlerFunc func(context.Context, ResultRequest) (map[string]any, error)
+
+// HandleSubagentResult calls f(ctx, req). A nil ResultHandlerFunc is a no-op.
+func (f ResultHandlerFunc) HandleSubagentResult(ctx context.Context, req ResultRequest) (map[string]any, error) {
+	if f == nil {
+		return nil, nil
+	}
+	return f(ctx, req)
 }
 
 type subagentTool struct {
@@ -37,12 +96,15 @@ type subagentTool struct {
 	agents         map[string]Agent
 	order          []string
 	defaultOptions memaxagent.Options
+	planSource     PlanSource
+	resultHandler  ResultHandler
 	maxPromptBytes int
 }
 
 type input struct {
 	Agent  string `json:"agent"`
 	Prompt string `json:"prompt"`
+	TaskID string `json:"task_id"`
 }
 
 func NewTool(config Config) (tool.Tool, error) {
@@ -88,6 +150,8 @@ func NewTool(config Config) (tool.Tool, error) {
 		agents:         agents,
 		order:          order,
 		defaultOptions: config.DefaultOptions,
+		planSource:     config.PlanSource,
+		resultHandler:  config.ResultHandler,
 		maxPromptBytes: maxPromptBytes,
 	}, nil
 }
@@ -118,6 +182,24 @@ func (t *subagentTool) Execute(ctx context.Context, call tool.Call) (model.ToolR
 	}
 
 	opts := t.defaultOptions.Merge(agent.Options)
+	if t.planSource != nil && in.TaskID != "" {
+		plan, err := t.planSource.SubagentPlan(ctx, PlanRequest{
+			Agent:           agent.Name,
+			TaskID:          in.TaskID,
+			Prompt:          in.Prompt,
+			ParentSessionID: call.Runtime.SessionID,
+		})
+		if err != nil {
+			return model.ToolResult{
+				Content:  fmt.Sprintf("subagent %q failed to prepare scoped plan: %v", agent.Name, err),
+				IsError:  true,
+				Metadata: t.metadata(agent.Name, call.Runtime.SessionID, "", in.TaskID),
+			}, nil
+		}
+		if !plan.Empty() {
+			opts.Planner = planner.Static(plan)
+		}
+	}
 	if opts.Sessions == nil {
 		opts.Sessions = call.Runtime.Sessions
 	}
@@ -134,7 +216,7 @@ func (t *subagentTool) Execute(ctx context.Context, call tool.Call) (model.ToolR
 		return model.ToolResult{
 			Content:  fmt.Sprintf("subagent %q failed to start: %v", agent.Name, err),
 			IsError:  true,
-			Metadata: metadata(agent.Name, call.Runtime.SessionID, ""),
+			Metadata: t.metadata(agent.Name, call.Runtime.SessionID, "", in.TaskID),
 		}, nil
 	}
 
@@ -145,23 +227,52 @@ func (t *subagentTool) Execute(ctx context.Context, call tool.Call) (model.ToolR
 		}
 		switch event.Kind {
 		case memaxagent.EventResult:
+			metadata := t.metadata(agent.Name, call.Runtime.SessionID, childSessionID, in.TaskID)
+			t.handleResult(ctx, metadata, ResultRequest{
+				Agent:           agent.Name,
+				TaskID:          in.TaskID,
+				Prompt:          in.Prompt,
+				ParentSessionID: call.Runtime.SessionID,
+				ChildSessionID:  childSessionID,
+				Result:          event.Result,
+			})
 			return model.ToolResult{
 				Content:  event.Result,
-				Metadata: metadata(agent.Name, call.Runtime.SessionID, childSessionID),
+				Metadata: metadata,
 			}, nil
 		case memaxagent.EventError:
+			metadata := t.metadata(agent.Name, call.Runtime.SessionID, childSessionID, in.TaskID)
+			t.handleResult(ctx, metadata, ResultRequest{
+				Agent:           agent.Name,
+				TaskID:          in.TaskID,
+				Prompt:          in.Prompt,
+				ParentSessionID: call.Runtime.SessionID,
+				ChildSessionID:  childSessionID,
+				Result:          fmt.Sprint(event.Err),
+				IsError:         true,
+			})
 			return model.ToolResult{
 				Content:  fmt.Sprintf("subagent %q failed: %v", agent.Name, event.Err),
 				IsError:  true,
-				Metadata: metadata(agent.Name, call.Runtime.SessionID, childSessionID),
+				Metadata: metadata,
 			}, nil
 		}
 	}
 
+	metadata := t.metadata(agent.Name, call.Runtime.SessionID, childSessionID, in.TaskID)
+	t.handleResult(ctx, metadata, ResultRequest{
+		Agent:           agent.Name,
+		TaskID:          in.TaskID,
+		Prompt:          in.Prompt,
+		ParentSessionID: call.Runtime.SessionID,
+		ChildSessionID:  childSessionID,
+		Result:          "ended without a result",
+		IsError:         true,
+	})
 	return model.ToolResult{
 		Content:  fmt.Sprintf("subagent %q ended without a result", agent.Name),
 		IsError:  true,
-		Metadata: metadata(agent.Name, call.Runtime.SessionID, childSessionID),
+		Metadata: metadata,
 	}, nil
 }
 
@@ -176,7 +287,7 @@ func (t *subagentTool) agent(name string) (Agent, error) {
 	return agent, nil
 }
 
-func metadata(agent string, parentSessionID string, childSessionID string) map[string]any {
+func (t *subagentTool) metadata(agent string, parentSessionID string, childSessionID string, taskID string) map[string]any {
 	out := map[string]any{"agent": agent}
 	if parentSessionID != "" {
 		out["parent_session_id"] = parentSessionID
@@ -184,7 +295,23 @@ func metadata(agent string, parentSessionID string, childSessionID string) map[s
 	if childSessionID != "" {
 		out["child_session_id"] = childSessionID
 	}
+	if taskID != "" {
+		out[model.MetadataTaskID] = taskID
+	}
 	return out
+}
+
+func (t *subagentTool) handleResult(ctx context.Context, metadata map[string]any, req ResultRequest) {
+	if t.resultHandler == nil || req.TaskID == "" {
+		return
+	}
+	extra, err := t.resultHandler.HandleSubagentResult(ctx, req)
+	for key, value := range extra {
+		metadata[key] = value
+	}
+	if err != nil {
+		metadata[model.MetadataTaskProgressError] = err.Error()
+	}
 }
 
 func inputSchema(agentNames []string) map[string]any {
@@ -208,8 +335,9 @@ func inputSchema(agentNames []string) map[string]any {
 		"additionalProperties": false,
 		"required":             required,
 		"properties": map[string]any{
-			"agent":  agentProperty,
-			"prompt": map[string]any{"type": "string", "minLength": 1},
+			"agent":   agentProperty,
+			"prompt":  map[string]any{"type": "string", "minLength": 1},
+			"task_id": map[string]any{"type": "string", "description": "Optional host task ID this subagent run should scope and report progress against."},
 		},
 	}
 }

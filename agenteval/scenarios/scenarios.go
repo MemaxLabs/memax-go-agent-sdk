@@ -37,6 +37,7 @@ func All() []agenteval.Case {
 		SessionResume(),
 		ContextRetry(),
 		SubagentDelegation(),
+		SubagentScopedPlanProgress(),
 		PlannerGuidedToolUse(),
 		PlannerTaskStateUpdates(),
 		ProgressiveSkillDisclosure(),
@@ -1229,6 +1230,127 @@ func SubagentDelegation() agenteval.Case {
 				Check: func(agenteval.Result) error {
 					if got := len(childModel.Requests()); got != 1 {
 						return fmt.Errorf("child model requests = %d, want 1", got)
+					}
+					return nil
+				},
+			},
+		},
+	}
+}
+
+// SubagentScopedPlanProgress returns a single-use scenario where a parent
+// delegates one task to a child agent, the child sees only the scoped plan, and
+// the child result updates parent-visible task progress.
+func SubagentScopedPlanProgress() agenteval.Case {
+	store := session.NewMemoryStore()
+	taskStore := tasktools.NewMemoryStore([]tasktools.Task{
+		{ID: "task-1", Title: "inspect migration rollback", Status: tasktools.StatusInProgress, Evidence: []string{"migrations/001.sql"}},
+		{ID: "task-2", Title: "unrelated frontend cleanup", Status: tasktools.StatusPending},
+	})
+	childModel := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "child scoped task complete"}},
+	)
+	delegate, delegateErr := subagents.NewTool(subagents.Config{
+		Agents: []subagents.Agent{{
+			Name:        "investigator",
+			Description: "Investigates a focused task.",
+			Options: memaxagent.Options{
+				Model:    childModel,
+				Sessions: store,
+			},
+		}},
+		DefaultOptions: memaxagent.Options{Sessions: store},
+		PlanSource: tasktools.SubagentPlanner(taskStore,
+			planner.WithTaskToolHints("read_file"),
+			planner.WithTaskVerificationHints("report evidence before completion"),
+		),
+		ResultHandler: tasktools.NewSubagentProgressHandler(taskStore),
+	})
+	parentModel := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "tool-1",
+				Name: "run_subagent",
+				Input: json.RawMessage(`{
+					"agent":"investigator",
+					"prompt":"inspect rollback safety for the migration task",
+					"task_id":"task-1"
+				}`),
+			},
+		}},
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "parent completed delegated task"}},
+	)
+
+	return agenteval.Case{
+		Name:   "subagent_scoped_plan_progress",
+		Prompt: "Delegate task-1 and finish only after progress is updated.",
+		Options: memaxagent.Options{
+			Model:    parentModel,
+			Tools:    tool.NewRegistry(delegate),
+			Sessions: store,
+			Planner: tasktools.Planner(taskStore,
+				planner.WithTaskGoal("complete migration review tasks"),
+				planner.WithTaskToolHints("run_subagent"),
+			),
+		},
+		Assertions: []agenteval.Assertion{
+			toolConstructionSucceeded(delegateErr),
+			agenteval.ToolUsed("run_subagent"),
+			agenteval.FinalEquals("parent completed delegated task"),
+			agenteval.NoToolErrors(),
+			requestCountEquals(parentModel, 2),
+			{
+				Name: "child received scoped plan only",
+				Check: func(agenteval.Result) error {
+					requests := childModel.Requests()
+					if len(requests) != 1 {
+						return fmt.Errorf("child requests = %d, want 1", len(requests))
+					}
+					prompt := requests[0].SystemPrompt
+					for _, want := range []string{"complete delegated task task-1", "task-1", "inspect migration rollback", "migrations/001.sql", "report evidence before completion"} {
+						if !strings.Contains(prompt, want) {
+							return fmt.Errorf("child prompt missing %q:\n%s", want, prompt)
+						}
+					}
+					if strings.Contains(prompt, "task-2") || strings.Contains(prompt, "frontend cleanup") {
+						return fmt.Errorf("child prompt leaked unrelated task:\n%s", prompt)
+					}
+					return nil
+				},
+			},
+			{
+				Name: "subagent result updates parent task progress",
+				Check: func(result agenteval.Result) error {
+					found := false
+					for _, toolResult := range result.ToolResults() {
+						if toolResult.Name != "run_subagent" {
+							continue
+						}
+						found = true
+						if toolResult.Metadata[model.MetadataTaskID] != "task-1" || toolResult.Metadata[model.MetadataTaskStatus] != string(tasktools.StatusCompleted) {
+							return fmt.Errorf("subagent metadata = %#v, want completed task metadata", toolResult.Metadata)
+						}
+					}
+					if !found {
+						return fmt.Errorf("missing subagent result")
+					}
+					tasks, err := taskStore.List(context.Background())
+					if err != nil {
+						return err
+					}
+					if len(tasks) != 2 || tasks[0].Status != tasktools.StatusCompleted {
+						return fmt.Errorf("tasks = %#v, want task-1 completed", tasks)
+					}
+					parentRequests := parentModel.Requests()
+					if len(parentRequests) < 2 {
+						return fmt.Errorf("parent requests = %d, want final request", len(parentRequests))
+					}
+					finalPrompt := parentRequests[1].SystemPrompt
+					for _, want := range []string{"[completed] task-1", "subagent investigator completed", "subagent:investigator"} {
+						if !strings.Contains(finalPrompt, want) {
+							return fmt.Errorf("final parent prompt missing %q:\n%s", want, finalPrompt)
+						}
 					}
 					return nil
 				},

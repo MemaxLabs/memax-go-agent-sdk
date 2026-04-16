@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
+	"github.com/MemaxLabs/memax-go-agent-sdk/planner"
 	"github.com/MemaxLabs/memax-go-agent-sdk/session"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
 )
@@ -100,6 +102,65 @@ func TestToolUsesRuntimeSessionStoreWhenAgentDoesNotSetOne(t *testing.T) {
 	}
 	if _, err := store.Messages(context.Background(), childSessionID); err != nil {
 		t.Fatalf("runtime store did not receive child session: %v", err)
+	}
+}
+
+func TestToolScopesChildPlanAndHandlesResult(t *testing.T) {
+	store := session.NewMemoryStore()
+	childModel := &fakeModel{turns: [][]model.StreamEvent{{{Kind: model.StreamText, Text: "child done"}}}}
+	handlerCalled := false
+	delegate, err := NewTool(Config{
+		Agents: []Agent{{
+			Name: "worker",
+			Options: memaxagent.Options{
+				Model:    childModel,
+				Sessions: store,
+			},
+		}},
+		PlanSource: PlanSourceFunc(func(_ context.Context, req PlanRequest) (planner.Plan, error) {
+			if req.TaskID != "task-1" {
+				t.Fatalf("task id = %q, want task-1", req.TaskID)
+			}
+			return planner.Plan{
+				Goal: "scoped child goal",
+				Steps: []planner.Step{{
+					ID:     "task-1",
+					Title:  "scoped task",
+					Status: planner.StatusInProgress,
+				}},
+			}, nil
+		}),
+		ResultHandler: ResultHandlerFunc(func(_ context.Context, req ResultRequest) (map[string]any, error) {
+			handlerCalled = true
+			if req.TaskID != "task-1" || req.Result != "child done" {
+				t.Fatalf("result request = %#v, want task and child result", req)
+			}
+			return map[string]any{model.MetadataTaskStatus: "completed"}, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("NewTool returned error: %v", err)
+	}
+
+	result, err := delegate.Execute(context.Background(), tool.Call{
+		Use: model.ToolUse{
+			ID:    "delegate-1",
+			Name:  delegate.Spec().Name,
+			Input: json.RawMessage(`{"prompt":"run scoped work","task_id":"task-1"}`),
+		},
+		Runtime: tool.Runtime{SessionID: "parent-session", Sessions: store},
+	})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if !handlerCalled {
+		t.Fatal("result handler was not called")
+	}
+	if result.Metadata[model.MetadataTaskID] != "task-1" || result.Metadata[model.MetadataTaskStatus] != "completed" {
+		t.Fatalf("metadata = %#v, want task metadata", result.Metadata)
+	}
+	if len(childModel.requests) != 1 || !strings.Contains(childModel.requests[0].SystemPrompt, "scoped child goal") {
+		t.Fatalf("child request = %#v, want scoped plan prompt", childModel.requests)
 	}
 }
 

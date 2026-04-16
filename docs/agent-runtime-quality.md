@@ -282,7 +282,8 @@ retrieval, usage, and review infrastructure.
 ### 6. Planner and Task Policy Stack
 
 **Current state:** planner policies, task-derived plans, plan-visible
-verification hints, and opt-in verification-to-task progress updates exist.
+verification hints, scoped subagent plan handoff, and opt-in progress updates
+from verification or subagent results exist.
 
 **Gap:** The SDK lacks explicit policies for when to plan, update, delegate,
 verify, ask the user, or stop.
@@ -299,7 +300,8 @@ verify, ask the user, or stop.
 
 - Multi-step task updates plan after each tool result.
 - Blocked plan asks for user input rather than hallucinating.
-- Delegation happens only for scoped subtasks.
+- Delegation happens only for scoped subtasks, and child results can return
+  structured task progress.
 - Verification hints guide the model to run host verification, verification
   outcomes update task progress when explicitly configured, and verification
   failure triggers repair.

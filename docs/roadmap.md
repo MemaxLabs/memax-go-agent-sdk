@@ -25,7 +25,7 @@
 
 ## Phase 3: Advanced Autonomy
 
-- Add subagent tool with parent/child session correlation. Initial bounded worker tool exists.
+- Add subagent tool with parent/child session correlation. Initial bounded worker tool, scoped plan handoff, and opt-in task progress return exist.
 - Add todo/task state tools. Initial task toolkit exists.
 - Add tool search and deferred tool loading for large registries. Initial selector and search toolkit exist.
 - Add checkpoint interfaces for virtual workspaces. Initial checkpoint manager and tools exist.
@@ -57,7 +57,7 @@ system prompt.
 - Add skill-scoped hooks and permissions. Initial `skill.PolicySource` support exists for host accept/deny/rewrite policy over loaded skills.
 - Add agent identity propagation for subagents. Child agents can already receive full `Options`; future examples should define dedicated reviewer, explorer, implementer, and verifier identities.
 - Add provider-specific prompt profiles. Initial `prompt.ProfileOpenAI` and `prompt.ProfileAnthropic` guidance exists.
-- Add planner policies. Initial `planner.Policy`, `planner.Plan`, `planner.TaskSource`, verification hints, `Options.Planner`, named `memax.plan` prompt injection, task-state adapter support through `toolkit/tasktools`, opt-in verification-to-task progress updates, and planner-guided eval coverage exist for host-owned strategy, verification, and progress context.
+- Add planner policies. Initial `planner.Policy`, `planner.Plan`, `planner.TaskSource`, verification hints, `Options.Planner`, named `memax.plan` prompt injection, task-state adapter support through `toolkit/tasktools`, opt-in verification-to-task and subagent-to-task progress updates, and planner-guided eval coverage exist for host-owned strategy, verification, delegation, and progress context.
 - Add project/user memory injection. Initial `memory.Source`, `Options.MemorySource`, explicit `Options.Memories`, relevance selection, and named prompt-part injection exist for persistent project rules, user preferences, session notes, and organization context. Initial `memory.Writer`, `memory.Deleter`, in-memory memory store, and `toolkit/memorytools` search/save/delete tools exist for opt-in agent memory mutation. Initial `memory.Distiller`, `Options.MemoryDistiller`, `EventMemoryCandidates`, and `Options.MemoryCandidateHandler` support exists for post-result memory candidate proposals, host approval, and optional persistence without automatic writes by default.
 - Add reactive context-failure recovery. Initial `Options.ContextRetry` support retries once when providers return a recognized context-window error.
 - Add external large-result storage. Initial `resultstore.Store`, `Options.ResultStore`, in-memory result storage, truncation preview handles, transcript metadata, and fallback-on-store-error behavior exist for oversized tool outputs.
@@ -71,7 +71,7 @@ system prompt.
   preserving durable transcript order. Eval coverage exists for safe overlap,
   mutating-tool ordering, permission-denial recovery, stream-failure cleanup,
   and cancellation.
-- Add autonomy eval harness. Initial `agenteval` runner, scripted model, result capture, expected-error assertions, reusable assertions, and `agenteval/scenarios` package exist for deterministic tool recovery, structured-output repair, memory search/save, memory distillation candidates, memory candidate handler persistence, session resume, context retry, subagent delegation, planner-guided tool use, planner verification repair, planner/task progress from verification, planner/task-state updates, progressive skill disclosure, httptest-backed provider usage mapping, provider tool-use round trips, permission/hook denial recovery, large-result storage recovery, budget-stop enforcement, and deferred tool discovery. Live evals remain future work.
+- Add autonomy eval harness. Initial `agenteval` runner, scripted model, result capture, expected-error assertions, reusable assertions, and `agenteval/scenarios` package exist for deterministic tool recovery, structured-output repair, memory search/save, memory distillation candidates, memory candidate handler persistence, session resume, context retry, subagent delegation, subagent scoped plan progress, planner-guided tool use, planner verification repair, planner/task progress from verification, planner/task-state updates, progressive skill disclosure, httptest-backed provider usage mapping, provider tool-use round trips, permission/hook denial recovery, large-result storage recovery, budget-stop enforcement, and deferred tool discovery. Live evals remain future work.
 - Add context retention hardening. Initial `contextwindow.PreserveImportant`
   support keeps loaded skills, stored result handles, and tool errors with
   structurally valid tool-use groups under aggressive trimming.

@@ -12,8 +12,8 @@ func TestScenariosPass(t *testing.T) {
 	if err := report.Error(); err != nil {
 		t.Fatalf("scenario report error = %v", err)
 	}
-	if !report.Passed() || len(report.Results) != 40 {
-		t.Fatalf("report = %#v, want forty passing scenarios", report)
+	if !report.Passed() || len(report.Results) != 41 {
+		t.Fatalf("report = %#v, want forty-one passing scenarios", report)
 	}
 }
 
@@ -32,6 +32,7 @@ func TestScenarioNamesAreStable(t *testing.T) {
 		"session_resume",
 		"context_retry",
 		"subagent_delegation",
+		"subagent_scoped_plan_progress",
 		"planner_guided_tool_use",
 		"planner_task_state_updates",
 		"progressive_skill_disclosure",
