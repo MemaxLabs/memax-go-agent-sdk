@@ -250,7 +250,7 @@ func SessionResume() agenteval.Case {
 			SessionID: sess.ID,
 		},
 		Assertions: []agenteval.Assertion{
-			toolConstructionSucceeded(createErr, appendErr),
+			setupSucceeded(createErr, appendErr),
 			agenteval.FinalEquals("resumed session"),
 			{
 				Name: "resumed session id used",
@@ -291,7 +291,11 @@ func ContextRetry() agenteval.Case {
 	if createErr == nil {
 		appendErr = store.Append(context.Background(), sess.ID, textMessage(model.RoleUser, "old context that should be dropped"))
 	}
-	modelClient := &contextRetryClient{events: []model.StreamEvent{{Kind: model.StreamText, Text: "retried after context pressure"}}}
+	modelClient := &contextRetryClient{
+		success: agenteval.NewScriptedModel(
+			[]model.StreamEvent{{Kind: model.StreamText, Text: "retried after context pressure"}},
+		),
+	}
 
 	return agenteval.Case{
 		Name:   "context_retry",
@@ -303,7 +307,7 @@ func ContextRetry() agenteval.Case {
 			ContextRetry: contextwindow.RecentMessages{MaxMessages: 1},
 		},
 		Assertions: []agenteval.Assertion{
-			toolConstructionSucceeded(createErr, appendErr),
+			setupSucceeded(createErr, appendErr),
 			agenteval.FinalEquals("retried after context pressure"),
 			{
 				Name: "retry used compacted messages",
@@ -424,6 +428,20 @@ func toolConstructionSucceeded(errs ...error) agenteval.Assertion {
 	}
 }
 
+func setupSucceeded(errs ...error) agenteval.Assertion {
+	return agenteval.Assertion{
+		Name: "setup succeeded",
+		Check: func(agenteval.Result) error {
+			for _, err := range errs {
+				if err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	}
+}
+
 func answerContract() output.Contract {
 	return output.Contract{Schema: map[string]any{
 		"type":                 "object",
@@ -446,53 +464,123 @@ func textMessage(role model.Role, text string) model.Message {
 }
 
 type contextRetryClient struct {
-	mu       sync.Mutex
-	calls    int
-	requests []model.Request
-	events   []model.StreamEvent
+	mu             sync.Mutex
+	failed         bool
+	failedRequests []model.Request
+	success        *agenteval.ScriptedModel
 }
 
-func (c *contextRetryClient) Stream(_ context.Context, req model.Request) (model.Stream, error) {
+func (c *contextRetryClient) Stream(ctx context.Context, req model.Request) (model.Stream, error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.requests = append(c.requests, cloneRequest(req))
-	c.calls++
-	if c.calls == 1 {
+	if !c.failed {
+		c.failed = true
+		c.failedRequests = append(c.failedRequests, cloneRequest(req))
+		c.mu.Unlock()
 		return nil, model.ErrContextWindowExceeded
 	}
-	return &eventStream{events: append([]model.StreamEvent(nil), c.events...)}, nil
+	success := c.success
+	c.mu.Unlock()
+	return success.Stream(ctx, req)
 }
 
 func (c *contextRetryClient) Requests() []model.Request {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	out := make([]model.Request, len(c.requests))
-	for i, req := range c.requests {
-		out[i] = cloneRequest(req)
+	failed := make([]model.Request, len(c.failedRequests))
+	for i, req := range c.failedRequests {
+		failed[i] = cloneRequest(req)
+	}
+	success := c.success
+	c.mu.Unlock()
+	if success == nil {
+		return failed
+	}
+	return append(failed, success.Requests()...)
+}
+
+func cloneRequest(req model.Request) model.Request {
+	req.Messages = cloneMessages(req.Messages)
+	req.Tools = cloneToolSpecs(req.Tools)
+	return req
+}
+
+func cloneMessages(messages []model.Message) []model.Message {
+	if len(messages) == 0 {
+		return nil
+	}
+	out := make([]model.Message, len(messages))
+	for i, msg := range messages {
+		out[i] = msg
+		out[i].Content = cloneContentBlocks(msg.Content)
+		if msg.ToolResult != nil {
+			toolResult := *msg.ToolResult
+			toolResult.Metadata = cloneMetadata(toolResult.Metadata)
+			out[i].ToolResult = &toolResult
+		}
 	}
 	return out
 }
 
-type eventStream struct {
-	events []model.StreamEvent
-	index  int
-}
-
-func (s *eventStream) Recv() (model.StreamEvent, error) {
-	if s.index >= len(s.events) {
-		return model.StreamEvent{}, model.ErrEndOfStream
+func cloneContentBlocks(blocks []model.ContentBlock) []model.ContentBlock {
+	if len(blocks) == 0 {
+		return nil
 	}
-	event := s.events[s.index]
-	s.index++
-	return event, nil
+	out := make([]model.ContentBlock, len(blocks))
+	for i, block := range blocks {
+		out[i] = block
+		if block.ToolUse != nil {
+			toolUse := *block.ToolUse
+			toolUse.Input = append([]byte(nil), block.ToolUse.Input...)
+			out[i].ToolUse = &toolUse
+		}
+	}
+	return out
 }
 
-func (s *eventStream) Close() error {
-	return nil
+func cloneToolSpecs(specs []model.ToolSpec) []model.ToolSpec {
+	if len(specs) == 0 {
+		return nil
+	}
+	out := make([]model.ToolSpec, len(specs))
+	for i, spec := range specs {
+		out[i] = spec
+		out[i].InputSchema = cloneSchemaMap(spec.InputSchema)
+	}
+	return out
 }
 
-func cloneRequest(req model.Request) model.Request {
-	req.Messages = append([]model.Message(nil), req.Messages...)
-	req.Tools = append([]model.ToolSpec(nil), req.Tools...)
-	return req
+func cloneSchemaMap(value map[string]any) map[string]any {
+	if len(value) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(value))
+	for key, item := range value {
+		out[key] = cloneSchemaValue(item)
+	}
+	return out
+}
+
+func cloneSchemaValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		return cloneSchemaMap(typed)
+	case []any:
+		out := make([]any, len(typed))
+		for i, item := range typed {
+			out[i] = cloneSchemaValue(item)
+		}
+		return out
+	default:
+		return typed
+	}
+}
+
+func cloneMetadata(metadata map[string]any) map[string]any {
+	if len(metadata) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(metadata))
+	for key, value := range metadata {
+		out[key] = value
+	}
+	return out
 }
