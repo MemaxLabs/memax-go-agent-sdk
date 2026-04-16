@@ -27,6 +27,24 @@ func NewRegistry(tools ...Tool) *Registry {
 	return r
 }
 
+// Clone returns a snapshot copy of r. Tool implementations and compiled input
+// schemas are shared; the registry map and order slice are copied.
+func (r *Registry) Clone() *Registry {
+	if r == nil {
+		return NewRegistry()
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := &Registry{
+		entries: make(map[string]entry, len(r.entries)),
+		order:   append([]string(nil), r.order...),
+	}
+	for name, entry := range r.entries {
+		out.entries[name] = entry
+	}
+	return out
+}
+
 func (r *Registry) Register(t Tool) error {
 	if t == nil {
 		return fmt.Errorf("register nil tool")

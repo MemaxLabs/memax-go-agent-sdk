@@ -75,6 +75,20 @@ func TestSearchSelectorUsesTranscriptQuery(t *testing.T) {
 	}
 }
 
+func TestRegistryCloneIsSnapshot(t *testing.T) {
+	registry := NewRegistry(Definition{ToolSpec: model.ToolSpec{Name: "read_file"}})
+	clone := registry.Clone()
+	if err := clone.Register(Definition{ToolSpec: model.ToolSpec{Name: "write_file"}}); err != nil {
+		t.Fatalf("Register clone tool returned error: %v", err)
+	}
+	if _, ok := registry.Get("write_file"); ok {
+		t.Fatalf("original registry unexpectedly contains clone-only tool")
+	}
+	if _, ok := clone.Get("read_file"); !ok {
+		t.Fatalf("clone missing original tool")
+	}
+}
+
 func specNames(specs []model.ToolSpec) []string {
 	out := make([]string, 0, len(specs))
 	for _, spec := range specs {

@@ -110,8 +110,33 @@ Or an object with a `skills` array:
 }
 ```
 
-## Prompt Injection
+## Prompt Injection And Progressive Disclosure
 
 Skills are treated as host-controlled configuration. Do not load untrusted
 user-authored skills directly into an agent prompt without review, sandboxing,
 or a host approval workflow.
+
+The default SDK behavior is direct injection: the prompt builder selects
+relevant skills and includes their full content in the named `memax.skills`
+prompt part. This is simple and works well for small trusted skill sets.
+
+For larger catalogs, set:
+
+```go
+Options{
+    SkillSource:     source,
+    SkillDisclosure: skill.DisclosureProgressive,
+}
+```
+
+Progressive mode sends only selected skill metadata in the
+`memax.skill_discovery` prompt part. The SDK automatically exposes a read-only,
+concurrency-safe `load_skill` tool. When the model calls `load_skill`, the full
+skill body is returned as a normal tool result and persists in the session
+transcript. This keeps context smaller, makes skill use auditable, and matches
+the same tool-mediated capability boundary used for files, memories, and other
+host-owned resources.
+
+Progressive disclosure requires named skills. Anonymous instruction blocks are
+not loadable by `load_skill`; use direct injection for those or give them stable
+names.

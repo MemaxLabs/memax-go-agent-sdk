@@ -92,8 +92,9 @@ environment.
 
 ### 1. Progressive Skill Disclosure
 
-**Current state:** `skill.Selector` ranks skills and selected skill content is
-injected directly into the prompt.
+**Current state:** `skill.Selector` ranks skills. The SDK supports the original
+direct-injection mode and an opt-in progressive mode where selected metadata is
+shown in the prompt and full instructions are loaded through `load_skill`.
 
 **Gap:** Leading agents use skill metadata for discovery, then load full
 instructions and resources on demand. The reference does this through a Skill
@@ -102,21 +103,22 @@ tool and filesystem-backed progressive disclosure.
 **Target behavior:**
 
 - Prompt includes skill metadata only: name, description, when-to-use, tags.
-- The model explicitly invokes `load_skill` to load full instructions.
+- The model explicitly invokes `load_skill` to load full instructions. Initial
+  support exists.
 - Optional `read_skill_resource` loads host-owned supporting resources.
 - Full content enters the transcript as a tool result, not hidden prompt state.
-- Skill content can be cached per run/session with event visibility.
+  Initial support exists.
+- Skill content can be cached per run/session with event visibility. Initial
+  per-run loading exists through the skill loader.
 - Existing direct injection remains as a backward-compatible mode.
 
-**Likely API:**
+**Current API plus likely resource extension:**
 
 ```go
-type DisclosureMode string
-
-const (
-    DisclosureInjectSelected DisclosureMode = "inject_selected"
-    DisclosureProgressive    DisclosureMode = "progressive"
-)
+Options{
+    SkillSource:     source,
+    SkillDisclosure: skill.DisclosureProgressive,
+}
 
 type ContentSource interface {
     SkillContent(context.Context, ContentRequest) (Content, error)
@@ -129,9 +131,10 @@ type ResourceSource interface {
 
 **Eval coverage:**
 
-- Metadata appears, full content does not.
-- Model invokes the right skill from metadata.
+- Metadata appears, full content does not. Initial coverage exists.
+- Model invokes the right skill from metadata. Initial coverage exists.
 - Loaded skill content is returned as a tool result and persists in transcript.
+  Initial coverage exists.
 - Resources are loaded only when requested.
 - Context retry preserves invoked skill content.
 - Large skill catalogs stay within prompt budget.
@@ -308,12 +311,10 @@ mapping.
 1. Commit provider URL semantic cleanup separately from strategy documents.
 2. Commit AGENTS and runtime-quality documentation separately from provider
    behavior changes.
-3. Implement progressive skill disclosure as the first competitive intelligence
-   upgrade.
-4. Add skill-disclosure eval scenarios.
-5. Update prompt golden tests for metadata-only skill prompts.
-6. Add context-stack evals that include loaded skills and result handles.
-7. Begin workspace abstraction design only after skill progressive disclosure is
+3. Add optional skill resource loading for progressive disclosure.
+4. Add context-stack evals that include loaded skills and result handles.
+5. Add larger-catalog budget tests for progressive skill prompts.
+6. Begin workspace abstraction design only after skill progressive disclosure is
    stable, because the same resource-loading pattern should inform workspace
    resource handling.
 

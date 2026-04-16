@@ -60,6 +60,35 @@ func TestDefaultBuilderIncludesSelectedMemories(t *testing.T) {
 	}
 }
 
+func TestDefaultBuilderProgressiveSkillsExposeMetadataOnly(t *testing.T) {
+	result, err := (DefaultBuilder{}).Build(context.Background(), Request{
+		Messages: []model.Message{{
+			Role:    model.RoleUser,
+			Content: []model.ContentBlock{{Type: model.ContentText, Text: "review SQL migration"}},
+		}},
+		SkillDisclosure: skill.DisclosureProgressive,
+		Skills: []skill.Skill{{
+			Name:        "database-review",
+			Description: "Review database migrations.",
+			WhenToUse:   "SQL changes are involved.",
+			Tags:        []string{"database", "migration"},
+			AlwaysOn:    true,
+			Content:     "Check lock behavior and rollback safety.",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+	for _, want := range []string{"Available skill metadata", "load_skill", "database-review", "Review database migrations.", "database, migration"} {
+		if !strings.Contains(result.SystemPrompt, want) {
+			t.Fatalf("system prompt missing %q:\n%s", want, result.SystemPrompt)
+		}
+	}
+	if strings.Contains(result.SystemPrompt, "Check lock behavior") {
+		t.Fatalf("progressive skill prompt leaked full instructions:\n%s", result.SystemPrompt)
+	}
+}
+
 func TestDefaultBuilderIncludesPlan(t *testing.T) {
 	result, err := (DefaultBuilder{}).Build(context.Background(), Request{
 		Plan: planner.Plan{

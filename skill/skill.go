@@ -7,6 +7,23 @@ import (
 	"time"
 )
 
+// DisclosureMode controls how skills are exposed to the model.
+type DisclosureMode string
+
+const (
+	// LoadToolName is the default tool name used by progressive skill
+	// disclosure to load full instructions for a named skill.
+	LoadToolName = "load_skill"
+
+	// DisclosureInjectSelected injects selected skill instructions directly into
+	// the system prompt. This is the default for backward compatibility and for
+	// small trusted skill sets.
+	DisclosureInjectSelected DisclosureMode = "inject_selected"
+	// DisclosureProgressive exposes only selected skill metadata in the prompt
+	// and expects the model to load full instructions through an explicit tool.
+	DisclosureProgressive DisclosureMode = "progressive"
+)
+
 // Skill is a local instruction bundle that can be injected into the model
 // prompt when it is relevant to the current run.
 type Skill struct {

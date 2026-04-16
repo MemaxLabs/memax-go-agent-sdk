@@ -241,6 +241,22 @@ events, err := memaxagent.Query(ctx, "Review the migration plan.", memaxagent.Op
 })
 ```
 
+For larger skill catalogs, use progressive disclosure so the prompt contains
+metadata only and the model loads full instructions through the transcript:
+
+```go
+events, err := memaxagent.Query(ctx, "Review the migration plan.", memaxagent.Options{
+    Model:           client,
+    SkillSource:     skill.StaticSource(skills),
+    SkillDisclosure: skill.DisclosureProgressive,
+})
+```
+
+In progressive mode, the SDK automatically exposes a read-only `load_skill`
+tool. The tool returns the selected skill body as a normal tool result, so skill
+use is visible in events and durable session history instead of being hidden
+prompt state.
+
 Other source adapters are available:
 
 ```go

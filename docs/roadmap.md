@@ -50,7 +50,7 @@ system prompt.
 
 - Add agent identity profiles. Initial `identity.Identity` support exists with a default Memax-native profile plus configurable role, mission, tone, autonomy level, and constraints.
 - Add deterministic prompt assembly. Initial `prompt.Builder` support exists and produces named prompt parts, a stable hash, identity guidance, tool-use guidance, selected skills, and host prompt text.
-- Add local and remote skill manifests. Initial `skill.LoadDir`, `skill.LoadFS`, `skill.StaticSource`, `skill.SourceFunc`, `skill.MultiSource`, `skill.CachedSource`, `skill.HTTPSource`, `Options.SkillSource`, and relevance selection exist for `SKILL.md` directories and source-neutral skill loading.
+- Add local and remote skill manifests. Initial `skill.LoadDir`, `skill.LoadFS`, `skill.StaticSource`, `skill.SourceFunc`, `skill.MultiSource`, `skill.CachedSource`, `skill.HTTPSource`, `Options.SkillSource`, relevance selection, and opt-in progressive disclosure through `Options.SkillDisclosure` and `load_skill` exist for `SKILL.md` directories and source-neutral skill loading.
 - Add server-friendly async wrappers. Initial `QueryAsync`, `skill.TimeoutSource`, `skill.PrefetchSource`, and `tool.WithTimeout` support exists.
 - Add prompt snapshots and golden tests. Initial prompt golden tests cover identity, tools, skills, provider profiles, and host prompt composition.
 - Add skill discovery tools. Initial `toolkit/skilltools` search tool exists, exposing skills through the normal tool layer.
@@ -64,7 +64,7 @@ system prompt.
 - Add structured output contracts. Initial `output.Contract`, `Options.Output`, prompt contract injection, JSON Schema validation, final-answer repair retry, and retry-exhaustion errors exist.
 - Add cost and token accounting. Initial provider-neutral `model.Usage`, stream usage events, `EventUsage`, final-result usage aggregation, token meter counters, and OpenAI/Anthropic usage mapping exist. Cost calculation remains future host/provider policy.
 - Add run budget governors. Initial `budget.Governor`, zero-value-disabled `budget.Policy`, `Options.Budget`, budget stop reason, and agent-loop enforcement exist for turn, model-call, tool-call, token, and elapsed-duration limits.
-- Add autonomy eval harness. Initial `agenteval` runner, scripted model, result capture, expected-error assertions, reusable assertions, and `agenteval/scenarios` package exist for deterministic tool recovery, structured-output repair, memory search/save, memory distillation candidates, memory candidate handler persistence, session resume, context retry, subagent delegation, planner-guided tool use, planner/task-state updates, httptest-backed provider usage mapping, provider tool-use round trips, permission/hook denial recovery, large-result storage recovery, budget-stop enforcement, and deferred tool discovery. Live evals remain future work.
+- Add autonomy eval harness. Initial `agenteval` runner, scripted model, result capture, expected-error assertions, reusable assertions, and `agenteval/scenarios` package exist for deterministic tool recovery, structured-output repair, memory search/save, memory distillation candidates, memory candidate handler persistence, session resume, context retry, subagent delegation, planner-guided tool use, planner/task-state updates, progressive skill disclosure, httptest-backed provider usage mapping, provider tool-use round trips, permission/hook denial recovery, large-result storage recovery, budget-stop enforcement, and deferred tool discovery. Live evals remain future work.
 
 ## Phase 6: Ecosystem and Hardening
 
@@ -72,11 +72,10 @@ system prompt.
   gap analysis. Each major subsystem should be compared against the local
   TypeScript and Codex references before implementation, then moved from
   Foundation to Competitive or Leading with eval coverage.
-- Add progressive skill disclosure. Metadata-only skill discovery, explicit
-  skill loading tools, optional resource loading, transcript-visible loaded
-  skill content, and skill-disclosure evals should replace prompt stuffing for
-  serious skill catalogs while preserving current direct-injection behavior for
-  compatibility.
+- Harden progressive skill disclosure. Initial metadata-only prompt discovery,
+  explicit `load_skill`, transcript-visible loaded skill content, and eval
+  coverage exist. Next steps are optional resource loading, loaded-skill
+  retention across compaction, and larger catalog budget tests.
 - Add more durable stores and workspace adapters, starting with production SQLite examples, object-store checkpoint managers, and git-backed workspace checkpoints.
 - Add MCP/tool bridge examples while keeping the core tool contract provider-neutral.
 - Add release automation, API compatibility checks, and generated reference docs.

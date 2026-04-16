@@ -43,6 +43,7 @@ type Request struct {
 	Plan               planner.Plan
 	Memories           []memory.Memory
 	Skills             []skill.Skill
+	SkillDisclosure    skill.DisclosureMode
 	OutputSchema       map[string]any
 }
 
@@ -93,7 +94,13 @@ func (b DefaultBuilder) Build(ctx context.Context, req Request) (Result, error) 
 		parts = append(parts, Part{Name: "memax.memories", Content: formatMemories(selected)})
 	}
 	if selected := b.SkillSelector.Select(req.Skills, requestQuery(req)); len(selected) > 0 {
-		parts = append(parts, Part{Name: "memax.skills", Content: formatSkills(selected)})
+		if req.SkillDisclosure == skill.DisclosureProgressive {
+			if content := formatSkillDiscovery(selected); content != "" {
+				parts = append(parts, Part{Name: "memax.skill_discovery", Content: content})
+			}
+		} else {
+			parts = append(parts, Part{Name: "memax.skills", Content: formatSkills(selected)})
+		}
 	}
 	if strings.TrimSpace(req.SystemPrompt) != "" {
 		parts = append(parts, Part{Name: "host.system", Content: strings.TrimSpace(req.SystemPrompt)})
@@ -242,6 +249,31 @@ func formatSkills(skills []skill.Skill) string {
 		}
 		if item.Content != "" {
 			fmt.Fprintf(&b, "\n%s", item.Content)
+		}
+	}
+	return b.String()
+}
+
+func formatSkillDiscovery(skills []skill.Skill) string {
+	var b strings.Builder
+	count := 0
+	for _, item := range skills {
+		if strings.TrimSpace(item.Name) == "" {
+			continue
+		}
+		if count == 0 {
+			fmt.Fprintf(&b, "Available skill metadata for this run. Skill bodies are not in this prompt. If a skill is relevant, call the `%s` tool with its exact name before relying on its instructions. Load only the skills needed for the current task.", skill.LoadToolName)
+		}
+		count++
+		fmt.Fprintf(&b, "\n\n- %s", item.Name)
+		if item.Description != "" {
+			fmt.Fprintf(&b, ": %s", item.Description)
+		}
+		if item.WhenToUse != "" {
+			fmt.Fprintf(&b, "\n  Use when: %s", item.WhenToUse)
+		}
+		if len(item.Tags) > 0 {
+			fmt.Fprintf(&b, "\n  Tags: %s", strings.Join(item.Tags, ", "))
 		}
 	}
 	return b.String()

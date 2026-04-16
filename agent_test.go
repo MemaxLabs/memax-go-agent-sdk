@@ -148,6 +148,76 @@ func TestQueryFeedsValidationErrorBackToModel(t *testing.T) {
 	}
 }
 
+func TestQueryProgressiveSkillDisclosureLoadsSkillThroughTool(t *testing.T) {
+	fake := &fakeModel{turns: [][]model.StreamEvent{
+		{
+			{
+				Kind: model.StreamToolUse,
+				ToolUse: model.ToolUse{
+					ID:    "skill-1",
+					Name:  skill.LoadToolName,
+					Input: json.RawMessage(`{"name":"database-review"}`),
+				},
+			},
+		},
+		{{Kind: model.StreamText, Text: "reviewed with skill"}},
+	}}
+	sourceCalls := 0
+	source := skill.SourceFunc(func(context.Context) ([]skill.Skill, error) {
+		sourceCalls++
+		return []skill.Skill{{
+			Name:        "database-review",
+			Description: "Review database migrations.",
+			WhenToUse:   "SQL changes are involved.",
+			AlwaysOn:    true,
+			Content:     "Check lock behavior and rollback safety.",
+		}}, nil
+	})
+
+	events, err := Query(context.Background(), "review SQL migration", Options{
+		Model:           fake,
+		SkillSource:     source,
+		SkillDisclosure: skill.DisclosureProgressive,
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+	result, err := Drain(events)
+	if err != nil {
+		t.Fatalf("Drain returned error: %v", err)
+	}
+	if result != "reviewed with skill" {
+		t.Fatalf("result = %q, want reviewed with skill", result)
+	}
+	if sourceCalls != 1 {
+		t.Fatalf("source calls = %d, want one per run", sourceCalls)
+	}
+	if got := len(fake.requests); got != 2 {
+		t.Fatalf("model calls = %d, want 2", got)
+	}
+	first := fake.requests[0]
+	if !requestHasTool(first, skill.LoadToolName) {
+		t.Fatalf("first request tools = %#v, want %s", first.Tools, skill.LoadToolName)
+	}
+	if strings.Contains(first.SystemPrompt, "Check lock behavior") {
+		t.Fatalf("first prompt leaked full skill content:\n%s", first.SystemPrompt)
+	}
+	if !strings.Contains(first.SystemPrompt, "database-review") || !strings.Contains(first.SystemPrompt, "load_skill") {
+		t.Fatalf("first prompt missing progressive skill metadata:\n%s", first.SystemPrompt)
+	}
+	second := fake.requests[1]
+	if len(second.Messages) == 0 {
+		t.Fatal("second request has no messages")
+	}
+	last := second.Messages[len(second.Messages)-1]
+	if last.Role != model.RoleTool || last.ToolResult == nil || last.ToolResult.Name != skill.LoadToolName {
+		t.Fatalf("last message = %#v, want load_skill tool result", last)
+	}
+	if !strings.Contains(last.ToolResult.Content, "Check lock behavior and rollback safety.") {
+		t.Fatalf("load_skill result = %q, want full instructions", last.ToolResult.Content)
+	}
+}
+
 func TestQueryFeedsHookDenialBackToModel(t *testing.T) {
 	registry := tool.NewRegistry(tool.Definition{
 		ToolSpec: model.ToolSpec{Name: "write"},
@@ -1522,6 +1592,15 @@ func (s *fakeStream) Recv() (model.StreamEvent, error) {
 
 func (s *fakeStream) Close() error {
 	return nil
+}
+
+func requestHasTool(req model.Request, name string) bool {
+	for _, spec := range req.Tools {
+		if spec.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 type recordingTracer struct {

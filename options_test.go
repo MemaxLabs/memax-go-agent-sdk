@@ -30,6 +30,7 @@ func TestOptionsMergeAppliesOverridesAndCopiesSlices(t *testing.T) {
 		MemoryCandidateHandler: memory.CandidateHandlerFunc(func(context.Context, memory.CandidateRequest) error {
 			return nil
 		}),
+		SkillDisclosure:    skill.DisclosureInjectSelected,
 		Memories:           []memory.Memory{{Name: "base"}},
 		Skills:             []skill.Skill{{Name: "base"}},
 		SystemPrompt:       "base system",
@@ -50,6 +51,7 @@ func TestOptionsMergeAppliesOverridesAndCopiesSlices(t *testing.T) {
 		MemoryCandidateHandler: memory.CandidateHandlerFunc(func(context.Context, memory.CandidateRequest) error {
 			return errors.New("override handler")
 		}),
+		SkillDisclosure:    skill.DisclosureProgressive,
 		Memories:           overrideMemories,
 		Skills:             overrideSkills,
 		SystemPrompt:       "override system",
@@ -97,6 +99,9 @@ func TestOptionsMergeAppliesOverridesAndCopiesSlices(t *testing.T) {
 	}
 	if got.Skills[0].Name != "override" {
 		t.Fatalf("Skills = %#v, want copied override", got.Skills)
+	}
+	if got.SkillDisclosure != skill.DisclosureProgressive {
+		t.Fatalf("SkillDisclosure = %q, want progressive", got.SkillDisclosure)
 	}
 	if got.SystemPrompt != "override system" || got.SessionID != "override-session" {
 		t.Fatalf("string overrides not applied: %#v", got)

@@ -17,6 +17,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/output"
 	"github.com/MemaxLabs/memax-go-agent-sdk/planner"
 	"github.com/MemaxLabs/memax-go-agent-sdk/session"
+	"github.com/MemaxLabs/memax-go-agent-sdk/skill"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/memorytools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/subagents"
@@ -37,6 +38,7 @@ func All() []agenteval.Case {
 		SubagentDelegation(),
 		PlannerGuidedToolUse(),
 		PlannerTaskStateUpdates(),
+		ProgressiveSkillDisclosure(),
 		OpenAIProviderTextAndUsage(),
 		AnthropicProviderTextAndUsage(),
 		OpenAIProviderToolUseRoundTrip(),
@@ -223,6 +225,74 @@ func PlannerTaskStateUpdates() agenteval.Case {
 						return fmt.Errorf("second prompt missing updated task state:\n%s", second)
 					}
 					return nil
+				},
+			},
+		},
+	}
+}
+
+// ProgressiveSkillDisclosure returns a single-use scenario where the prompt
+// exposes only skill metadata, the model explicitly loads the skill, and the
+// loaded instructions persist as a normal tool result.
+func ProgressiveSkillDisclosure() agenteval.Case {
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "skill-1",
+				Name:  skill.LoadToolName,
+				Input: json.RawMessage(`{"name":"database-review"}`),
+			},
+		}},
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "Migration reviewed with the database skill."}},
+	)
+	skills := skill.StaticSource{{
+		Name:        "database-review",
+		Description: "Review database migrations.",
+		WhenToUse:   "SQL migrations or rollback plans are involved.",
+		Tags:        []string{"database", "migration"},
+		AlwaysOn:    true,
+		Content:     "Check lock behavior, rollback safety, and data backfill risk.",
+	}}
+
+	return agenteval.Case{
+		Name:   "progressive_skill_disclosure",
+		Prompt: "Review the SQL migration with the right skill.",
+		Options: memaxagent.Options{
+			Model:           modelClient,
+			SkillSource:     skills,
+			SkillDisclosure: skill.DisclosureProgressive,
+		},
+		Assertions: []agenteval.Assertion{
+			agenteval.ToolUsed(skill.LoadToolName),
+			agenteval.NoToolErrors(),
+			agenteval.FinalEquals("Migration reviewed with the database skill."),
+			{
+				Name: "prompt exposes metadata only",
+				Check: func(agenteval.Result) error {
+					requests := modelClient.Requests()
+					if len(requests) < 1 {
+						return fmt.Errorf("model requests = %d, want at least 1", len(requests))
+					}
+					prompt := requests[0].SystemPrompt
+					if !strings.Contains(prompt, "database-review") || !strings.Contains(prompt, skill.LoadToolName) {
+						return fmt.Errorf("prompt missing skill metadata or load tool:\n%s", prompt)
+					}
+					if strings.Contains(prompt, "Check lock behavior") {
+						return fmt.Errorf("prompt leaked full skill instructions:\n%s", prompt)
+					}
+					return nil
+				},
+			},
+			{
+				Name: "loaded skill result contains instructions",
+				Check: func(result agenteval.Result) error {
+					for _, toolResult := range result.ToolResults() {
+						if toolResult.Name == skill.LoadToolName && strings.Contains(toolResult.Content, "rollback safety") {
+							return nil
+						}
+					}
+					return fmt.Errorf("load_skill result did not contain full instructions: %#v", result.ToolResults())
 				},
 			},
 		},

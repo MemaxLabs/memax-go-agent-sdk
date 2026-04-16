@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/budget"
@@ -161,6 +162,22 @@ func startSession(ctx context.Context, opts Options) (session.Session, error) {
 
 func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Options, outputValidator output.Validator) {
 	memories := memoryLoader{opts: opts, sessionID: sessionID}
+	skills := skillLoader{opts: opts}
+	if opts.SkillDisclosure == skillpkg.DisclosureProgressive && (opts.SkillSource != nil || len(opts.Skills) > 0) {
+		registry, err := registryWithLoadSkill(opts.Tools, &skills)
+		if err != nil {
+			emitError(ctx, func(event Event) bool {
+				select {
+				case <-ctx.Done():
+					return false
+				case events <- event:
+					return true
+				}
+			}, sessionID, 0, fmt.Errorf("configure skill disclosure: %w", err))
+			return
+		}
+		opts.Tools = registry
+	}
 	executor := tool.Executor{
 		Registry:       opts.Tools,
 		Permissions:    opts.Permissions,
@@ -339,7 +356,7 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 				telemetry.Int("memax.tools.available", len(opts.Tools.Specs())),
 				telemetry.Int("memax.tools.selected", len(toolSpecs)),
 			)
-			promptResult, err := buildPrompt(turnCtx, opts, &memories, sessionID, messages, toolSpecs)
+			promptResult, err := buildPrompt(turnCtx, opts, &memories, &skills, sessionID, messages, toolSpecs)
 			if err != nil {
 				err = fmt.Errorf("build prompt: %w", err)
 				turnSpan.RecordError(err)
@@ -377,7 +394,7 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 			})
 			if err != nil {
 				if opts.ContextRetry != nil && model.IsContextWindowExceeded(err) {
-					retryMessages, retryTools, retryPrompt, retryErr := retryContextWindow(modelCtx, opts, &memories, sessionID, messages)
+					retryMessages, retryTools, retryPrompt, retryErr := retryContextWindow(modelCtx, opts, &memories, &skills, sessionID, messages)
 					if retryErr == nil {
 						if !reflect.DeepEqual(retryMessages, messages) {
 							if ok, applyErr := emitContextApplied(turnCtx, emit, opts, sessionID, turn, len(messages), len(retryMessages)); applyErr != nil {
@@ -649,7 +666,167 @@ type builtPrompt struct {
 	Plan               planner.Plan
 }
 
-func buildPrompt(ctx context.Context, opts Options, memories *memoryLoader, sessionID string, messages []model.Message, tools []model.ToolSpec) (builtPrompt, error) {
+type skillLoader struct {
+	opts    Options
+	mu      sync.Mutex
+	loaded  bool
+	skills  []skillpkg.Skill
+	byName  map[string]skillpkg.Skill
+	aliases map[string]skillpkg.Skill
+}
+
+func (l *skillLoader) Load(ctx context.Context) ([]skillpkg.Skill, error) {
+	if l == nil || l.opts.SkillSource == nil && len(l.opts.Skills) == 0 {
+		return nil, nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.loaded {
+		return skillpkg.StaticSource(l.skills).Skills(ctx)
+	}
+	opts := l.opts
+	sources := make(skillpkg.MultiSource, 0, 2)
+	if len(opts.Skills) > 0 {
+		sources = append(sources, skillpkg.StaticSource(opts.Skills))
+	}
+	if opts.SkillSource != nil {
+		sources = append(sources, opts.SkillSource)
+	}
+	loaded, err := sources.Skills(ctx)
+	if err != nil {
+		return nil, err
+	}
+	l.skills = loaded
+	l.byName, l.aliases = indexSkills(loaded)
+	l.loaded = true
+	return skillpkg.StaticSource(l.skills).Skills(ctx)
+}
+
+func (l *skillLoader) Lookup(ctx context.Context, name string) (skillpkg.Skill, bool, error) {
+	if _, err := l.Load(ctx); err != nil {
+		return skillpkg.Skill{}, false, err
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if item, ok := l.byName[name]; ok {
+		return item, true, nil
+	}
+	if item, ok := l.aliases[name]; ok {
+		return item, true, nil
+	}
+	return skillpkg.Skill{}, false, nil
+}
+
+func indexSkills(skills []skillpkg.Skill) (map[string]skillpkg.Skill, map[string]skillpkg.Skill) {
+	byName := make(map[string]skillpkg.Skill, len(skills))
+	aliases := make(map[string]skillpkg.Skill)
+	for _, item := range skills {
+		if item.Name == "" {
+			continue
+		}
+		byName[item.Name] = item
+		aliases["/"+item.Name] = item
+	}
+	return byName, aliases
+}
+
+func registryWithLoadSkill(registry *tool.Registry, loader *skillLoader) (*tool.Registry, error) {
+	if _, ok := registry.Get(skillpkg.LoadToolName); ok {
+		return registry, nil
+	}
+	// load_skill closes over per-run state, so keep it on a per-run registry
+	// snapshot instead of mutating a caller-owned registry that may be reused.
+	out := registry.Clone()
+	if err := out.Register(loadSkillTool(loader)); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+type loadSkillInput struct {
+	Name string `json:"name"`
+}
+
+func loadSkillTool(loader *skillLoader) tool.Tool {
+	return tool.Definition{
+		ToolSpec: model.ToolSpec{
+			Name:            skillpkg.LoadToolName,
+			Description:     "Load full instructions for a named skill after deciding it is relevant.",
+			InputSchema:     loadSkillInputSchema(),
+			SearchHint:      "load skill instructions full content progressive disclosure",
+			ReadOnly:        true,
+			ConcurrencySafe: true,
+			AlwaysLoad:      true,
+			MaxResultBytes:  100 * 1024,
+		},
+		Handler: func(ctx context.Context, call tool.Call) (model.ToolResult, error) {
+			input, err := tool.DecodeInput[loadSkillInput](call.Use)
+			if err != nil {
+				return model.ToolResult{}, err
+			}
+			name := strings.TrimSpace(input.Name)
+			if name == "" {
+				return model.ToolResult{}, fmt.Errorf("skill name is required")
+			}
+			item, ok, err := loader.Lookup(ctx, name)
+			if err != nil {
+				return model.ToolResult{}, err
+			}
+			if !ok {
+				return model.ToolResult{}, fmt.Errorf("unknown skill: %s", name)
+			}
+			return model.ToolResult{
+				Content: formatLoadedSkill(item),
+				Metadata: map[string]any{
+					"skill_name": item.Name,
+					"source":     item.Source,
+					"path":       item.Path,
+					"tags":       append([]string(nil), item.Tags...),
+				},
+			}, nil
+		},
+	}
+}
+
+func loadSkillInputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"required":             []any{"name"},
+		"properties": map[string]any{
+			"name": map[string]any{
+				"type":        "string",
+				"description": "Exact skill name from the prompt metadata.",
+			},
+		},
+	}
+}
+
+func formatLoadedSkill(item skillpkg.Skill) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Skill: %s", item.Name)
+	if item.Description != "" {
+		fmt.Fprintf(&b, "\nDescription: %s", item.Description)
+	}
+	if item.WhenToUse != "" {
+		fmt.Fprintf(&b, "\nUse when: %s", item.WhenToUse)
+	}
+	if len(item.Tags) > 0 {
+		fmt.Fprintf(&b, "\nTags: %s", strings.Join(item.Tags, ", "))
+	}
+	if item.Source != "" {
+		fmt.Fprintf(&b, "\nSource: %s", item.Source)
+	}
+	if item.Path != "" {
+		fmt.Fprintf(&b, "\nPath: %s", item.Path)
+	}
+	if item.Content != "" {
+		fmt.Fprintf(&b, "\n\nInstructions:\n%s", item.Content)
+	}
+	return b.String()
+}
+
+func buildPrompt(ctx context.Context, opts Options, memories *memoryLoader, skills *skillLoader, sessionID string, messages []model.Message, tools []model.ToolSpec) (builtPrompt, error) {
 	if opts.PromptBuilder == nil && opts.PromptProfile == "" && opts.Identity.IsZero() && opts.Planner == nil && !opts.Output.Enabled() && opts.MemorySource == nil && len(opts.Memories) == 0 && opts.SkillSource == nil && len(opts.Skills) == 0 {
 		return builtPrompt{
 			SystemPrompt:       opts.SystemPrompt,
@@ -664,13 +841,9 @@ func buildPrompt(ctx context.Context, opts Options, memories *memoryLoader, sess
 	if err != nil {
 		return builtPrompt{}, err
 	}
-	skills := append([]skillpkg.Skill(nil), opts.Skills...)
-	if opts.SkillSource != nil {
-		loaded, err := opts.SkillSource.Skills(ctx)
-		if err != nil {
-			return builtPrompt{}, err
-		}
-		skills = append(skills, loaded...)
+	loadedSkills, err := skills.Load(ctx)
+	if err != nil {
+		return builtPrompt{}, err
 	}
 	plan, err := loadPlan(ctx, opts, sessionID, messages)
 	if err != nil {
@@ -684,7 +857,8 @@ func buildPrompt(ctx context.Context, opts Options, memories *memoryLoader, sess
 		Tools:              tools,
 		Plan:               plan,
 		Memories:           loadedMemories,
-		Skills:             skills,
+		Skills:             loadedSkills,
+		SkillDisclosure:    opts.SkillDisclosure,
 		OutputSchema:       opts.Output.Schema,
 	})
 	if err != nil {
@@ -735,7 +909,7 @@ func (l *memoryLoader) Load(ctx context.Context, messages []model.Message) ([]me
 	return memory.StaticSource(l.memories).Memories(ctx, memory.Request{})
 }
 
-func retryContextWindow(ctx context.Context, opts Options, memories *memoryLoader, sessionID string, messages []model.Message) ([]model.Message, []model.ToolSpec, builtPrompt, error) {
+func retryContextWindow(ctx context.Context, opts Options, memories *memoryLoader, skills *skillLoader, sessionID string, messages []model.Message) ([]model.Message, []model.ToolSpec, builtPrompt, error) {
 	retryMessages, err := opts.ContextRetry.Apply(ctx, messages)
 	if err != nil {
 		return nil, nil, builtPrompt{}, err
@@ -744,7 +918,7 @@ func retryContextWindow(ctx context.Context, opts Options, memories *memoryLoade
 	if err != nil {
 		return nil, nil, builtPrompt{}, err
 	}
-	retryPrompt, err := buildPrompt(ctx, opts, memories, sessionID, retryMessages, retryTools)
+	retryPrompt, err := buildPrompt(ctx, opts, memories, skills, sessionID, retryMessages, retryTools)
 	if err != nil {
 		return nil, nil, builtPrompt{}, err
 	}

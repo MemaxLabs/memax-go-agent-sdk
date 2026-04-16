@@ -287,12 +287,17 @@ implementations. `skill.LoadDir` and `skill.LoadFS` load `SKILL.md` manifests
 with simple frontmatter fields for name, description, when-to-use guidance,
 tags, policy hints, and always-on behavior. Callers can pass explicit skills or
 a dynamic `Options.SkillSource`. `skill.Selector` keeps always-on skills and ranks
-relevant skills against the current prompt and transcript. The optional
-`toolkit/skilltools` package exposes skill discovery through the normal tool
-layer. A `search_skills` tool can list relevant instructions from a
-`skill.Source`, while the prompt builder can inject selected skills as named
-prompt parts. This keeps skills inspectable and governable by the same registry,
-permission, hook, and telemetry machinery as every other capability.
+relevant skills against the current prompt and transcript. By default, selected
+skills are injected directly as named prompt parts for compatibility with small
+trusted skill sets. With `Options.SkillDisclosure` set to
+`skill.DisclosureProgressive`, the prompt contains only selected skill metadata
+and the agent receives an SDK-provided read-only `load_skill` tool. Loading a
+skill returns the full instructions as a normal tool result, making skill use
+visible in events and durable session history. The optional `toolkit/skilltools`
+package separately exposes skill search through the normal tool layer for hosts
+that want explicit catalog search. This keeps skills inspectable and governable
+by the same registry, permission, hook, and telemetry machinery as every other
+capability.
 
 If a provider rejects a model request because the context window is too large,
 adapters can mark the error with `model.ErrContextWindowExceeded`. `Query` can
