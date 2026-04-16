@@ -385,6 +385,92 @@ func TestQueryProgressiveSkillDisclosureLoadsSkillThroughTool(t *testing.T) {
 	}
 }
 
+func TestQueryProgressiveSkillResourceLoadsThroughTool(t *testing.T) {
+	fake := &fakeModel{turns: [][]model.StreamEvent{
+		{
+			{
+				Kind: model.StreamToolUse,
+				ToolUse: model.ToolUse{
+					ID:    "skill-1",
+					Name:  skill.LoadToolName,
+					Input: json.RawMessage(`{"name":"database-review"}`),
+				},
+			},
+		},
+		{
+			{
+				Kind: model.StreamToolUse,
+				ToolUse: model.ToolUse{
+					ID:    "resource-1",
+					Name:  skill.ResourceToolName,
+					Input: json.RawMessage(`{"skill_name":"database-review","resource":"migration-checklist"}`),
+				},
+			},
+		},
+		{{Kind: model.StreamText, Text: "reviewed with resource"}},
+	}}
+	source := skill.StaticSource{{
+		Name:        "database-review",
+		Description: "Review database migrations.",
+		AlwaysOn:    true,
+		Content:     "Check lock behavior.",
+		Resources: []skill.ResourceRef{{
+			Name:        "migration-checklist",
+			Description: "Migration checklist.",
+			Path:        "resources/migration-checklist.md",
+			MIMEType:    "text/markdown",
+			Bytes:       64,
+		}},
+	}}
+	resources := skill.StaticResourceSource{{
+		SkillName: "database-review",
+		Name:      "migration-checklist",
+		Path:      "resources/migration-checklist.md",
+		MIMEType:  "text/markdown",
+		Content:   "Step 1: confirm rollback.",
+	}}
+
+	events, err := Query(context.Background(), "review SQL migration", Options{
+		Model:               fake,
+		SkillSource:         source,
+		SkillResourceSource: resources,
+		SkillDisclosure:     skill.DisclosureProgressive,
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+	result, err := Drain(events)
+	if err != nil {
+		t.Fatalf("Drain returned error: %v", err)
+	}
+	if result != "reviewed with resource" {
+		t.Fatalf("result = %q, want reviewed with resource", result)
+	}
+	if got := len(fake.requests); got != 3 {
+		t.Fatalf("model calls = %d, want 3", got)
+	}
+	first := fake.requests[0]
+	if !requestHasTool(first, skill.ResourceToolName) {
+		t.Fatalf("first request tools = %#v, want %s", first.Tools, skill.ResourceToolName)
+	}
+	if !strings.Contains(first.SystemPrompt, "migration-checklist") || !strings.Contains(first.SystemPrompt, skill.ResourceToolName) {
+		t.Fatalf("first prompt missing resource metadata:\n%s", first.SystemPrompt)
+	}
+	if strings.Contains(first.SystemPrompt, "Step 1: confirm rollback.") {
+		t.Fatalf("first prompt leaked resource content:\n%s", first.SystemPrompt)
+	}
+	secondLast := fake.requests[2].Messages[len(fake.requests[2].Messages)-1]
+	if secondLast.Role != model.RoleTool || secondLast.ToolResult == nil || secondLast.ToolResult.Name != skill.ResourceToolName {
+		t.Fatalf("last message before final = %#v, want resource tool result", secondLast)
+	}
+	if !strings.Contains(secondLast.ToolResult.Content, "Step 1: confirm rollback.") {
+		t.Fatalf("resource result = %q, want full resource content", secondLast.ToolResult.Content)
+	}
+	if secondLast.ToolResult.Metadata[model.MetadataLoadedSkillResource] != true {
+		t.Fatalf("resource metadata = %#v, want loaded resource marker", secondLast.ToolResult.Metadata)
+	}
+}
+
 func TestQueryFeedsHookDenialBackToModel(t *testing.T) {
 	registry := tool.NewRegistry(tool.Definition{
 		ToolSpec: model.ToolSpec{Name: "write"},

@@ -94,7 +94,8 @@ environment.
 
 **Current state:** `skill.Selector` ranks skills. The SDK supports the original
 direct-injection mode and an opt-in progressive mode where selected metadata is
-shown in the prompt and full instructions are loaded through `load_skill`.
+shown in the prompt, full instructions are loaded through `load_skill`, and
+supporting resources can be loaded through `read_skill_resource`.
 
 **Gap:** Leading agents use skill metadata for discovery, then load full
 instructions and resources on demand. The reference does this through a Skill
@@ -105,7 +106,8 @@ tool and filesystem-backed progressive disclosure.
 - Prompt includes skill metadata only: name, description, when-to-use, tags.
 - The model explicitly invokes `load_skill` to load full instructions. Initial
   support exists.
-- Optional `read_skill_resource` loads host-owned supporting resources.
+- Optional `read_skill_resource` loads host-owned supporting resources. Initial
+  support exists.
 - Full content enters the transcript as a tool result, not hidden prompt state.
   Initial support exists.
 - Skill content can be cached per run/session with event visibility. Initial
@@ -116,8 +118,9 @@ tool and filesystem-backed progressive disclosure.
 
 ```go
 Options{
-    SkillSource:     source,
-    SkillDisclosure: skill.DisclosureProgressive,
+    SkillSource:         source,
+    SkillResourceSource: resources,
+    SkillDisclosure:     skill.DisclosureProgressive,
 }
 
 type ContentSource interface {
@@ -135,7 +138,7 @@ type ResourceSource interface {
 - Model invokes the right skill from metadata. Initial coverage exists.
 - Loaded skill content is returned as a tool result and persists in transcript.
   Initial coverage exists.
-- Resources are loaded only when requested.
+- Resources are loaded only when requested. Initial coverage exists.
 - Context retry preserves invoked skill content.
 - Large skill catalogs stay within prompt budget.
 

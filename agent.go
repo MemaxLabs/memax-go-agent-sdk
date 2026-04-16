@@ -166,7 +166,7 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 	memories := memoryLoader{opts: opts, sessionID: sessionID}
 	skills := skillLoader{opts: opts}
 	if opts.SkillDisclosure == skillpkg.DisclosureProgressive && (opts.SkillSource != nil || len(opts.Skills) > 0) {
-		registry, err := registryWithLoadSkill(opts.Tools, &skills)
+		registry, err := registryWithSkillTools(opts.Tools, opts, &skills)
 		if err != nil {
 			emitError(ctx, func(event Event) bool {
 				select {
@@ -809,15 +809,21 @@ func indexSkills(skills []skillpkg.Skill) (map[string]skillpkg.Skill, map[string
 	return byName, aliases
 }
 
-func registryWithLoadSkill(registry *tool.Registry, loader *skillLoader) (*tool.Registry, error) {
-	if _, ok := registry.Get(skillpkg.LoadToolName); ok {
-		return registry, nil
-	}
+func registryWithSkillTools(registry *tool.Registry, opts Options, loader *skillLoader) (*tool.Registry, error) {
 	// load_skill closes over per-run state, so keep it on a per-run registry
 	// snapshot instead of mutating a caller-owned registry that may be reused.
 	out := registry.Clone()
-	if err := out.Register(loadSkillTool(loader)); err != nil {
-		return nil, err
+	if _, ok := out.Get(skillpkg.LoadToolName); !ok {
+		if err := out.Register(loadSkillTool(loader, opts.SkillResourceSource != nil)); err != nil {
+			return nil, err
+		}
+	}
+	if opts.SkillResourceSource != nil {
+		if _, ok := out.Get(skillpkg.ResourceToolName); !ok {
+			if err := out.Register(readSkillResourceTool(loader, opts.SkillResourceSource)); err != nil {
+				return nil, err
+			}
+		}
 	}
 	return out, nil
 }
@@ -826,7 +832,7 @@ type loadSkillInput struct {
 	Name string `json:"name"`
 }
 
-func loadSkillTool(loader *skillLoader) tool.Tool {
+func loadSkillTool(loader *skillLoader, resourcesAvailable bool) tool.Tool {
 	return tool.Definition{
 		ToolSpec: model.ToolSpec{
 			Name:            skillpkg.LoadToolName,
@@ -855,7 +861,7 @@ func loadSkillTool(loader *skillLoader) tool.Tool {
 				return model.ToolResult{}, fmt.Errorf("unknown skill: %s", name)
 			}
 			return model.ToolResult{
-				Content: formatLoadedSkill(item),
+				Content: formatLoadedSkill(item, resourcesAvailable),
 				Metadata: map[string]any{
 					model.MetadataLoadedSkill:      true,
 					model.MetadataContextRetention: model.RetentionImportant,
@@ -883,7 +889,128 @@ func loadSkillInputSchema() map[string]any {
 	}
 }
 
-func formatLoadedSkill(item skillpkg.Skill) string {
+type readSkillResourceInput struct {
+	SkillName string `json:"skill_name"`
+	Resource  string `json:"resource"`
+}
+
+func readSkillResourceTool(loader *skillLoader, source skillpkg.ResourceSource) tool.Tool {
+	return tool.Definition{
+		ToolSpec: model.ToolSpec{
+			Name:            skillpkg.ResourceToolName,
+			Description:     "Load a supporting resource for a named skill after loading the skill instructions.",
+			InputSchema:     readSkillResourceInputSchema(),
+			SearchHint:      "load read skill supporting resource example checklist template",
+			ReadOnly:        true,
+			ConcurrencySafe: true,
+			AlwaysLoad:      true,
+			MaxResultBytes:  100 * 1024,
+		},
+		Handler: func(ctx context.Context, call tool.Call) (model.ToolResult, error) {
+			input, err := tool.DecodeInput[readSkillResourceInput](call.Use)
+			if err != nil {
+				return model.ToolResult{}, err
+			}
+			skillName := strings.TrimSpace(input.SkillName)
+			resourceName := strings.TrimSpace(input.Resource)
+			if skillName == "" {
+				return model.ToolResult{}, fmt.Errorf("skill_name is required")
+			}
+			if resourceName == "" {
+				return model.ToolResult{}, fmt.Errorf("resource is required")
+			}
+			item, ok, err := loader.Lookup(ctx, skillName)
+			if err != nil {
+				return model.ToolResult{}, err
+			}
+			if !ok {
+				return model.ToolResult{}, fmt.Errorf("unknown skill: %s", skillName)
+			}
+			ref, ok := findSkillResource(item, resourceName)
+			if !ok {
+				return model.ToolResult{}, fmt.Errorf("unknown resource %q for skill %s", resourceName, item.Name)
+			}
+			resource, err := source.SkillResource(ctx, skillpkg.ResourceRequest{
+				SkillName: item.Name,
+				Name:      ref.Name,
+				Path:      ref.Path,
+			})
+			if err != nil {
+				return model.ToolResult{}, err
+			}
+			resource = completeResource(resource, item, ref)
+			metadata := model.CloneMetadata(resource.Metadata)
+			if metadata == nil {
+				metadata = map[string]any{}
+			}
+			metadata[model.MetadataLoadedSkillResource] = true
+			metadata[model.MetadataContextRetention] = model.RetentionImportant
+			metadata["skill_name"] = item.Name
+			metadata["resource"] = resource.Name
+			metadata["path"] = resource.Path
+			metadata["mime_type"] = resource.MIMEType
+			return model.ToolResult{
+				Content:  formatLoadedSkillResource(resource),
+				Metadata: metadata,
+			}, nil
+		},
+	}
+}
+
+func readSkillResourceInputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"required":             []any{"skill_name", "resource"},
+		"properties": map[string]any{
+			"skill_name": map[string]any{
+				"type":        "string",
+				"description": "Exact skill name from the prompt metadata.",
+			},
+			"resource": map[string]any{
+				"type":        "string",
+				"description": "Exact resource name or path from the skill metadata.",
+			},
+		},
+	}
+}
+
+func findSkillResource(item skillpkg.Skill, name string) (skillpkg.ResourceRef, bool) {
+	for _, ref := range item.Resources {
+		if ref.Name == name || ref.Path == name {
+			return ref, true
+		}
+	}
+	return skillpkg.ResourceRef{}, false
+}
+
+func completeResource(resource skillpkg.Resource, item skillpkg.Skill, ref skillpkg.ResourceRef) skillpkg.Resource {
+	if resource.SkillName == "" {
+		resource.SkillName = item.Name
+	}
+	if resource.Name == "" {
+		resource.Name = ref.Name
+	}
+	if resource.Description == "" {
+		resource.Description = ref.Description
+	}
+	if resource.Path == "" {
+		resource.Path = ref.Path
+	}
+	if resource.MIMEType == "" {
+		resource.MIMEType = ref.MIMEType
+	}
+	if resource.Bytes <= 0 {
+		if ref.Bytes > 0 {
+			resource.Bytes = ref.Bytes
+		} else {
+			resource.Bytes = len(resource.Content)
+		}
+	}
+	return resource
+}
+
+func formatLoadedSkill(item skillpkg.Skill, resourcesAvailable bool) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Skill: %s", item.Name)
 	if item.Description != "" {
@@ -901,8 +1028,59 @@ func formatLoadedSkill(item skillpkg.Skill) string {
 	if item.Path != "" {
 		fmt.Fprintf(&b, "\nPath: %s", item.Path)
 	}
+	if resourcesAvailable && len(item.Resources) > 0 {
+		fmt.Fprintf(&b, "\nResources: use `%s` with skill_name %q and the resource name or path when supporting material is needed.", skillpkg.ResourceToolName, item.Name)
+		for _, ref := range item.Resources {
+			fmt.Fprintf(&b, "\n- %s", firstNonEmptyString(ref.Name, ref.Path))
+			if ref.Description != "" {
+				fmt.Fprintf(&b, ": %s", ref.Description)
+			}
+			if ref.Path != "" && ref.Path != ref.Name {
+				fmt.Fprintf(&b, " (path: %s)", ref.Path)
+			}
+			if ref.MIMEType != "" {
+				fmt.Fprintf(&b, " [%s]", ref.MIMEType)
+			}
+			if ref.Bytes > 0 {
+				fmt.Fprintf(&b, " [%d bytes]", ref.Bytes)
+			}
+		}
+	}
 	if item.Content != "" {
 		fmt.Fprintf(&b, "\n\nInstructions:\n%s", item.Content)
+	}
+	return b.String()
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func formatLoadedSkillResource(resource skillpkg.Resource) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Skill resource: %s", resource.Name)
+	if resource.SkillName != "" {
+		fmt.Fprintf(&b, "\nSkill: %s", resource.SkillName)
+	}
+	if resource.Description != "" {
+		fmt.Fprintf(&b, "\nDescription: %s", resource.Description)
+	}
+	if resource.Path != "" {
+		fmt.Fprintf(&b, "\nPath: %s", resource.Path)
+	}
+	if resource.MIMEType != "" {
+		fmt.Fprintf(&b, "\nMIME type: %s", resource.MIMEType)
+	}
+	if resource.Bytes > 0 {
+		fmt.Fprintf(&b, "\nBytes: %d", resource.Bytes)
+	}
+	if resource.Content != "" {
+		fmt.Fprintf(&b, "\n\nContent:\n%s", resource.Content)
 	}
 	return b.String()
 }
@@ -940,6 +1118,7 @@ func buildPrompt(ctx context.Context, opts Options, memories *memoryLoader, skil
 		Memories:           loadedMemories,
 		Skills:             loadedSkills,
 		SkillDisclosure:    opts.SkillDisclosure,
+		SkillResources:     opts.SkillResourceSource != nil,
 		OutputSchema:       opts.Output.Schema,
 	})
 	if err != nil {

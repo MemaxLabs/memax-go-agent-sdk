@@ -39,6 +39,7 @@ func All() []agenteval.Case {
 		PlannerGuidedToolUse(),
 		PlannerTaskStateUpdates(),
 		ProgressiveSkillDisclosure(),
+		ProgressiveSkillResourceLoading(),
 		ContextPreservesLoadedSkill(),
 		ContextCompactionProvenance(),
 		OpenAIProviderTextAndUsage(),
@@ -379,6 +380,104 @@ func ProgressiveSkillDisclosure() agenteval.Case {
 						}
 					}
 					return fmt.Errorf("load_skill result did not contain full instructions: %#v", result.ToolResults())
+				},
+			},
+		},
+	}
+}
+
+// ProgressiveSkillResourceLoading returns a single-use scenario where the
+// prompt exposes supporting skill resource metadata, the model loads one
+// resource through a tool, and the full resource content stays out of the
+// initial prompt.
+func ProgressiveSkillResourceLoading() agenteval.Case {
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "skill-1",
+				Name:  skill.LoadToolName,
+				Input: json.RawMessage(`{"name":"database-review"}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "resource-1",
+				Name:  skill.ResourceToolName,
+				Input: json.RawMessage(`{"skill_name":"database-review","resource":"migration-checklist"}`),
+			},
+		}},
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "Migration reviewed with the resource checklist."}},
+	)
+	skills := skill.StaticSource{{
+		Name:        "database-review",
+		Description: "Review database migrations.",
+		WhenToUse:   "SQL migrations or rollback plans are involved.",
+		Tags:        []string{"database", "migration"},
+		AlwaysOn:    true,
+		Content:     "Check lock behavior, rollback safety, and data backfill risk.",
+		Resources: []skill.ResourceRef{{
+			Name:        "migration-checklist",
+			Description: "Checklist for migration rollout and rollback.",
+			Path:        "resources/migration-checklist.md",
+			MIMEType:    "text/markdown",
+			Bytes:       256,
+		}},
+	}}
+	resources := skill.StaticResourceSource{{
+		SkillName: "database-review",
+		Name:      "migration-checklist",
+		Path:      "resources/migration-checklist.md",
+		MIMEType:  "text/markdown",
+		Content:   "Step 1: confirm rollback. Step 2: verify locks.",
+	}}
+
+	return agenteval.Case{
+		Name:   "progressive_skill_resource_loading",
+		Prompt: "Review the SQL migration with the right skill and checklist.",
+		Options: memaxagent.Options{
+			Model:               modelClient,
+			SkillSource:         skills,
+			SkillResourceSource: resources,
+			SkillDisclosure:     skill.DisclosureProgressive,
+		},
+		Assertions: []agenteval.Assertion{
+			agenteval.ToolUsed(skill.LoadToolName),
+			agenteval.ToolUsed(skill.ResourceToolName),
+			agenteval.NoToolErrors(),
+			agenteval.FinalEquals("Migration reviewed with the resource checklist."),
+			{
+				Name: "prompt exposes resource metadata only",
+				Check: func(agenteval.Result) error {
+					requests := modelClient.Requests()
+					if len(requests) < 1 {
+						return fmt.Errorf("model requests = %d, want at least 1", len(requests))
+					}
+					prompt := requests[0].SystemPrompt
+					for _, want := range []string{"database-review", "migration-checklist", skill.ResourceToolName} {
+						if !strings.Contains(prompt, want) {
+							return fmt.Errorf("prompt missing %q:\n%s", want, prompt)
+						}
+					}
+					if strings.Contains(prompt, "Step 1: confirm rollback") {
+						return fmt.Errorf("prompt leaked resource content:\n%s", prompt)
+					}
+					return nil
+				},
+			},
+			{
+				Name: "loaded resource result contains content",
+				Check: func(result agenteval.Result) error {
+					for _, toolResult := range result.ToolResults() {
+						if toolResult.Name == skill.ResourceToolName && strings.Contains(toolResult.Content, "verify locks") {
+							if toolResult.Metadata[model.MetadataLoadedSkillResource] != true {
+								return fmt.Errorf("resource metadata = %#v, want marker", toolResult.Metadata)
+							}
+							return nil
+						}
+					}
+					return fmt.Errorf("read_skill_resource result did not contain full resource: %#v", result.ToolResults())
 				},
 			},
 		},

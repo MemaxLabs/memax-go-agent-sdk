@@ -12,8 +12,8 @@ func TestScenariosPass(t *testing.T) {
 	if err := report.Error(); err != nil {
 		t.Fatalf("scenario report error = %v", err)
 	}
-	if !report.Passed() || len(report.Results) != 29 {
-		t.Fatalf("report = %#v, want twenty-nine passing scenarios", report)
+	if !report.Passed() || len(report.Results) != 30 {
+		t.Fatalf("report = %#v, want thirty passing scenarios", report)
 	}
 }
 
@@ -35,6 +35,7 @@ func TestScenarioNamesAreStable(t *testing.T) {
 		"planner_guided_tool_use",
 		"planner_task_state_updates",
 		"progressive_skill_disclosure",
+		"progressive_skill_resource_loading",
 		"context_preserves_loaded_skill",
 		"context_compaction_provenance",
 		"openai_provider_text_and_usage",

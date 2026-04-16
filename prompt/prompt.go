@@ -44,6 +44,7 @@ type Request struct {
 	Memories           []memory.Memory
 	Skills             []skill.Skill
 	SkillDisclosure    skill.DisclosureMode
+	SkillResources     bool
 	OutputSchema       map[string]any
 }
 
@@ -95,7 +96,7 @@ func (b DefaultBuilder) Build(ctx context.Context, req Request) (Result, error) 
 	}
 	if selected := b.SkillSelector.Select(req.Skills, requestQuery(req)); len(selected) > 0 {
 		if req.SkillDisclosure == skill.DisclosureProgressive {
-			if content := formatSkillDiscovery(selected); content != "" {
+			if content := formatSkillDiscovery(selected, req.SkillResources); content != "" {
 				parts = append(parts, Part{Name: "memax.skill_discovery", Content: content})
 			}
 		} else {
@@ -254,7 +255,7 @@ func formatSkills(skills []skill.Skill) string {
 	return b.String()
 }
 
-func formatSkillDiscovery(skills []skill.Skill) string {
+func formatSkillDiscovery(skills []skill.Skill, resourcesAvailable bool) string {
 	var b strings.Builder
 	count := 0
 	for _, item := range skills {
@@ -275,8 +276,38 @@ func formatSkillDiscovery(skills []skill.Skill) string {
 		if len(item.Tags) > 0 {
 			fmt.Fprintf(&b, "\n  Tags: %s", strings.Join(item.Tags, ", "))
 		}
+		if resourcesAvailable && len(item.Resources) > 0 {
+			fmt.Fprintf(&b, "\n  Resources: call `%s` with skill_name %q and the resource name or path when supporting material is needed.", skill.ResourceToolName, item.Name)
+			for _, ref := range item.Resources {
+				fmt.Fprintf(&b, "\n  - %s", firstNonEmpty(ref.Name, ref.Path))
+				if ref.Description != "" {
+					fmt.Fprintf(&b, ": %s", ref.Description)
+				}
+				if ref.Path != "" && ref.Path != ref.Name {
+					fmt.Fprintf(&b, " (path: %s)", ref.Path)
+				}
+				if ref.MIMEType != "" {
+					fmt.Fprintf(&b, " [%s]", ref.MIMEType)
+				}
+				if ref.Bytes > 0 {
+					fmt.Fprintf(&b, " [%d bytes]", ref.Bytes)
+				}
+				if len(ref.Tags) > 0 {
+					fmt.Fprintf(&b, "\n    Tags: %s", strings.Join(ref.Tags, ", "))
+				}
+			}
+		}
 	}
 	return b.String()
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func formatMemories(memories []memory.Memory) string {

@@ -14,6 +14,9 @@ const (
 	// LoadToolName is the default tool name used by progressive skill
 	// disclosure to load full instructions for a named skill.
 	LoadToolName = "load_skill"
+	// ResourceToolName is the default tool name used by progressive skill
+	// disclosure to load a supporting resource for a named skill.
+	ResourceToolName = "read_skill_resource"
 
 	// DisclosureInjectSelected injects selected skill instructions directly into
 	// the system prompt. This is the default for backward compatibility and for
@@ -27,15 +30,85 @@ const (
 // Skill is a local instruction bundle that can be injected into the model
 // prompt when it is relevant to the current run.
 type Skill struct {
-	Name        string
-	Description string
-	WhenToUse   string
-	Content     string
-	Source      string
-	Path        string
-	AlwaysOn    bool
-	Tags        []string
-	PolicyHints []string
+	Name        string        `json:"name"`
+	Description string        `json:"description,omitempty"`
+	WhenToUse   string        `json:"when_to_use,omitempty"`
+	Content     string        `json:"content,omitempty"`
+	Source      string        `json:"source,omitempty"`
+	Path        string        `json:"path,omitempty"`
+	Resources   []ResourceRef `json:"resources,omitempty"`
+	AlwaysOn    bool          `json:"always_on,omitempty"`
+	Tags        []string      `json:"tags,omitempty"`
+	PolicyHints []string      `json:"policy_hints,omitempty"`
+}
+
+// ResourceRef is lightweight metadata for a skill supporting resource. Resource
+// content is intentionally not stored here so progressive disclosure can expose
+// metadata first and load content through a tool only when needed.
+type ResourceRef struct {
+	Name        string   `json:"name"`
+	Description string   `json:"description,omitempty"`
+	Path        string   `json:"path,omitempty"`
+	MIMEType    string   `json:"mime_type,omitempty"`
+	Bytes       int      `json:"bytes,omitempty"`
+	Tags        []string `json:"tags,omitempty"`
+}
+
+// Resource is the full content returned by a ResourceSource.
+type Resource struct {
+	SkillName   string         `json:"skill_name,omitempty"`
+	Name        string         `json:"name"`
+	Description string         `json:"description,omitempty"`
+	Path        string         `json:"path,omitempty"`
+	MIMEType    string         `json:"mime_type,omitempty"`
+	Content     string         `json:"content"`
+	Bytes       int            `json:"bytes,omitempty"`
+	Metadata    map[string]any `json:"metadata,omitempty"`
+}
+
+// ResourceRequest identifies a supporting resource for a skill.
+type ResourceRequest struct {
+	SkillName string `json:"skill_name"`
+	Name      string `json:"name,omitempty"`
+	Path      string `json:"path,omitempty"`
+}
+
+// ResourceSource loads supporting skill resources on demand.
+type ResourceSource interface {
+	SkillResource(context.Context, ResourceRequest) (Resource, error)
+}
+
+// ResourceSourceFunc adapts a function to ResourceSource.
+type ResourceSourceFunc func(context.Context, ResourceRequest) (Resource, error)
+
+// SkillResource calls f(ctx, req).
+func (f ResourceSourceFunc) SkillResource(ctx context.Context, req ResourceRequest) (Resource, error) {
+	if f == nil {
+		return Resource{}, fmt.Errorf("skill: nil ResourceSourceFunc")
+	}
+	return f(ctx, req)
+}
+
+// StaticResourceSource is an in-memory ResourceSource implementation.
+type StaticResourceSource []Resource
+
+// SkillResource returns a defensive copy of a matching resource.
+func (s StaticResourceSource) SkillResource(ctx context.Context, req ResourceRequest) (Resource, error) {
+	if err := ctx.Err(); err != nil {
+		return Resource{}, err
+	}
+	for _, item := range s {
+		if item.SkillName != req.SkillName {
+			continue
+		}
+		if req.Name != "" && item.Name == req.Name {
+			return cloneResource(item), nil
+		}
+		if req.Path != "" && item.Path == req.Path {
+			return cloneResource(item), nil
+		}
+	}
+	return Resource{}, fmt.Errorf("skill: resource %q for skill %q not found", firstNonEmpty(req.Name, req.Path), req.SkillName)
 }
 
 // Source provides skills to the prompt layer.
@@ -175,5 +248,34 @@ func cloneSkills(skills []Skill) []Skill {
 func clone(in Skill) Skill {
 	in.Tags = append([]string(nil), in.Tags...)
 	in.PolicyHints = append([]string(nil), in.PolicyHints...)
+	in.Resources = cloneResourceRefs(in.Resources)
 	return in
+}
+
+func cloneResourceRefs(refs []ResourceRef) []ResourceRef {
+	if len(refs) == 0 {
+		return nil
+	}
+	out := make([]ResourceRef, len(refs))
+	for i, ref := range refs {
+		out[i] = ref
+		out[i].Tags = append([]string(nil), ref.Tags...)
+	}
+	return out
+}
+
+func cloneResource(in Resource) Resource {
+	in.Metadata = cloneMetadata(in.Metadata)
+	return in
+}
+
+func cloneMetadata(in map[string]any) map[string]any {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
 }

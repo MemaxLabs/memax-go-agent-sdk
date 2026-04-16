@@ -87,6 +87,9 @@ const (
 	RetentionImportant = "important"
 	// MetadataLoadedSkill marks a tool result as loaded skill instructions.
 	MetadataLoadedSkill = "loaded_skill"
+	// MetadataLoadedSkillResource marks a tool result as a loaded skill
+	// supporting resource.
+	MetadataLoadedSkillResource = "loaded_skill_resource"
 )
 
 // CloneMessages returns a deep copy of messages.

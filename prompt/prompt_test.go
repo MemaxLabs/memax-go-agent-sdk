@@ -67,6 +67,7 @@ func TestDefaultBuilderProgressiveSkillsExposeMetadataOnly(t *testing.T) {
 			Content: []model.ContentBlock{{Type: model.ContentText, Text: "review SQL migration"}},
 		}},
 		SkillDisclosure: skill.DisclosureProgressive,
+		SkillResources:  true,
 		Skills: []skill.Skill{{
 			Name:        "database-review",
 			Description: "Review database migrations.",
@@ -74,18 +75,27 @@ func TestDefaultBuilderProgressiveSkillsExposeMetadataOnly(t *testing.T) {
 			Tags:        []string{"database", "migration"},
 			AlwaysOn:    true,
 			Content:     "Check lock behavior and rollback safety.",
+			Resources: []skill.ResourceRef{{
+				Name:        "migration-checklist",
+				Description: "Step-by-step migration checklist.",
+				Path:        "resources/migration-checklist.md",
+				MIMEType:    "text/markdown",
+				Bytes:       128,
+			}},
 		}},
 	})
 	if err != nil {
 		t.Fatalf("Build returned error: %v", err)
 	}
-	for _, want := range []string{"Available skill metadata", "load_skill", "database-review", "Review database migrations.", "database, migration"} {
+	for _, want := range []string{"Available skill metadata", "load_skill", "read_skill_resource", "database-review", "Review database migrations.", "database, migration", "migration-checklist", "resources/migration-checklist.md"} {
 		if !strings.Contains(result.SystemPrompt, want) {
 			t.Fatalf("system prompt missing %q:\n%s", want, result.SystemPrompt)
 		}
 	}
-	if strings.Contains(result.SystemPrompt, "Check lock behavior") {
-		t.Fatalf("progressive skill prompt leaked full instructions:\n%s", result.SystemPrompt)
+	for _, leaked := range []string{"Check lock behavior", "Step 1: take backup"} {
+		if strings.Contains(result.SystemPrompt, leaked) {
+			t.Fatalf("progressive skill prompt leaked %q:\n%s", leaked, result.SystemPrompt)
+		}
 	}
 }
 

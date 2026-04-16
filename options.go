@@ -51,6 +51,7 @@ type Options struct {
 	MemoryCandidateHandler memory.CandidateHandler
 	Memories               []memory.Memory
 	SkillSource            skill.Source
+	SkillResourceSource    skill.ResourceSource
 	SkillDisclosure        skill.DisclosureMode
 	Skills                 []skill.Skill
 
@@ -133,6 +134,9 @@ func (o Options) Merge(override Options) Options {
 	}
 	if override.SkillSource != nil {
 		o.SkillSource = override.SkillSource
+	}
+	if override.SkillResourceSource != nil {
+		o.SkillResourceSource = override.SkillResourceSource
 	}
 	if override.SkillDisclosure != "" {
 		o.SkillDisclosure = override.SkillDisclosure

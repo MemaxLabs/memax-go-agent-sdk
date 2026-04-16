@@ -50,7 +50,7 @@ system prompt.
 
 - Add agent identity profiles. Initial `identity.Identity` support exists with a default Memax-native profile plus configurable role, mission, tone, autonomy level, and constraints.
 - Add deterministic prompt assembly. Initial `prompt.Builder` support exists and produces named prompt parts, a stable hash, identity guidance, tool-use guidance, selected skills, and host prompt text.
-- Add local and remote skill manifests. Initial `skill.LoadDir`, `skill.LoadFS`, `skill.StaticSource`, `skill.SourceFunc`, `skill.MultiSource`, `skill.CachedSource`, `skill.HTTPSource`, `Options.SkillSource`, relevance selection, and opt-in progressive disclosure through `Options.SkillDisclosure` and `load_skill` exist for `SKILL.md` directories and source-neutral skill loading.
+- Add local and remote skill manifests. Initial `skill.LoadDir`, `skill.LoadFS`, `skill.StaticSource`, `skill.SourceFunc`, `skill.MultiSource`, `skill.CachedSource`, `skill.HTTPSource`, `Options.SkillSource`, relevance selection, and opt-in progressive disclosure through `Options.SkillDisclosure`, `load_skill`, `skill.ResourceRef`, `Options.SkillResourceSource`, and `read_skill_resource` exist for `SKILL.md` directories and source-neutral skill/resource loading.
 - Add server-friendly async wrappers. Initial `QueryAsync`, `skill.TimeoutSource`, `skill.PrefetchSource`, and `tool.WithTimeout` support exists.
 - Add prompt snapshots and golden tests. Initial prompt golden tests cover identity, tools, skills, provider profiles, and host prompt composition.
 - Add skill discovery tools. Initial `toolkit/skilltools` search tool exists, exposing skills through the normal tool layer.
@@ -88,10 +88,11 @@ system prompt.
   TypeScript and Codex references before implementation, then moved from
   Foundation to Competitive or Leading with eval coverage.
 - Harden progressive skill disclosure. Initial metadata-only prompt discovery,
-  explicit `load_skill`, transcript-visible loaded skill content, and eval
-  coverage exist. Loaded-skill retention across aggressive trimming has initial
-  context-policy and eval coverage. Next steps are optional resource loading and
-  larger catalog budget tests.
+  explicit `load_skill`, transcript-visible loaded skill content,
+  `read_skill_resource`, transcript-visible loaded resources, and eval coverage
+  exist. Loaded-skill retention across aggressive trimming has initial
+  context-policy and eval coverage. Next steps are larger catalog budget tests
+  and resource adapters for common hosts.
 - Add more durable stores and workspace adapters, starting with production SQLite examples, object-store checkpoint managers, and git-backed workspace checkpoints.
 - Add MCP/tool bridge examples while keeping the core tool contract provider-neutral.
 - Add release automation, API compatibility checks, and generated reference docs.

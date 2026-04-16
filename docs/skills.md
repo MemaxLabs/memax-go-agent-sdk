@@ -124,8 +124,9 @@ For larger catalogs, set:
 
 ```go
 Options{
-    SkillSource:     source,
-    SkillDisclosure: skill.DisclosureProgressive,
+    SkillSource:         source,
+    SkillResourceSource: resources,
+    SkillDisclosure:     skill.DisclosureProgressive,
 }
 ```
 
@@ -136,6 +137,15 @@ skill body is returned as a normal tool result and persists in the session
 transcript. This keeps context smaller, makes skill use auditable, and matches
 the same tool-mediated capability boundary used for files, memories, and other
 host-owned resources.
+
+Skills can also advertise lightweight supporting resource metadata through
+`skill.ResourceRef`. When `Options.SkillResourceSource` is configured,
+progressive mode exposes a read-only, concurrency-safe `read_skill_resource`
+tool. The prompt lists resource names, paths, descriptions, MIME types, and size
+hints, but never embeds resource content. Calling `read_skill_resource` returns
+the full resource as a normal tool result with important-context retention
+metadata, so large checklists, examples, templates, and schemas can stay
+tool-loaded and auditable.
 
 Progressive disclosure requires named skills. Anonymous instruction blocks are
 not loadable by `load_skill`; use direct injection for those or give them stable

@@ -87,15 +87,40 @@ func TestSelectorKeepsAlwaysOnAndRanksRelevantSkills(t *testing.T) {
 }
 
 func TestStaticSourceReturnsDefensiveCopy(t *testing.T) {
-	source := StaticSource{{Name: "x", Tags: []string{"a"}}}
+	source := StaticSource{{Name: "x", Tags: []string{"a"}, Resources: []ResourceRef{{Name: "guide", Tags: []string{"b"}}}}}
 	got, err := source.Skills(context.Background())
 	if err != nil {
 		t.Fatalf("Skills returned error: %v", err)
 	}
 	got[0].Tags[0] = "mutated"
+	got[0].Resources[0].Tags[0] = "mutated"
 	again, _ := source.Skills(context.Background())
 	if again[0].Tags[0] != "a" {
 		t.Fatalf("source mutated through returned copy: %#v", again)
+	}
+	if again[0].Resources[0].Tags[0] != "b" {
+		t.Fatalf("resource refs mutated through returned copy: %#v", again)
+	}
+}
+
+func TestStaticResourceSourceReturnsDefensiveCopy(t *testing.T) {
+	source := StaticResourceSource{{
+		SkillName: "review",
+		Name:      "checklist",
+		Content:   "review checklist",
+		Metadata:  map[string]any{"a": "b"},
+	}}
+	got, err := source.SkillResource(context.Background(), ResourceRequest{SkillName: "review", Name: "checklist"})
+	if err != nil {
+		t.Fatalf("SkillResource returned error: %v", err)
+	}
+	got.Metadata["a"] = "mutated"
+	again, err := source.SkillResource(context.Background(), ResourceRequest{SkillName: "review", Name: "checklist"})
+	if err != nil {
+		t.Fatalf("SkillResource returned error: %v", err)
+	}
+	if again.Metadata["a"] != "b" {
+		t.Fatalf("resource mutated through returned copy: %#v", again)
 	}
 }
 
