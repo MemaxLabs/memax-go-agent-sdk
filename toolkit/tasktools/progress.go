@@ -41,7 +41,8 @@ func WithVerificationFailStatus(status Status) VerificationProgressOption {
 // this wrapper, and actual verification still runs through the configured
 // verifytools.Verifier.
 //
-// Task update failures are recorded in the returned result metadata under
+// Task update failures, including missing task IDs and task store errors, are
+// recorded in the returned result metadata under
 // model.MetadataTaskProgressError rather than failing verification itself. This
 // keeps verification diagnostics recoverable by the model while making progress
 // persistence problems observable to hosts.
@@ -193,7 +194,15 @@ func appendTaskNote(existing, note string) string {
 func mergeStrings(existing []string, values []string) []string {
 	seen := map[string]bool{}
 	out := make([]string, 0, len(existing)+len(values))
-	for _, value := range append(append([]string(nil), existing...), values...) {
+	for _, value := range existing {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	for _, value := range values {
 		value = strings.TrimSpace(value)
 		if value == "" || seen[value] {
 			continue
@@ -209,12 +218,10 @@ func metadataString(metadata map[string]any, key string) string {
 	if !ok {
 		return ""
 	}
-	switch typed := value.(type) {
-	case string:
+	if typed, ok := value.(string); ok {
 		return strings.TrimSpace(typed)
-	default:
-		return strings.TrimSpace(fmt.Sprint(typed))
 	}
+	return ""
 }
 
 func setProgressError(result *verifytools.Result, err error) {

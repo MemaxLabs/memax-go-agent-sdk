@@ -102,6 +102,33 @@ func TestVerificationProgressVerifierRecordsUpdateErrorNonFatally(t *testing.T) 
 	}
 }
 
+func TestVerificationProgressVerifierIgnoresNonStringTaskID(t *testing.T) {
+	store := NewMemoryStore([]Task{{ID: "42", Title: "numeric-looking task", Status: StatusInProgress}})
+	verifier := NewVerificationProgressVerifier(store, verifytools.VerifierFunc(func(context.Context, verifytools.Request) (verifytools.Result, error) {
+		return verifytools.Result{Name: "test", Passed: true}, nil
+	}))
+
+	result, err := verifier.Verify(context.Background(), verifytools.Request{
+		Name: "test",
+		Metadata: map[string]any{
+			model.MetadataTaskID: 42,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Verify returned error: %v", err)
+	}
+	if result.Metadata != nil {
+		t.Fatalf("metadata = %#v, want no task progress metadata", result.Metadata)
+	}
+	tasks, err := store.List(context.Background())
+	if err != nil {
+		t.Fatalf("List returned error: %v", err)
+	}
+	if tasks[0].Status != StatusInProgress {
+		t.Fatalf("task = %#v, want unchanged status", tasks[0])
+	}
+}
+
 func TestVerificationProgressVerifierPropagatesVerifierError(t *testing.T) {
 	wantErr := errors.New("runner failed")
 	verifier := NewVerificationProgressVerifier(NewMemoryStore(nil), verifytools.VerifierFunc(func(context.Context, verifytools.Request) (verifytools.Result, error) {
