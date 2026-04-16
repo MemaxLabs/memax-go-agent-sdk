@@ -2,6 +2,7 @@ package memaxagent
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -18,14 +19,17 @@ import (
 
 func TestOptionsMergeAppliesOverridesAndCopiesSlices(t *testing.T) {
 	base := Options{
-		Model:              &staticClient{id: "base"},
-		Tools:              tool.NewRegistry(),
-		Sessions:           session.NewMemoryStore(),
-		Output:             output.Contract{Schema: map[string]any{"type": "string"}},
-		Budget:             budget.Policy{MaxTurns: 1},
-		Identity:           identity.Identity{Name: "base"},
-		Planner:            planner.Static(planner.Plan{Goal: "base"}),
-		MemoryDistiller:    memory.StaticDistiller{{Memory: memory.Memory{Name: "base-distilled", Content: "base"}}},
+		Model:           &staticClient{id: "base"},
+		Tools:           tool.NewRegistry(),
+		Sessions:        session.NewMemoryStore(),
+		Output:          output.Contract{Schema: map[string]any{"type": "string"}},
+		Budget:          budget.Policy{MaxTurns: 1},
+		Identity:        identity.Identity{Name: "base"},
+		Planner:         planner.Static(planner.Plan{Goal: "base"}),
+		MemoryDistiller: memory.StaticDistiller{{Memory: memory.Memory{Name: "base-distilled", Content: "base"}}},
+		MemoryCandidateHandler: memory.CandidateHandlerFunc(func(context.Context, memory.CandidateRequest) error {
+			return nil
+		}),
 		Memories:           []memory.Memory{{Name: "base"}},
 		Skills:             []skill.Skill{{Name: "base"}},
 		SystemPrompt:       "base system",
@@ -37,12 +41,15 @@ func TestOptionsMergeAppliesOverridesAndCopiesSlices(t *testing.T) {
 	overrideMemories := []memory.Memory{{Name: "override"}}
 	overrideSkills := []skill.Skill{{Name: "override"}}
 	override := Options{
-		Model:              &staticClient{id: "override"},
-		Output:             output.Contract{MaxRetries: -1},
-		Budget:             budget.Policy{MaxModelCalls: 1},
-		Identity:           identity.Identity{Name: "override"},
-		Planner:            planner.Static(planner.Plan{Goal: "override"}),
-		MemoryDistiller:    memory.StaticDistiller{{Memory: memory.Memory{Name: "override-distilled", Content: "override"}}},
+		Model:           &staticClient{id: "override"},
+		Output:          output.Contract{MaxRetries: -1},
+		Budget:          budget.Policy{MaxModelCalls: 1},
+		Identity:        identity.Identity{Name: "override"},
+		Planner:         planner.Static(planner.Plan{Goal: "override"}),
+		MemoryDistiller: memory.StaticDistiller{{Memory: memory.Memory{Name: "override-distilled", Content: "override"}}},
+		MemoryCandidateHandler: memory.CandidateHandlerFunc(func(context.Context, memory.CandidateRequest) error {
+			return errors.New("override handler")
+		}),
 		Memories:           overrideMemories,
 		Skills:             overrideSkills,
 		SystemPrompt:       "override system",
@@ -81,6 +88,9 @@ func TestOptionsMergeAppliesOverridesAndCopiesSlices(t *testing.T) {
 	}
 	if len(candidates) != 1 || candidates[0].Memory.Name != "override-distilled" {
 		t.Fatalf("MemoryDistiller = %#v, want override", candidates)
+	}
+	if err := got.MemoryCandidateHandler.HandleCandidates(context.Background(), memory.CandidateRequest{}); err == nil || err.Error() != "override handler" {
+		t.Fatalf("MemoryCandidateHandler error = %v, want override handler", err)
 	}
 	if got.Memories[0].Name != "override" {
 		t.Fatalf("Memories = %#v, want copied override", got.Memories)

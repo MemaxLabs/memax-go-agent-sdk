@@ -256,8 +256,15 @@ Memory distillation is a separate post-result proposal path. Hosts can set
 `Options.MemoryDistiller` to inspect the completed transcript, final answer,
 identity, and current plan. The distiller returns `memory.Candidate` values,
 which are emitted as `EventMemoryCandidates` before `EventResult`. The SDK does
-not write those candidates automatically; hosts can review, approve, discard,
-or persist them through their own `memory.Writer` policy. This keeps learning
+not write those candidates automatically. Hosts that want a first-class write
+path can set `Options.MemoryCandidateHandler`; the handler runs after
+`EventMemoryCandidates` is emitted and before `EventResult`, so applications can
+review, approve, discard, enqueue, or persist proposals through their own
+`memory.Writer` policy. Handler errors emit
+`EventMemoryCandidateHandlerError` and increment error telemetry, but they do
+not block `EventResult`; memory persistence is a learning side effect, not part
+of the model's completed answer. Hosts that need transactional all-or-nothing
+learning should provide a custom `memory.CandidateHandler`. This keeps learning
 observable and avoids silently polluting durable memory.
 
 Distillers receive the durable message snapshot already available to the turn,

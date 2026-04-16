@@ -21,11 +21,12 @@ func main() {
 			passed++
 		}
 		fmt.Printf(
-			"%s %s events=%d tools=%s duration=%s result=%q run_error=%q\n",
+			"%s %s events=%d tools=%s memory_candidates=%d duration=%s result=%q run_error=%q\n",
 			status,
 			result.Name,
 			len(result.Events),
 			toolNames(result),
+			len(result.MemoryCandidates()),
 			result.Duration,
 			result.Final,
 			runError(result),

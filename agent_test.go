@@ -1009,6 +1009,101 @@ func TestQueryMemoryDistillerErrorStopsRun(t *testing.T) {
 	}
 }
 
+func TestQueryMemoryCandidateHandlerPersistsAfterEvent(t *testing.T) {
+	store := memory.NewMemoryStore(nil)
+	releaseHandler := make(chan struct{})
+	events, err := Query(context.Background(), "review migration", Options{
+		Model: &fakeModel{turns: [][]model.StreamEvent{{{Kind: model.StreamText, Text: "done"}}}},
+		MemoryDistiller: memory.StaticDistiller{{
+			Memory: memory.Memory{
+				Name:    "migration-rollback",
+				Scope:   memory.ScopeProject,
+				Content: "Migration reviews require rollback notes.",
+			},
+			Confidence: 0.9,
+		}},
+		MemoryCandidateHandler: memory.CandidateHandlerFunc(func(ctx context.Context, req memory.CandidateRequest) error {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-releaseHandler:
+			}
+			return memory.WriterHandler{Writer: store, MinConfidence: 0.5}.HandleCandidates(ctx, req)
+		}),
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+	var sawCandidates bool
+	var result string
+	for event := range events {
+		switch event.Kind {
+		case EventError:
+			t.Fatalf("query error: %v", event.Err)
+		case EventMemoryCandidates:
+			sawCandidates = true
+			items, err := store.Memories(context.Background(), memory.Request{})
+			if err != nil {
+				t.Fatalf("Memories returned error: %v", err)
+			}
+			if len(items) != 0 {
+				t.Fatalf("stored memories during candidate event = %#v, want handler to run after event", items)
+			}
+			close(releaseHandler)
+		case EventResult:
+			result = event.Result
+		}
+	}
+	if !sawCandidates {
+		t.Fatal("EventMemoryCandidates not emitted")
+	}
+	if result != "done" {
+		t.Fatalf("result = %q, want done", result)
+	}
+	items, err := store.Memories(context.Background(), memory.Request{})
+	if err != nil {
+		t.Fatalf("Memories returned error: %v", err)
+	}
+	if len(items) != 1 || items[0].Name != "migration-rollback" {
+		t.Fatalf("stored memories = %#v, want persisted candidate", items)
+	}
+}
+
+func TestQueryMemoryCandidateHandlerErrorDoesNotStopRun(t *testing.T) {
+	handlerErr := errors.New("review queue unavailable")
+	events, err := Query(context.Background(), "start", Options{
+		Model: &fakeModel{turns: [][]model.StreamEvent{{{Kind: model.StreamText, Text: "done"}}}},
+		MemoryDistiller: memory.StaticDistiller{{
+			Memory:     memory.Memory{Name: "lesson", Content: "Persist me."},
+			Confidence: 0.9,
+		}},
+		MemoryCandidateHandler: memory.CandidateHandlerFunc(func(context.Context, memory.CandidateRequest) error {
+			return handlerErr
+		}),
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+	var gotErr error
+	var result string
+	for event := range events {
+		switch event.Kind {
+		case EventError:
+			t.Fatalf("terminal query error: %v", event.Err)
+		case EventMemoryCandidateHandlerError:
+			gotErr = event.Err
+		case EventResult:
+			result = event.Result
+		}
+	}
+	if gotErr == nil || !strings.Contains(gotErr.Error(), "handle memory candidates") || !errors.Is(gotErr, handlerErr) {
+		t.Fatalf("handler event error = %v, want handler error", gotErr)
+	}
+	if result != "done" {
+		t.Fatalf("result = %q, want done", result)
+	}
+}
+
 func TestMemoryQueryUsesRecentUserMessagesOnly(t *testing.T) {
 	messages := []model.Message{
 		{Role: model.RoleUser, Content: []model.ContentBlock{{Type: model.ContentText, Text: "old billing context"}}},

@@ -19,10 +19,13 @@ const (
 	EventContextApplied EventKind = "context_applied"
 	// EventMemoryCandidates is emitted after a valid final answer has been
 	// distilled and before EventResult. Candidates are proposals only; the SDK
-	// does not persist them automatically.
+	// does not persist them unless Options.MemoryCandidateHandler is configured.
 	EventMemoryCandidates EventKind = "memory_candidates"
-	EventError            EventKind = "error"
-	EventResult           EventKind = "result"
+	// EventMemoryCandidateHandlerError is emitted when an optional memory
+	// candidate handler fails. It is non-terminal; EventResult is still emitted.
+	EventMemoryCandidateHandlerError EventKind = "memory_candidate_handler_error"
+	EventError                       EventKind = "error"
+	EventResult                      EventKind = "result"
 )
 
 // Event is emitted by Query as the orchestration loop progresses.

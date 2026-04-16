@@ -44,9 +44,14 @@ type Options struct {
 	Planner         planner.Policy
 	MemorySource    memory.Source
 	MemoryDistiller memory.Distiller
-	Memories        []memory.Memory
-	SkillSource     skill.Source
-	Skills          []skill.Skill
+	// MemoryCandidateHandler handles distilled memory candidates after they are
+	// emitted as EventMemoryCandidates. Nil preserves the safe default: propose
+	// candidates but do not persist them. Handler errors emit
+	// EventMemoryCandidateHandlerError but do not prevent the final result.
+	MemoryCandidateHandler memory.CandidateHandler
+	Memories               []memory.Memory
+	SkillSource            skill.Source
+	Skills                 []skill.Skill
 
 	SystemPrompt       string
 	AppendSystemPrompt string
@@ -118,6 +123,9 @@ func (o Options) Merge(override Options) Options {
 	}
 	if override.MemoryDistiller != nil {
 		o.MemoryDistiller = override.MemoryDistiller
+	}
+	if override.MemoryCandidateHandler != nil {
+		o.MemoryCandidateHandler = override.MemoryCandidateHandler
 	}
 	if override.Memories != nil {
 		o.Memories = append([]memory.Memory(nil), override.Memories...)

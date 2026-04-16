@@ -31,6 +31,7 @@ func All() []agenteval.Case {
 		StructuredOutputRepair(),
 		MemorySearchAndSave(),
 		MemoryDistillationCandidates(),
+		MemoryCandidateHandlerWrites(),
 		SessionResume(),
 		ContextRetry(),
 		SubagentDelegation(),
@@ -101,6 +102,58 @@ func MemoryDistillationCandidates() agenteval.Case {
 					}
 					if len(items) != 0 {
 						return fmt.Errorf("stored memories = %#v, want no automatic writes", items)
+					}
+					return nil
+				},
+			},
+		},
+	}
+}
+
+// MemoryCandidateHandlerWrites returns a single-use scenario where a host
+// candidate handler persists accepted post-result memory candidates.
+func MemoryCandidateHandlerWrites() agenteval.Case {
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "Remember that database snapshots are required."}},
+	)
+	store := memory.NewMemoryStore(nil)
+
+	return agenteval.Case{
+		Name:   "memory_candidate_handler_writes",
+		Prompt: "Finish the backup policy review.",
+		Options: memaxagent.Options{
+			Model: modelClient,
+			MemoryDistiller: memory.StaticDistiller{{
+				Memory: memory.Memory{
+					Name:    "database-snapshots",
+					Scope:   memory.ScopeProject,
+					Content: "Database changes require a fresh snapshot before deployment.",
+				},
+				Reason:     "final answer established backup policy",
+				Confidence: 0.95,
+			}},
+			MemoryCandidateHandler: memory.WriterHandler{
+				Writer:        store,
+				MinConfidence: 0.8,
+				Scopes:        []memory.Scope{memory.ScopeProject},
+			},
+		},
+		Assertions: []agenteval.Assertion{
+			agenteval.FinalEquals("Remember that database snapshots are required."),
+			agenteval.EventKindEmitted(memaxagent.EventMemoryCandidates),
+			requestCountEquals(modelClient, 1),
+			{
+				Name: "memory candidate persisted by handler",
+				Check: func(result agenteval.Result) error {
+					if candidates := result.MemoryCandidates(); len(candidates) != 1 || candidates[0].Memory.Name != "database-snapshots" {
+						return fmt.Errorf("candidates = %#v, want database snapshot candidate", candidates)
+					}
+					items, err := store.Memories(context.Background(), memory.Request{})
+					if err != nil {
+						return err
+					}
+					if len(items) != 1 || items[0].Name != "database-snapshots" {
+						return fmt.Errorf("stored memories = %#v, want persisted candidate", items)
 					}
 					return nil
 				},

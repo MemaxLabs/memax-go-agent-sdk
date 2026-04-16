@@ -12,8 +12,8 @@ func TestScenariosPass(t *testing.T) {
 	if err := report.Error(); err != nil {
 		t.Fatalf("scenario report error = %v", err)
 	}
-	if !report.Passed() || len(report.Results) != 20 {
-		t.Fatalf("report = %#v, want twenty passing scenarios", report)
+	if !report.Passed() || len(report.Results) != 21 {
+		t.Fatalf("report = %#v, want twenty-one passing scenarios", report)
 	}
 }
 
@@ -28,6 +28,7 @@ func TestScenarioNamesAreStable(t *testing.T) {
 		"structured_output_repair",
 		"memory_search_and_save",
 		"memory_distillation_candidates",
+		"memory_candidate_handler_writes",
 		"session_resume",
 		"context_retry",
 		"subagent_delegation",

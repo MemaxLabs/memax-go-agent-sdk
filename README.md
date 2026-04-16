@@ -28,7 +28,7 @@ Implemented foundation:
 - agent identity profiles, deterministic prompt assembly, and local skill manifests
 - project, user, and session memory injection through source-neutral prompt memory sources
 - opt-in memory search/save/delete tools for host-owned durable memory backends
-- final-result memory distillation candidates for host review
+- final-result memory distillation candidates with optional host-controlled persistence
 - structured final-output contracts with JSON Schema validation and retry
 - provider-neutral model usage events and token telemetry
 - opt-in run budget governors for turns, model calls, tool calls, tokens, and duration
@@ -308,9 +308,14 @@ read/write/delete memory through normal tool permissions.
 
 To propose durable memories from completed work without automatically writing
 anything, configure a `memory.Distiller`. Distillation runs only after a valid
-final answer and emits `EventMemoryCandidates` before `EventResult`:
+final answer and emits `EventMemoryCandidates` before `EventResult`. Hosts can
+also opt into a `MemoryCandidateHandler` to approve, filter, or persist those
+candidates after the event is emitted. Handler failures are reported as
+non-terminal `EventMemoryCandidateHandlerError` events so the final answer still
+reaches the caller:
 
 ```go
+store := memory.NewMemoryStore(nil)
 events, err := memaxagent.Query(ctx, "Finish the migration review.", memaxagent.Options{
     Model: client,
     MemoryDistiller: memory.RuleDistiller{{
@@ -324,6 +329,11 @@ events, err := memaxagent.Query(ctx, "Finish the migration review.", memaxagent.
         Reason:     "completed review established rollback requirement",
         Confidence: 0.9,
     }},
+    MemoryCandidateHandler: memory.WriterHandler{
+        Writer:        store,
+        MinConfidence: 0.8,
+        Scopes:        []memory.Scope{memory.ScopeProject},
+    },
 })
 ```
 

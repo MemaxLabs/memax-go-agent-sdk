@@ -537,6 +537,24 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 						shouldStop = true
 						return
 					}
+					opts.Meter.Add(turnCtx, "memax.memory.candidates", int64(len(candidates)),
+						telemetry.String("memax.session_id", sessionID),
+						telemetry.Int("memax.turn", turn),
+					)
+					if err := handleMemoryCandidates(turnCtx, opts, sessionID, durableMessages, promptResult.Plan, result, candidates); err != nil {
+						err = fmt.Errorf("handle memory candidates: %w", err)
+						opts.Meter.Add(turnCtx, "memax.memory.candidate_handler.errors", 1,
+							telemetry.String("memax.session_id", sessionID),
+							telemetry.Int("memax.turn", turn),
+						)
+						turnSpan.RecordError(err)
+						event := newEvent(EventMemoryCandidateHandlerError, sessionID, turn)
+						event.Err = err
+						if !emit(event) {
+							shouldStop = true
+							return
+						}
+					}
 				}
 				if err := finish(turn, hook.StopReasonResult, nil); err != nil {
 					turnSpan.RecordError(err)
@@ -762,6 +780,21 @@ func distillMemories(ctx context.Context, opts Options, sessionID string, messag
 		return nil, err
 	}
 	return memory.CloneCandidates(candidates), nil
+}
+
+func handleMemoryCandidates(ctx context.Context, opts Options, sessionID string, messages []model.Message, plan planner.Plan, result string, candidates []memory.Candidate) error {
+	if opts.MemoryCandidateHandler == nil || len(candidates) == 0 {
+		return nil
+	}
+	return opts.MemoryCandidateHandler.HandleCandidates(ctx, memory.CandidateRequest{
+		SessionID:       sessionID,
+		ParentSessionID: opts.ParentSessionID,
+		Identity:        opts.Identity,
+		Messages:        cloneMessages(messages),
+		Plan:            plan,
+		Result:          result,
+		Candidates:      memory.CloneCandidates(candidates),
+	})
 }
 
 func cloneMessages(messages []model.Message) []model.Message {

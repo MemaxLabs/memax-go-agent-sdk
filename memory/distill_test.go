@@ -76,3 +76,48 @@ func TestRuleDistillerSkipsNonMatches(t *testing.T) {
 		t.Fatalf("candidates = %#v, want none", candidates)
 	}
 }
+
+func TestWriterHandlerWritesAcceptedCandidates(t *testing.T) {
+	store := NewMemoryStore(nil)
+	handler := WriterHandler{
+		Writer:        store,
+		MinConfidence: 0.7,
+		Scopes:        []Scope{ScopeProject},
+	}
+
+	err := handler.HandleCandidates(context.Background(), CandidateRequest{
+		SessionID:       "session-1",
+		ParentSessionID: "parent-1",
+		Candidates: []Candidate{
+			{
+				Memory:     Memory{Name: "keep", Scope: ScopeProject, Content: "Keep this lesson."},
+				Confidence: 0.9,
+			},
+			{
+				Memory:     Memory{Name: "low", Scope: ScopeProject, Content: "Too uncertain."},
+				Confidence: 0.2,
+			},
+			{
+				Memory:     Memory{Name: "user", Scope: ScopeUser, Content: "Wrong scope."},
+				Confidence: 0.9,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("HandleCandidates returned error: %v", err)
+	}
+	items, err := store.Memories(context.Background(), Request{})
+	if err != nil {
+		t.Fatalf("Memories returned error: %v", err)
+	}
+	if len(items) != 1 || items[0].Name != "keep" {
+		t.Fatalf("stored memories = %#v, want only accepted candidate", items)
+	}
+}
+
+func TestCandidateHandlerFuncNilIsNoop(t *testing.T) {
+	var handler CandidateHandlerFunc
+	if err := handler.HandleCandidates(context.Background(), CandidateRequest{}); err != nil {
+		t.Fatalf("HandleCandidates returned error: %v", err)
+	}
+}
