@@ -348,7 +348,8 @@ if err := report.Error(); err != nil {
 The `agenteval/scenarios` package includes reusable deterministic cases for
 tool recovery, structured output repair, memory search/save, session resume,
 context retry, subagent delegation, provider usage mapping, and provider
-tool-use round trips:
+tool-use round trips. It also covers governance recovery for permission
+denials, hook denials, oversized tool results, and deferred tool discovery:
 
 ```go
 report := agenteval.Runner{}.Run(ctx, scenarios.All()...)

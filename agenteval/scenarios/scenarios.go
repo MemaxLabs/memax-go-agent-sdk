@@ -35,6 +35,10 @@ func All() []agenteval.Case {
 		AnthropicProviderTextAndUsage(),
 		OpenAIProviderToolUseRoundTrip(),
 		AnthropicProviderToolUseRoundTrip(),
+		PermissionDenialRecovery(),
+		HookDenialRecovery(),
+		LargeResultStorageRecovery(),
+		DeferredToolDiscoveryRecovery(),
 	}
 }
 

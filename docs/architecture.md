@@ -146,7 +146,9 @@ provider-neutral core loop used in production.
 `agenteval/scenarios` contains reusable baseline cases for core behaviors such
 as tool validation recovery, structured-output repair, memory search/save,
 session resume, context retry, subagent delegation, provider usage mapping, and
-provider tool-use round trips.
+provider tool-use round trips. Governance scenarios cover permission denial,
+before-hook denial, oversized result storage, and deferred tool discovery
+recovery.
 
 ## Permissions
 

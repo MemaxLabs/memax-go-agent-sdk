@@ -62,7 +62,7 @@ system prompt.
 - Add external large-result storage. Initial `resultstore.Store`, `Options.ResultStore`, in-memory result storage, truncation preview handles, transcript metadata, and fallback-on-store-error behavior exist for oversized tool outputs.
 - Add structured output contracts. Initial `output.Contract`, `Options.Output`, prompt contract injection, JSON Schema validation, final-answer repair retry, and retry-exhaustion errors exist.
 - Add cost and token accounting. Initial provider-neutral `model.Usage`, stream usage events, `EventUsage`, final-result usage aggregation, token meter counters, and OpenAI/Anthropic usage mapping exist. Cost calculation remains future host/provider policy.
-- Add autonomy eval harness. Initial `agenteval` runner, scripted model, result capture, reusable assertions, and `agenteval/scenarios` package exist for deterministic tool recovery, structured-output repair, memory search/save, session resume, context retry, subagent delegation, httptest-backed provider usage mapping, and provider tool-use round trips. Live evals and broader governance scenario suites remain future work.
+- Add autonomy eval harness. Initial `agenteval` runner, scripted model, result capture, reusable assertions, and `agenteval/scenarios` package exist for deterministic tool recovery, structured-output repair, memory search/save, session resume, context retry, subagent delegation, httptest-backed provider usage mapping, provider tool-use round trips, permission/hook denial recovery, large-result storage recovery, and deferred tool discovery. Live evals remain future work.
 
 ## Phase 6: Ecosystem and Hardening
 
