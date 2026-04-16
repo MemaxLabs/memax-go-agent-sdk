@@ -105,9 +105,9 @@ func (b DefaultBuilder) Build(ctx context.Context, req Request) (Result, error) 
 	if selected := b.MemorySelector.Select(req.Memories, requestQuery(req)); len(selected) > 0 {
 		parts = append(parts, Part{Name: "memax.memories", Content: formatMemories(selected)})
 	}
-	if selected := b.skillSelector(req.SkillDisclosure).Select(req.Skills, requestQuery(req)); len(selected) > 0 {
+	if selected, omitted := b.selectSkills(req.Skills, requestQuery(req), req.SkillDisclosure); len(selected) > 0 {
 		if req.SkillDisclosure == skill.DisclosureProgressive {
-			if content := formatSkillDiscovery(selected, req.SkillResources, b.skillDiscoveryMaxBytes(req.SkillDisclosure)); content != "" {
+			if content := formatSkillDiscovery(selected, req.SkillResources, b.skillDiscoveryMaxBytes(req.SkillDisclosure), omitted); content != "" {
 				parts = append(parts, Part{Name: "memax.skill_discovery", Content: content})
 			}
 		} else {
@@ -125,6 +125,21 @@ func (b DefaultBuilder) Build(ctx context.Context, req Request) (Result, error) 
 	result.SystemPrompt = joinParts(parts)
 	result.Hash = hashParts(parts)
 	return result, nil
+}
+
+func (b DefaultBuilder) selectSkills(skills []skill.Skill, query string, disclosure skill.DisclosureMode) ([]skill.Skill, int) {
+	selector := b.skillSelector(disclosure)
+	selected := selector.Select(skills, query)
+	if disclosure != skill.DisclosureProgressive || selector.MaxSkills <= 0 {
+		return selected, 0
+	}
+	unbounded := selector
+	unbounded.MaxSkills = 0
+	all := unbounded.Select(skills, query)
+	if len(all) <= len(selected) {
+		return selected, 0
+	}
+	return selected, len(all) - len(selected)
 }
 
 func (b DefaultBuilder) skillSelector(disclosure skill.DisclosureMode) skill.Selector {
@@ -284,7 +299,7 @@ func formatSkills(skills []skill.Skill) string {
 	return b.String()
 }
 
-func formatSkillDiscovery(skills []skill.Skill, resourcesAvailable bool, maxBytes int) string {
+func formatSkillDiscovery(skills []skill.Skill, resourcesAvailable bool, maxBytes int, priorOmitted int) string {
 	header := fmt.Sprintf("Available skill metadata for this run. Skill bodies are not in this prompt. If a skill is relevant, call the `%s` tool with its exact name before relying on its instructions. Load only the skills needed for the current task.", skill.LoadToolName)
 	var entries []string
 	for _, item := range skills {
@@ -293,7 +308,7 @@ func formatSkillDiscovery(skills []skill.Skill, resourcesAvailable bool, maxByte
 		}
 		entries = append(entries, formatSkillDiscoveryEntry(item, resourcesAvailable))
 	}
-	return joinSkillDiscoveryEntries(header, entries, maxBytes)
+	return joinSkillDiscoveryEntries(header, entries, maxBytes, priorOmitted)
 }
 
 func formatSkillDiscoveryEntry(item skill.Skill, resourcesAvailable bool) string {
@@ -315,25 +330,29 @@ func formatSkillDiscoveryEntry(item skill.Skill, resourcesAvailable bool) string
 	return b.String()
 }
 
-func joinSkillDiscoveryEntries(header string, entries []string, maxBytes int) string {
+func joinSkillDiscoveryEntries(header string, entries []string, maxBytes int, priorOmitted int) string {
 	if len(entries) == 0 {
 		return ""
 	}
 	if maxBytes < 0 {
-		return header + strings.Join(entries, "")
+		content := header + strings.Join(entries, "")
+		if priorOmitted > 0 {
+			content += skillDiscoveryOmissionNote(priorOmitted)
+		}
+		return content
 	}
 	var b strings.Builder
-	omitted := 0
+	omitted := priorOmitted
 	b.WriteString(header)
 	for i, entry := range entries {
 		if b.Len()+len(entry) > maxBytes {
-			omitted = len(entries) - i
+			omitted += len(entries) - i
 			break
 		}
 		b.WriteString(entry)
 	}
 	if omitted > 0 {
-		note := fmt.Sprintf("\n\n%d additional skill metadata entries were omitted because the discovery prompt budget was reached. Narrow the request or use host-provided skill search when more catalog coverage is needed.", omitted)
+		note := skillDiscoveryOmissionNote(omitted)
 		if b.Len()+len(note) <= maxBytes {
 			b.WriteString(note)
 		}
@@ -342,6 +361,10 @@ func joinSkillDiscoveryEntries(header string, entries []string, maxBytes int) st
 		return ""
 	}
 	return b.String()
+}
+
+func skillDiscoveryOmissionNote(count int) string {
+	return fmt.Sprintf("\n\n%d additional skill metadata entries were omitted because the skill discovery budget was reached. Narrow the request or use host-provided skill search when more catalog coverage is needed.", count)
 }
 
 func firstNonEmptyString(values ...string) string {

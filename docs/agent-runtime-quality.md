@@ -97,7 +97,8 @@ direct-injection mode and an opt-in progressive mode where selected metadata is
 shown in the prompt, full instructions are loaded through `load_skill`, and
 supporting resources can be loaded through `read_skill_resource`. Progressive
 metadata discovery has item-count and byte-budget defaults with eval coverage
-for large catalogs.
+for large catalogs and skill-search recovery when the initial metadata is
+incomplete.
 
 **Gap:** Leading agents use skill metadata for discovery, then load full
 instructions and resources on demand. The reference does this through a Skill
@@ -116,6 +117,8 @@ tool and filesystem-backed progressive disclosure.
   Initial support exists.
 - Skill content can be cached per run/session with event visibility. Initial
   per-run loading exists through the skill loader.
+- Omitted catalog entries remain reachable through explicit skill search.
+  Initial eval coverage exists for search-to-load recovery.
 - Existing direct injection remains as a backward-compatible mode.
 
 **Current API plus likely resource extension:**

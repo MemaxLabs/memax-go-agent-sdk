@@ -147,6 +147,12 @@ different catalog budget can provide a custom prompt builder with
 SkillDiscoveryMaxBytes: bytes}`. Set `SkillDiscoveryMaxBytes` negative only when
 the host has its own prompt budgeting layer.
 
+For catalogs larger than the progressive discovery budget, register the
+`toolkit/skilltools` search tool against the same source. The prompt tells the
+model when metadata was omitted; `search_skills` lets it query the full catalog,
+then `load_skill` can load the chosen skill by name. This keeps the initial
+prompt bounded without making omitted skills unreachable.
+
 Skills can also advertise lightweight supporting resource metadata through
 `skill.ResourceRef`. When `Options.SkillResourceSource` is configured,
 progressive mode exposes a read-only, concurrency-safe `read_skill_resource`

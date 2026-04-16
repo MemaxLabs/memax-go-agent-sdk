@@ -20,6 +20,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/skill"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/memorytools"
+	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/skilltools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/subagents"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/tasktools"
 )
@@ -41,6 +42,7 @@ func All() []agenteval.Case {
 		ProgressiveSkillDisclosure(),
 		ProgressiveSkillResourceLoading(),
 		ProgressiveLargeSkillCatalog(),
+		ProgressiveSkillSearchRecovery(),
 		ContextPreservesLoadedSkill(),
 		ContextCompactionProvenance(),
 		OpenAIProviderTextAndUsage(),
@@ -140,6 +142,95 @@ func ProgressiveLargeSkillCatalog() agenteval.Case {
 					}
 					if !loadedSkill || !loadedResource {
 						return fmt.Errorf("tool results missing loaded skill/resource: %#v", result.ToolResults())
+					}
+					return nil
+				},
+			},
+		},
+	}
+}
+
+// ProgressiveSkillSearchRecovery returns a single-use scenario where a
+// budget-limited progressive discovery prompt omits the needed skill, the model
+// searches the catalog, then loads the omitted skill through the normal skill
+// loader.
+func ProgressiveSkillSearchRecovery() agenteval.Case {
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "search-1",
+				Name:  "search_skills",
+				Input: json.RawMessage(`{"query":"semantic rollback hazards","limit":1}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "skill-1",
+				Name:  skill.LoadToolName,
+				Input: json.RawMessage(`{"name":"semantic-rollback-risk"}`),
+			},
+		}},
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "Recovered omitted skill through search."}},
+	)
+	skills := omittedSkillRecoveryCatalog()
+	searchTool, searchErr := skilltools.NewSearchTool(skilltools.Config{
+		Source: skill.StaticSource(skills),
+	})
+
+	return agenteval.Case{
+		Name:   "progressive_skill_search_recovery",
+		Prompt: "Review the database migration. Use skill search if the visible skill metadata is incomplete.",
+		Options: memaxagent.Options{
+			Model:           modelClient,
+			Tools:           tool.NewRegistry(searchTool),
+			SkillSource:     skill.StaticSource(skills),
+			SkillDisclosure: skill.DisclosureProgressive,
+		},
+		Assertions: []agenteval.Assertion{
+			toolConstructionSucceeded(searchErr),
+			agenteval.ToolUsed("search_skills"),
+			agenteval.ToolUsed(skill.LoadToolName),
+			agenteval.NoToolErrors(),
+			agenteval.FinalEquals("Recovered omitted skill through search."),
+			{
+				Name: "initial discovery omitted recoverable skill",
+				Check: func(agenteval.Result) error {
+					requests := modelClient.Requests()
+					if len(requests) < 1 {
+						return fmt.Errorf("model requests = %d, want at least 1", len(requests))
+					}
+					prompt := requests[0].SystemPrompt
+					if strings.Contains(prompt, "semantic-rollback-risk") || strings.Contains(prompt, "Deep risk instructions") {
+						return fmt.Errorf("initial prompt included omitted skill:\n%s", prompt)
+					}
+					if !strings.Contains(prompt, "omitted because the skill discovery budget was reached") {
+						return fmt.Errorf("initial prompt missing omission note:\n%s", prompt)
+					}
+					return nil
+				},
+			},
+			{
+				Name: "search found and load returned omitted skill",
+				Check: func(result agenteval.Result) error {
+					found := false
+					loaded := false
+					for _, toolResult := range result.ToolResults() {
+						switch toolResult.Name {
+						case "search_skills":
+							if strings.Contains(toolResult.Content, "semantic-rollback-risk") &&
+								strings.Contains(toolResult.Content, "semantic rollback hazards") {
+								found = true
+							}
+						case skill.LoadToolName:
+							if strings.Contains(toolResult.Content, "Deep risk instructions") {
+								loaded = true
+							}
+						}
+					}
+					if !found || !loaded {
+						return fmt.Errorf("tool results missing search/load recovery: %#v", result.ToolResults())
 					}
 					return nil
 				},
@@ -603,6 +694,27 @@ func largeProgressiveCatalog() ([]skill.Skill, []skill.Resource) {
 		Content:   "Checklist body: verify rollback, locks, backups, and monitoring.",
 	}}
 	return skills, resources
+}
+
+func omittedSkillRecoveryCatalog() []skill.Skill {
+	skills := make([]skill.Skill, 0, 17)
+	for i := 0; i < 16; i++ {
+		skills = append(skills, skill.Skill{
+			Name:        fmt.Sprintf("migration-helper-%03d", i),
+			Description: fmt.Sprintf("Database migration helper %03d.", i),
+			WhenToUse:   "Use for database migration review.",
+			Tags:        []string{"database", "migration"},
+			Content:     fmt.Sprintf("Helper migration instructions %03d.", i),
+		})
+	}
+	skills = append(skills, skill.Skill{
+		Name:        "semantic-rollback-risk",
+		Description: "Find semantic rollback hazards and hidden data coupling.",
+		WhenToUse:   "Use for semantic rollback hazard reviews.",
+		Tags:        []string{"rollback", "risk"},
+		Content:     "Deep risk instructions: inspect semantic rollback hazards and hidden data coupling.",
+	})
+	return skills
 }
 
 // ContextPreservesLoadedSkill returns a single-use scenario where aggressive

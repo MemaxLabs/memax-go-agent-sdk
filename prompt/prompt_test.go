@@ -128,6 +128,9 @@ func TestDefaultBuilderProgressiveSkillsAreBoundedByDefault(t *testing.T) {
 	if got := strings.Count(result.SystemPrompt, "\n\n- "); got != defaultProgressiveSkillLimit {
 		t.Fatalf("selected skill count = %d, want %d:\n%s", got, defaultProgressiveSkillLimit, result.SystemPrompt)
 	}
+	if !strings.Contains(result.SystemPrompt, "omitted because the skill discovery budget was reached") {
+		t.Fatalf("system prompt missing item-bound omission note:\n%s", result.SystemPrompt)
+	}
 }
 
 func TestDefaultBuilderProgressiveSkillDiscoveryRespectsByteBudget(t *testing.T) {
@@ -164,7 +167,7 @@ func TestDefaultBuilderProgressiveSkillDiscoveryRespectsByteBudget(t *testing.T)
 	if got := strings.Count(discovery, "\n\n- "); got == 0 || got >= 8 {
 		t.Fatalf("discovered skill count = %d, want bounded non-zero count:\n%s", got, discovery)
 	}
-	if !strings.Contains(discovery, "omitted because the discovery prompt budget was reached") {
+	if !strings.Contains(discovery, "omitted because the skill discovery budget was reached") {
 		t.Fatalf("discovery prompt missing omission note:\n%s", discovery)
 	}
 	if strings.Contains(discovery, "migration-helper-011") || strings.Contains(discovery, "Full migration helper instructions") {
