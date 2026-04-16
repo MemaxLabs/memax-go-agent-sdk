@@ -40,3 +40,4 @@ jobs:
           go run ./examples/session_resume
           go run ./examples/advanced_stack
           go run ./examples/ci_embedding
+          go run ./examples/eval_scenarios

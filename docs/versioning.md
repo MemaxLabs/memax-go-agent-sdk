@@ -39,7 +39,8 @@ commit and document the compatibility impact in `CHANGELOG.md`.
 2. Run `go vet ./...`.
 3. Run `go test -race ./...`.
 4. Run deterministic examples:
-   `memory_tools`, `session_resume`, `advanced_stack`, and `ci_embedding`.
+   `memory_tools`, `session_resume`, `advanced_stack`, `ci_embedding`, and
+   `eval_scenarios`.
 5. Update `CHANGELOG.md`.
 6. Tag the release with `git tag vX.Y.Z`.
 7. Push the tag after CI passes.
