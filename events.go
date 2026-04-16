@@ -39,7 +39,8 @@ const (
 	// candidate handler fails. It is non-terminal; EventResult is still emitted.
 	EventMemoryCandidateHandlerError EventKind = "memory_candidate_handler_error"
 	// EventSkillDiscovery is emitted when the prompt exposes progressive skill
-	// metadata for a model request.
+	// metadata for a model request. It is emitted per prompt build, so a context
+	// retry can produce more than one discovery event for the same turn.
 	EventSkillDiscovery EventKind = "skill_discovery"
 	// EventSkillSearch is emitted when a skill catalog search tool returns.
 	EventSkillSearch EventKind = "skill_search"
@@ -82,6 +83,10 @@ type MemoryCandidatesEvent struct {
 	Candidates []memory.Candidate
 }
 
+// SkillEvent describes one skill lifecycle observation. Fields are populated
+// according to Action: "discovery" uses SelectedSkills, Selected, Omitted,
+// PromptBytes, and MetadataOnly; "search" uses Query, Matches, and MetadataOnly;
+// "load" uses SkillName; "resource_load" uses SkillName and ResourceName.
 type SkillEvent struct {
 	Action         string
 	SkillName      string

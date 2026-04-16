@@ -9,6 +9,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/MemaxLabs/memax-go-agent-sdk/internal/metadatavalues"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 )
 
@@ -261,7 +262,7 @@ func (p SummarizingBudget) ApplyWithResult(ctx context.Context, messages []model
 		SentMessages:       len(out),
 		SummarizedMessages: len(prefix),
 		ReplacedSummaries:  replacedSummaries,
-		SummaryHash:        metadataString(summaryMessage.Metadata, MetadataContextSummaryHash),
+		SummaryHash:        metadatavalues.String(summaryMessage.Metadata, MetadataContextSummaryHash),
 		SummaryPreview:     previewText(summaryMessage.PlainText(), 200),
 	}
 	return PolicyResult{Messages: out, Compaction: record}, nil
@@ -345,7 +346,7 @@ func EstimateByRunes(msg model.Message) int {
 }
 
 func IsSummaryMessage(msg model.Message) bool {
-	return metadataBool(msg.Metadata, MetadataContextSummary)
+	return metadatavalues.Bool(msg.Metadata, MetadataContextSummary)
 }
 
 func newestSuffixStart(messages []model.Message, maxTokens int, estimate Estimator) (int, error) {
@@ -463,16 +464,16 @@ func importantMessage(msg model.Message) bool {
 	if result.IsError {
 		return true
 	}
-	if metadataString(result.Metadata, model.MetadataContextRetention) == model.RetentionImportant {
+	if metadatavalues.String(result.Metadata, model.MetadataContextRetention) == model.RetentionImportant {
 		return true
 	}
-	if metadataBool(result.Metadata, model.MetadataLoadedSkill) {
+	if metadatavalues.Bool(result.Metadata, model.MetadataLoadedSkill) {
 		return true
 	}
-	if metadataString(result.Metadata, "stored_result_id") != "" {
+	if metadatavalues.String(result.Metadata, "stored_result_id") != "" {
 		return true
 	}
-	if metadataString(result.Metadata, "stored_result_uri") != "" {
+	if metadatavalues.String(result.Metadata, "stored_result_uri") != "" {
 		return true
 	}
 	return false
@@ -544,16 +545,6 @@ func messageGroupContained(group, messages []model.Message) bool {
 		}
 	}
 	return false
-}
-
-func metadataString(metadata map[string]any, key string) string {
-	value, _ := metadata[key].(string)
-	return value
-}
-
-func metadataBool(metadata map[string]any, key string) bool {
-	value, _ := metadata[key].(bool)
-	return value
 }
 
 func truncateTextMessage(msg model.Message, maxTokens int, estimate Estimator) (model.Message, error) {

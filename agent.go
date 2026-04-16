@@ -13,6 +13,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/budget"
 	"github.com/MemaxLabs/memax-go-agent-sdk/contextwindow"
 	"github.com/MemaxLabs/memax-go-agent-sdk/hook"
+	"github.com/MemaxLabs/memax-go-agent-sdk/internal/metadatavalues"
 	"github.com/MemaxLabs/memax-go-agent-sdk/memory"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/output"
@@ -1572,13 +1573,13 @@ func emitSkillToolEvent(ctx context.Context, emit func(Event) bool, opts Options
 		return true
 	}
 	switch {
-	case metadataBool(result.Metadata, model.MetadataSkillSearch):
+	case metadatavalues.Bool(result.Metadata, model.MetadataSkillSearch):
 		event := newEvent(EventSkillSearch, sessionID, turn)
 		event.Skill = &SkillEvent{
 			Action:       "search",
-			Query:        metadataString(result.Metadata, "query"),
-			Matches:      metadataInt(result.Metadata, "matches"),
-			MetadataOnly: metadataBool(result.Metadata, "metadata_only"),
+			Query:        metadatavalues.String(result.Metadata, "query"),
+			Matches:      metadatavalues.Int(result.Metadata, "matches"),
+			MetadataOnly: metadatavalues.Bool(result.Metadata, "metadata_only"),
 		}
 		if !emit(event) {
 			return false
@@ -1588,11 +1589,11 @@ func emitSkillToolEvent(ctx context.Context, emit func(Event) bool, opts Options
 			telemetry.Int("memax.turn", turn),
 			telemetry.Int("memax.skill.matches", event.Skill.Matches),
 		)
-	case metadataBool(result.Metadata, model.MetadataLoadedSkill):
+	case metadatavalues.Bool(result.Metadata, model.MetadataLoadedSkill):
 		event := newEvent(EventSkillLoaded, sessionID, turn)
 		event.Skill = &SkillEvent{
 			Action:    "load",
-			SkillName: metadataString(result.Metadata, "skill_name"),
+			SkillName: metadatavalues.String(result.Metadata, "skill_name"),
 		}
 		if !emit(event) {
 			return false
@@ -1602,12 +1603,12 @@ func emitSkillToolEvent(ctx context.Context, emit func(Event) bool, opts Options
 			telemetry.Int("memax.turn", turn),
 			telemetry.String("memax.skill.name", event.Skill.SkillName),
 		)
-	case metadataBool(result.Metadata, model.MetadataLoadedSkillResource):
+	case metadatavalues.Bool(result.Metadata, model.MetadataLoadedSkillResource):
 		event := newEvent(EventSkillResourceLoaded, sessionID, turn)
 		event.Skill = &SkillEvent{
 			Action:       "resource_load",
-			SkillName:    metadataString(result.Metadata, "skill_name"),
-			ResourceName: metadataString(result.Metadata, "resource"),
+			SkillName:    metadatavalues.String(result.Metadata, "skill_name"),
+			ResourceName: metadatavalues.String(result.Metadata, "resource"),
 		}
 		if !emit(event) {
 			return false
@@ -1742,29 +1743,6 @@ func emitError(_ context.Context, emit func(Event) bool, sessionID string, turn 
 	event := newEvent(EventError, sessionID, turn)
 	event.Err = err
 	emit(event)
-}
-
-func metadataBool(metadata map[string]any, key string) bool {
-	value, _ := metadata[key].(bool)
-	return value
-}
-
-func metadataString(metadata map[string]any, key string) string {
-	value, _ := metadata[key].(string)
-	return value
-}
-
-func metadataInt(metadata map[string]any, key string) int {
-	switch value := metadata[key].(type) {
-	case int:
-		return value
-	case int64:
-		return int(value)
-	case float64:
-		return int(value)
-	default:
-		return 0
-	}
 }
 
 func durationMilliseconds(d time.Duration) float64 {
