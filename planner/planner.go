@@ -60,12 +60,17 @@ func (p Plan) Empty() bool {
 
 // Step is one planned unit of work.
 type Step struct {
-	ID        string
-	Title     string
-	Status    Status
-	Notes     string
-	Evidence  []string
-	ToolHints []string
+	ID     string
+	Title  string
+	Status Status
+	Notes  string
+	// VerificationHints are host-defined checks the model should run before
+	// treating this step as complete, such as workspace_verify targets, test
+	// commands exposed by host tools, or review gates. They are advisory prompt
+	// context; execution still happens only through configured tools.
+	VerificationHints []string
+	Evidence          []string
+	ToolHints         []string
 }
 
 // Status is the progress state for one plan step.
@@ -102,9 +107,12 @@ type Task struct {
 	Notes  string
 	// Priority orders task-derived steps. Lower positive values appear first;
 	// zero means no priority preference and sorts after positive priorities.
-	Priority  int
-	Evidence  []string
-	ToolHints []string
+	Priority int
+	// VerificationHints are copied into the task-derived plan step as
+	// host-owned checks the model should run before considering the task done.
+	VerificationHints []string
+	Evidence          []string
+	ToolHints         []string
 }
 
 // TaskSource loads task state for one agent turn.
@@ -155,6 +163,15 @@ func WithTaskToolHints(hints ...string) TaskSourceOption {
 	}
 }
 
+// WithTaskVerificationHints adds verification hints to every task-derived plan
+// step. Hints are advisory prompt context; hosts must expose actual verification
+// capabilities as tools.
+func WithTaskVerificationHints(hints ...string) TaskSourceOption {
+	return func(p *taskSourcePolicy) {
+		p.verificationHints = append([]string(nil), hints...)
+	}
+}
+
 // FromTaskSource converts source-neutral task state into per-turn plan context.
 func FromTaskSource(source TaskSource, opts ...TaskSourceOption) Policy {
 	policy := taskSourcePolicy{source: source}
@@ -178,11 +195,12 @@ func (p staticPolicy) Prepare(ctx context.Context, _ Request) (Plan, error) {
 }
 
 type taskSourcePolicy struct {
-	source      TaskSource
-	goal        string
-	constraints []string
-	state       State
-	toolHints   []string
+	source            TaskSource
+	goal              string
+	constraints       []string
+	state             State
+	verificationHints []string
+	toolHints         []string
 }
 
 func (p taskSourcePolicy) Prepare(ctx context.Context, req Request) (Plan, error) {
@@ -206,13 +224,16 @@ func (p taskSourcePolicy) Prepare(ctx context.Context, req Request) (Plan, error
 		}
 		hints := append([]string(nil), p.toolHints...)
 		hints = append(hints, task.ToolHints...)
+		verification := append([]string(nil), p.verificationHints...)
+		verification = append(verification, task.VerificationHints...)
 		steps = append(steps, Step{
-			ID:        id,
-			Title:     title,
-			Status:    normalizeStatus(task.Status),
-			Notes:     strings.TrimSpace(task.Notes),
-			Evidence:  append([]string(nil), task.Evidence...),
-			ToolHints: hints,
+			ID:                id,
+			Title:             title,
+			Status:            normalizeStatus(task.Status),
+			Notes:             strings.TrimSpace(task.Notes),
+			VerificationHints: verification,
+			Evidence:          append([]string(nil), task.Evidence...),
+			ToolHints:         hints,
 		})
 	}
 	if len(steps) == 0 && strings.TrimSpace(p.goal) == "" && len(p.constraints) == 0 && p.state == "" {
@@ -299,6 +320,7 @@ func cloneSteps(steps []Step) []Step {
 	out := make([]Step, len(steps))
 	for i, step := range steps {
 		out[i] = step
+		out[i].VerificationHints = append([]string(nil), step.VerificationHints...)
 		out[i].Evidence = append([]string(nil), step.Evidence...)
 		out[i].ToolHints = append([]string(nil), step.ToolHints...)
 	}

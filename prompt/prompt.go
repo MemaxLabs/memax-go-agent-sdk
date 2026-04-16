@@ -500,6 +500,9 @@ func formatPlan(plan planner.Plan) string {
 			if hints := nonEmptyStrings(step.ToolHints); len(hints) > 0 {
 				fmt.Fprintf(&b, "\n  Tool hints: %s", strings.Join(hints, ", "))
 			}
+			if verification := nonEmptyStrings(step.VerificationHints); len(verification) > 0 {
+				fmt.Fprintf(&b, "\n  Verification hints: %s", strings.Join(verification, "; "))
+			}
 			if evidence := nonEmptyStrings(step.Evidence); len(evidence) > 0 {
 				fmt.Fprintf(&b, "\n  Evidence: %s", strings.Join(evidence, "; "))
 			}

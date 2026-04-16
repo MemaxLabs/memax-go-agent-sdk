@@ -28,8 +28,8 @@ func (s taskSource) Tasks(ctx context.Context, _ planner.Request) ([]planner.Tas
 	out := make([]planner.Task, 0, len(tasks))
 	for _, task := range tasks {
 		// tasktools.Task intentionally carries only operational task state.
-		// Planner evidence and tool hints come from planner options or custom
-		// planner.TaskSource implementations.
+		// Planner evidence, tool hints, and verification hints come from
+		// planner options or custom planner.TaskSource implementations.
 		out = append(out, planner.Task{
 			ID:       task.ID,
 			Title:    task.Title,

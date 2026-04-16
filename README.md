@@ -458,6 +458,9 @@ events, err := memaxagent.Query(ctx, "Review the migration.", memaxagent.Options
             Title:     "read migration file",
             Status:    planner.StatusInProgress,
             ToolHints: []string{"read_file"},
+            VerificationHints: []string{
+                "run workspace_verify test before final answer",
+            },
         }},
     }),
 })
@@ -465,7 +468,9 @@ events, err := memaxagent.Query(ctx, "Review the migration.", memaxagent.Options
 
 Planner policies receive the active session ID, parent session ID, identity,
 messages, and recent user-query text. The default prompt builder injects the
-returned plan as the named `memax.plan` prompt part.
+returned plan as the named `memax.plan` prompt part. Verification hints are
+advisory plan context; the host must still expose verification as a normal tool
+such as `workspace_verify`.
 
 Existing task state can drive the same planner context. `tasktools.Planner`
 adapts a task store into `planner.Policy`, so updates made through
@@ -481,6 +486,7 @@ events, err := memaxagent.Query(ctx, "Continue the review.", memaxagent.Options{
     Planner: tasktools.Planner(tasks,
         planner.WithTaskGoal("review migration safely"),
         planner.WithTaskToolHints(tasktools.ListToolName, tasktools.UpsertToolName),
+        planner.WithTaskVerificationHints("run workspace_verify test before final answer"),
     ),
 })
 ```

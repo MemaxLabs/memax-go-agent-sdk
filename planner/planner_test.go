@@ -10,11 +10,12 @@ func TestStaticReturnsDefensiveCopy(t *testing.T) {
 		Goal:        "ship safely",
 		Constraints: []string{"read first"},
 		Steps: []Step{{
-			ID:        "step-1",
-			Title:     "inspect",
-			Status:    StatusInProgress,
-			Evidence:  []string{"README.md"},
-			ToolHints: []string{"read_file"},
+			ID:                "step-1",
+			Title:             "inspect",
+			Status:            StatusInProgress,
+			VerificationHints: []string{"workspace_verify test"},
+			Evidence:          []string{"README.md"},
+			ToolHints:         []string{"read_file"},
 		}},
 		State: StateActive,
 	})
@@ -24,6 +25,7 @@ func TestStaticReturnsDefensiveCopy(t *testing.T) {
 		t.Fatalf("Prepare returned error: %v", err)
 	}
 	first.Constraints[0] = "mutated"
+	first.Steps[0].VerificationHints[0] = "mutated"
 	first.Steps[0].Evidence[0] = "mutated"
 	first.Steps[0].ToolHints[0] = "mutated"
 
@@ -34,7 +36,7 @@ func TestStaticReturnsDefensiveCopy(t *testing.T) {
 	if second.Constraints[0] != "read first" {
 		t.Fatalf("constraints = %#v, want defensive copy", second.Constraints)
 	}
-	if second.Steps[0].Evidence[0] != "README.md" || second.Steps[0].ToolHints[0] != "read_file" {
+	if second.Steps[0].VerificationHints[0] != "workspace_verify test" || second.Steps[0].Evidence[0] != "README.md" || second.Steps[0].ToolHints[0] != "read_file" {
 		t.Fatalf("steps = %#v, want defensive copy", second.Steps)
 	}
 }
@@ -56,9 +58,9 @@ func TestFromTaskSourceBuildsPlan(t *testing.T) {
 		}
 		return []Task{
 			{ID: "task-2", Title: "write summary", Status: StatusPending, Priority: 2},
-			{ID: "task-1", Title: "read migration", Status: StatusInProgress, Notes: "check rollback", Priority: 1, ToolHints: []string{"read_file"}},
+			{ID: "task-1", Title: "read migration", Status: StatusInProgress, Notes: "check rollback", Priority: 1, VerificationHints: []string{"go test ./..."}, ToolHints: []string{"read_file"}},
 		}, nil
-	}), WithTaskGoal("review safely"), WithTaskConstraints("read first"), WithTaskToolHints("list_tasks"))
+	}), WithTaskGoal("review safely"), WithTaskConstraints("read first"), WithTaskToolHints("list_tasks"), WithTaskVerificationHints("workspace_verify test"))
 
 	plan, err := policy.Prepare(context.Background(), Request{Query: "review migration"})
 	if err != nil {
@@ -75,6 +77,9 @@ func TestFromTaskSourceBuildsPlan(t *testing.T) {
 	}
 	if len(plan.Steps[0].ToolHints) != 2 || plan.Steps[0].ToolHints[0] != "list_tasks" || plan.Steps[0].ToolHints[1] != "read_file" {
 		t.Fatalf("tool hints = %#v, want global and task hints", plan.Steps[0].ToolHints)
+	}
+	if len(plan.Steps[0].VerificationHints) != 2 || plan.Steps[0].VerificationHints[0] != "workspace_verify test" || plan.Steps[0].VerificationHints[1] != "go test ./..." {
+		t.Fatalf("verification hints = %#v, want global and task hints", plan.Steps[0].VerificationHints)
 	}
 }
 

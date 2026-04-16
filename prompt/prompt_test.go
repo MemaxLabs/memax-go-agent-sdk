@@ -236,18 +236,19 @@ func TestDefaultBuilderIncludesPlan(t *testing.T) {
 			State:       planner.StateActive,
 			Constraints: []string{"inspect before changing"},
 			Steps: []planner.Step{{
-				ID:        "step-1",
-				Title:     "read migration",
-				Status:    planner.StatusInProgress,
-				ToolHints: []string{"read_file"},
-				Evidence:  []string{"migrations/001.sql"},
+				ID:                "step-1",
+				Title:             "read migration",
+				Status:            planner.StatusInProgress,
+				VerificationHints: []string{"workspace_verify test migrations/001.sql"},
+				ToolHints:         []string{"read_file"},
+				Evidence:          []string{"migrations/001.sql"},
 			}},
 		},
 	})
 	if err != nil {
 		t.Fatalf("Build returned error: %v", err)
 	}
-	for _, want := range []string{"Host-provided plan", "review migration safely", "inspect before changing", "step-1", "read_file", "migrations/001.sql"} {
+	for _, want := range []string{"Host-provided plan", "review migration safely", "inspect before changing", "step-1", "read_file", "workspace_verify test migrations/001.sql", "migrations/001.sql"} {
 		if !strings.Contains(result.SystemPrompt, want) {
 			t.Fatalf("system prompt missing %q:\n%s", want, result.SystemPrompt)
 		}

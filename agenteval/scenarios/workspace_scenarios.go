@@ -11,6 +11,7 @@ import (
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
 	"github.com/MemaxLabs/memax-go-agent-sdk/agenteval"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
+	"github.com/MemaxLabs/memax-go-agent-sdk/planner"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/verifytools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/workspacetools"
@@ -354,6 +355,125 @@ func WorkspaceOSStorePatchRollback() agenteval.Case {
 					}
 					if string(content) != "version one" {
 						return fmt.Errorf("README.md = %q, want restored version one", content)
+					}
+					return nil
+				},
+			},
+		},
+	}
+}
+
+// PlannerVerificationGuidesRepair returns a single-use scenario where the
+// host plan names the verification phase, the model uses the verifier, and a
+// failed check drives a repair before the final answer.
+func PlannerVerificationGuidesRepair() agenteval.Case {
+	store := workspace.NewMemoryStore(map[string]string{
+		"README.md": "status: broken",
+	})
+	workspaceTools, toolsErr := workspacetools.NewTools(store)
+	verifyTool := verifytools.NewTool(verifytools.Config{
+		Verifier: verifierForReadmeStatus(store, "status: fixed"),
+	})
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "patch-1",
+				Name: workspacetools.ApplyPatchToolName,
+				Input: json.RawMessage(`{"operations":[
+					{"path":"README.md","old_content":"status: broken","new_content":"status: almost"}
+				]}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "verify-1",
+				Name:  verifytools.ToolName,
+				Input: json.RawMessage(`{"name":"test","target":"README.md"}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "patch-2",
+				Name: workspacetools.ApplyPatchToolName,
+				Input: json.RawMessage(`{"operations":[
+					{"path":"README.md","old_content":"status: almost","new_content":"status: fixed"}
+				]}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "verify-2",
+				Name:  verifytools.ToolName,
+				Input: json.RawMessage(`{"name":"test","target":"README.md"}`),
+			},
+		}},
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "Planner-guided verification passed."}},
+	)
+
+	return agenteval.Case{
+		Name:   "planner_verification_guides_repair",
+		Prompt: "Fix README.md and follow the host plan before finalizing.",
+		Options: memaxagent.Options{
+			Model: modelClient,
+			Tools: tool.NewRegistry(append(workspaceTools, verifyTool)...),
+			Planner: planner.Static(planner.Plan{
+				Goal:  "repair README and prove the result",
+				State: planner.StateActive,
+				Steps: []planner.Step{{
+					ID:                "fix-readme",
+					Title:             "patch README and verify status",
+					Status:            planner.StatusInProgress,
+					ToolHints:         []string{workspacetools.ApplyPatchToolName, verifytools.ToolName},
+					VerificationHints: []string{"run workspace_verify test on README.md before final answer"},
+					Evidence:          []string{"README.md"},
+				}},
+			}),
+		},
+		Assertions: []agenteval.Assertion{
+			toolConstructionSucceeded(toolsErr),
+			agenteval.ToolUsed(workspacetools.ApplyPatchToolName),
+			agenteval.ToolUsed(verifytools.ToolName),
+			agenteval.FinalEquals("Planner-guided verification passed."),
+			requestCountEquals(modelClient, 5),
+			{
+				Name: "plan names verification before final answer",
+				Check: func(agenteval.Result) error {
+					requests := modelClient.Requests()
+					if len(requests) == 0 {
+						return fmt.Errorf("missing model request")
+					}
+					prompt := requests[0].SystemPrompt
+					for _, want := range []string{"repair README and prove the result", "Verification hints", "workspace_verify test", "README.md"} {
+						if !strings.Contains(prompt, want) {
+							return fmt.Errorf("system prompt missing %q:\n%s", want, prompt)
+						}
+					}
+					return nil
+				},
+			},
+			{
+				Name: "verification hint drives repair loop",
+				Check: func(result agenteval.Result) error {
+					results := result.ToolResults()
+					if len(results) < 4 {
+						return fmt.Errorf("tool results = %#v, want patch verify patch verify", results)
+					}
+					if !results[1].IsError || !strings.Contains(results[1].Content, "expected status: fixed") {
+						return fmt.Errorf("first verification = %#v, want actionable failure", results[1])
+					}
+					if results[3].IsError || !strings.Contains(results[3].Content, "verification test passed") {
+						return fmt.Errorf("second verification = %#v, want pass", results[3])
+					}
+					content, err := store.ReadFile(context.Background(), "README.md")
+					if err != nil {
+						return err
+					}
+					if content != "status: fixed" {
+						return fmt.Errorf("README.md = %q, want repaired content", content)
 					}
 					return nil
 				},

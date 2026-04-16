@@ -277,10 +277,12 @@ values disable repair retries.
 planning into hidden core state. The policy receives the active session ID,
 parent session ID, identity, current messages, and bounded recent user-query
 text. It returns a `planner.Plan` containing a goal, overall state,
-constraints, and ordered steps with status, evidence, and tool hints. The
-default builder injects non-empty plans as `memax.plan` before memories and
-skills, so the model sees the host strategy while every action still goes
-through normal tools, permissions, hooks, budgets, and telemetry.
+constraints, and ordered steps with status, evidence, tool hints, and
+verification hints. The default builder injects non-empty plans as `memax.plan`
+before memories and skills, so the model sees the host strategy while every
+action still goes through normal tools, permissions, hooks, budgets, and
+telemetry. Verification hints are advisory; hosts must expose the actual check
+through a tool such as `workspace_verify`.
 
 Planner policies are called on every model turn rather than cached for the
 whole run. This is intentional: a host planner may reflect task progress,
@@ -290,10 +292,12 @@ timeout-bounded when per-turn freshness is not needed.
 
 The core planner package also defines source-neutral `planner.Task` and
 `planner.TaskSource` contracts. `planner.FromTaskSource` converts task state
-into plan steps with deterministic priority ordering and inferred plan state.
-The optional `toolkit/tasktools` adapter exposes `tasktools.Planner(store)`, so
-the same task store can be prompt-visible plan context and model-editable state
-through `list_tasks` and `upsert_task`.
+into plan steps with deterministic priority ordering, inferred plan state,
+global tool hints, and global verification hints. Custom task sources can add
+per-task evidence, tool hints, and verification hints. The optional
+`toolkit/tasktools` adapter exposes `tasktools.Planner(store)`, so the same task
+store can be prompt-visible plan context and model-editable state through
+`list_tasks` and `upsert_task`.
 
 `memory.Source` is the source-neutral loading contract for durable host context
 such as project rules, user preferences, session notes, or organization policy.

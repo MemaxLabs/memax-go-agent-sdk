@@ -281,7 +281,8 @@ retrieval, usage, and review infrastructure.
 
 ### 6. Planner and Task Policy Stack
 
-**Current state:** planner policies and task-derived plans exist.
+**Current state:** planner policies, task-derived plans, and plan-visible
+verification hints exist.
 
 **Gap:** The SDK lacks explicit policies for when to plan, update, delegate,
 verify, ask the user, or stop.
@@ -291,14 +292,16 @@ verify, ask the user, or stop.
 - Planner can expose actions: create task, update task, block, delegate, verify.
 - Plan state is tied to tool results and checkpoint/memory evidence.
 - Subagents can receive scoped plan steps and report structured progress.
-- Verification is a first-class phase for coding workflows.
+- Verification is a first-class phase for coding workflows, expressed through
+  host-owned tools rather than hidden runtime execution.
 
 **Eval coverage:**
 
 - Multi-step task updates plan after each tool result.
 - Blocked plan asks for user input rather than hallucinating.
 - Delegation happens only for scoped subtasks.
-- Verification failure triggers repair.
+- Verification hints guide the model to run host verification, and verification
+  failure triggers repair.
 
 ### 7. Provider Fidelity and Compatibility
 
