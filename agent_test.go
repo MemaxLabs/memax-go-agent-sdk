@@ -67,6 +67,82 @@ func TestQueryRunsToolAndContinuesToResult(t *testing.T) {
 	}
 }
 
+func TestQueryStartsSafeToolBeforeAssistantStreamEnds(t *testing.T) {
+	started := make(chan struct{})
+	registry := tool.NewRegistry(tool.Definition{
+		ToolSpec: model.ToolSpec{Name: "lookup", ReadOnly: true, ConcurrencySafe: true},
+		Handler: func(context.Context, tool.Call) (model.ToolResult, error) {
+			close(started)
+			return model.ToolResult{Content: "lookup result"}, nil
+		},
+	})
+	store := session.NewMemoryStore()
+	events, err := Query(context.Background(), "lookup before finishing text", Options{
+		Model: &earlyToolModel{
+			toolStarted: started,
+			first: []model.StreamEvent{
+				{
+					Kind: model.StreamToolUseStart,
+					ToolUse: model.ToolUse{
+						ID:   "tool-1",
+						Name: "lookup",
+					},
+				},
+				{
+					Kind: model.StreamToolUseDelta,
+					ToolUse: model.ToolUse{
+						ID:   "tool-1",
+						Name: "lookup",
+					},
+					ToolUseDelta: `{}`,
+				},
+				{
+					Kind: model.StreamToolUse,
+					ToolUse: model.ToolUse{
+						ID:    "tool-1",
+						Name:  "lookup",
+						Input: json.RawMessage(`{}`),
+					},
+				},
+				{Kind: model.StreamText, Text: " while continuing"},
+			},
+			second: []model.StreamEvent{{Kind: model.StreamText, Text: "done"}},
+		},
+		Tools:    registry,
+		Sessions: store,
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+	result, err := Drain(events)
+	if err != nil {
+		t.Fatalf("Drain returned error: %v", err)
+	}
+	if result != "done" {
+		t.Fatalf("result = %q, want done", result)
+	}
+	sessions, err := store.List(context.Background())
+	if err != nil {
+		t.Fatalf("List returned error: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("sessions = %d, want 1", len(sessions))
+	}
+	messages, err := store.Messages(context.Background(), sessions[0].ID)
+	if err != nil {
+		t.Fatalf("Messages returned error: %v", err)
+	}
+	if len(messages) < 3 {
+		t.Fatalf("messages = %#v, want user, assistant, tool result", messages)
+	}
+	if messages[1].Role != model.RoleAssistant || len(messages[1].Content) != 2 {
+		t.Fatalf("assistant message = %#v, want tool use plus trailing text", messages[1])
+	}
+	if messages[2].Role != model.RoleTool || messages[2].ToolResult == nil || messages[2].ToolResult.Content != "lookup result" {
+		t.Fatalf("tool result message = %#v, want persisted lookup result", messages[2])
+	}
+}
+
 func TestQueryAsyncReturnsBeforeStartupIOCompletes(t *testing.T) {
 	store := &blockingCreateStore{
 		inner:   session.NewMemoryStore(),
@@ -1644,6 +1720,47 @@ func (s *fakeStream) Recv() (model.StreamEvent, error) {
 }
 
 func (s *fakeStream) Close() error {
+	return nil
+}
+
+type earlyToolModel struct {
+	toolStarted <-chan struct{}
+	first       []model.StreamEvent
+	second      []model.StreamEvent
+	calls       int
+}
+
+func (m *earlyToolModel) Stream(context.Context, model.Request) (model.Stream, error) {
+	m.calls++
+	if m.calls == 1 {
+		return &earlyToolStream{events: m.first, toolStarted: m.toolStarted}, nil
+	}
+	return &fakeStream{events: m.second}, nil
+}
+
+type earlyToolStream struct {
+	events      []model.StreamEvent
+	index       int
+	toolStarted <-chan struct{}
+}
+
+func (s *earlyToolStream) Recv() (model.StreamEvent, error) {
+	if s.index >= len(s.events) {
+		return model.StreamEvent{}, model.ErrEndOfStream
+	}
+	if s.index == len(s.events)-1 {
+		select {
+		case <-s.toolStarted:
+		case <-time.After(5 * time.Second):
+			return model.StreamEvent{}, errors.New("safe tool did not start before trailing assistant text")
+		}
+	}
+	event := s.events[s.index]
+	s.index++
+	return event, nil
+}
+
+func (s *earlyToolStream) Close() error {
 	return nil
 }
 

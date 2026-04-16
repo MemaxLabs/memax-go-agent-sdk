@@ -14,6 +14,12 @@ const (
 	EventSessionStarted EventKind = "session_started"
 	EventModelRequest   EventKind = "model_request"
 	EventAssistant      EventKind = "assistant"
+	// EventToolUseStart is emitted when a provider starts streaming a tool-use
+	// block before the full JSON input is complete.
+	EventToolUseStart EventKind = "tool_use_start"
+	// EventToolUseDelta is emitted for incremental provider tool-use input
+	// chunks. The complete, executable call is still emitted as EventToolUse.
+	EventToolUseDelta   EventKind = "tool_use_delta"
 	EventToolUse        EventKind = "tool_use"
 	EventToolResult     EventKind = "tool_result"
 	EventUsage          EventKind = "usage"
@@ -41,15 +47,16 @@ type Event struct {
 	Turn            int
 	Time            time.Time
 
-	Message    *model.Message
-	ToolUse    *model.ToolUse
-	ToolResult *model.ToolResult
-	Usage      *model.Usage
-	Context    *ContextEvent
-	Compaction *contextwindow.CompactionRecord
-	Memory     *MemoryCandidatesEvent
-	Result     string
-	Err        error
+	Message      *model.Message
+	ToolUse      *model.ToolUse
+	ToolUseDelta string
+	ToolResult   *model.ToolResult
+	Usage        *model.Usage
+	Context      *ContextEvent
+	Compaction   *contextwindow.CompactionRecord
+	Memory       *MemoryCandidatesEvent
+	Result       string
+	Err          error
 }
 
 type ContextEvent struct {

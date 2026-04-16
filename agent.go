@@ -475,7 +475,21 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 				return
 			}
 
-			assistant, uses, usage, err := collectAssistant(modelCtx, emit, stream, sessionID, turn, opts.Meter)
+			toolCtx, cancelEarlyTools := context.WithCancel(turnCtx)
+			defer cancelEarlyTools()
+			assistant, uses, earlyResults, usage, err := collectAssistant(modelCtx, emit, stream, sessionID, turn, opts.Meter, func(use model.ToolUse) (<-chan model.ToolResult, bool, error) {
+				if !executor.CanRunConcurrently(use) {
+					return nil, false, nil
+				}
+				// Early tool execution crosses the same budget boundary as the
+				// post-stream batch below. Accounting happens here because the
+				// tool may already be running while the model continues streaming.
+				if err := checkBudget(turnCtx, opts, sessionID, turn, budgetState.withToolCalls(1)); err != nil {
+					return nil, false, err
+				}
+				budgetState.toolCalls++
+				return bufferedToolResults(executor.Run(toolCtx, []model.ToolUse{use})), true, nil
+			})
 			totalUsage = totalUsage.Add(usage)
 			budgetState.usage = totalUsage
 			if closeErr := stream.Close(); closeErr != nil && err == nil {
@@ -486,6 +500,7 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 				telemetry.Int("memax.model.assistant_blocks", len(assistant.Content)),
 			)
 			if err != nil {
+				cancelEarlyTools()
 				modelSpan.RecordError(err)
 				modelSpan.End()
 				opts.Meter.Add(modelCtx, "memax.model.stream.errors", 1,
@@ -528,6 +543,7 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 				durableMessages = append(durableMessages, model.CloneMessage(assistant))
 			}
 			if len(uses) == 0 {
+				cancelEarlyTools()
 				result := assistant.PlainText()
 				if err := outputValidator.Validate(turnCtx, result); err != nil {
 					if outputRetries < outputValidator.RetryLimit() {
@@ -605,21 +621,22 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 				return
 			}
 
-			if err := checkBudget(turnCtx, opts, sessionID, turn, budgetState.withToolCalls(len(uses))); err != nil {
+			remainingToolCalls := len(uses) - len(earlyResults)
+			if err := checkBudget(turnCtx, opts, sessionID, turn, budgetState.withToolCalls(remainingToolCalls)); err != nil {
+				cancelEarlyTools()
 				turnSpan.RecordError(err)
 				emitError(turnCtx, emit, sessionID, turn, err)
 				_ = finish(turn, hook.StopReasonBudget, err)
 				shouldStop = true
 				return
 			}
-			budgetState.toolCalls += len(uses)
-			results := executor.Run(turnCtx, uses)
-			for result := range results {
+			budgetState.toolCalls += remainingToolCalls
+			handleToolResult := func(result model.ToolResult) bool {
 				event := newEvent(EventToolResult, sessionID, turn)
 				event.ToolResult = &result
 				if !emit(event) {
 					shouldStop = true
-					return
+					return false
 				}
 				if err := opts.Sessions.Append(turnCtx, sessionID, model.Message{
 					Role: model.RoleTool,
@@ -636,9 +653,36 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 					emitError(turnCtx, emit, sessionID, turn, err)
 					_ = finish(turn, hook.StopReasonError, err)
 					shouldStop = true
-					return
+					return false
+				}
+				return true
+			}
+			for i := 0; i < len(uses); {
+				if results, ok := earlyResults[i]; ok {
+					for result := range results {
+						if !handleToolResult(result) {
+							cancelEarlyTools()
+							return
+						}
+					}
+					i++
+					continue
+				}
+				start := i
+				for i < len(uses) {
+					if _, ok := earlyResults[i]; ok {
+						break
+					}
+					i++
+				}
+				for result := range executor.Run(turnCtx, uses[start:i]) {
+					if !handleToolResult(result) {
+						cancelEarlyTools()
+						return
+					}
 				}
 			}
+			cancelEarlyTools()
 		}()
 		if shouldStop {
 			return
@@ -1003,6 +1047,17 @@ func handleMemoryCandidates(ctx context.Context, opts Options, sessionID string,
 	})
 }
 
+func bufferedToolResults(results <-chan model.ToolResult) <-chan model.ToolResult {
+	buffered := make(chan model.ToolResult, 1)
+	go func() {
+		defer close(buffered)
+		for result := range results {
+			buffered <- result
+		}
+	}()
+	return buffered
+}
+
 func memoryQuery(messages []model.Message) string {
 	if len(messages) == 0 {
 		return ""
@@ -1171,18 +1226,20 @@ func collectAssistant(
 	sessionID string,
 	turn int,
 	meter telemetry.Meter,
-) (model.Message, []model.ToolUse, model.Usage, error) {
+	startEarlyTool func(model.ToolUse) (<-chan model.ToolResult, bool, error),
+) (model.Message, []model.ToolUse, map[int]<-chan model.ToolResult, model.Usage, error) {
 	var blocks []model.ContentBlock
 	var uses []model.ToolUse
+	earlyResults := make(map[int]<-chan model.ToolResult)
 	var usage model.Usage
 
 	for {
 		event, err := stream.Recv()
 		if errors.Is(err, model.ErrEndOfStream) {
-			return model.Message{Role: model.RoleAssistant, Content: blocks}, uses, usage, nil
+			return model.Message{Role: model.RoleAssistant, Content: blocks}, uses, earlyResults, usage, nil
 		}
 		if err != nil {
-			return model.Message{}, nil, model.Usage{}, fmt.Errorf("receive model event: %w", err)
+			return model.Message{}, nil, nil, model.Usage{}, fmt.Errorf("receive model event: %w", err)
 		}
 
 		switch event.Kind {
@@ -1193,16 +1250,41 @@ func collectAssistant(
 				out := newEvent(EventAssistant, sessionID, turn)
 				out.Message = &model.Message{Role: model.RoleAssistant, Content: []model.ContentBlock{block}}
 				if !emit(out) {
-					return model.Message{}, nil, model.Usage{}, ctx.Err()
+					return model.Message{}, nil, nil, model.Usage{}, ctx.Err()
 				}
 			}
+		case model.StreamToolUseStart:
+			out := newEvent(EventToolUseStart, sessionID, turn)
+			use := event.ToolUse
+			out.ToolUse = &use
+			if !emit(out) {
+				return model.Message{}, nil, nil, model.Usage{}, ctx.Err()
+			}
+		case model.StreamToolUseDelta:
+			out := newEvent(EventToolUseDelta, sessionID, turn)
+			use := event.ToolUse
+			out.ToolUse = &use
+			out.ToolUseDelta = event.ToolUseDelta
+			if !emit(out) {
+				return model.Message{}, nil, nil, model.Usage{}, ctx.Err()
+			}
 		case model.StreamToolUse:
+			index := len(uses)
 			uses = append(uses, event.ToolUse)
 			blocks = append(blocks, model.ContentBlock{Type: model.ContentToolUse, ToolUse: &event.ToolUse})
 			out := newEvent(EventToolUse, sessionID, turn)
 			out.ToolUse = &event.ToolUse
 			if !emit(out) {
-				return model.Message{}, nil, model.Usage{}, ctx.Err()
+				return model.Message{}, nil, nil, model.Usage{}, ctx.Err()
+			}
+			if startEarlyTool != nil {
+				results, started, err := startEarlyTool(event.ToolUse)
+				if err != nil {
+					return model.Message{}, nil, nil, model.Usage{}, err
+				}
+				if started && results != nil {
+					earlyResults[index] = results
+				}
 			}
 		case model.StreamUsage:
 			if event.Usage == nil {
@@ -1214,7 +1296,7 @@ func collectAssistant(
 			current := *event.Usage
 			out.Usage = &current
 			if !emit(out) {
-				return model.Message{}, nil, model.Usage{}, ctx.Err()
+				return model.Message{}, nil, nil, model.Usage{}, ctx.Err()
 			}
 		}
 	}

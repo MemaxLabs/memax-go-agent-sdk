@@ -78,9 +78,33 @@ data: {"type":"response.completed"}
 		t.Fatalf("first event = %#v, want text hello", first)
 	}
 
+	start, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("Recv tool start returned error: %v", err)
+	}
+	if start.Kind != model.StreamToolUseStart || start.ToolUse.ID != "call_1" || start.ToolUse.Name != "read_file" {
+		t.Fatalf("start event = %#v, want tool-use start", start)
+	}
+
+	firstDelta, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("Recv first tool delta returned error: %v", err)
+	}
+	if firstDelta.Kind != model.StreamToolUseDelta || firstDelta.ToolUseDelta != `{"path"` {
+		t.Fatalf("first delta = %#v, want tool-use delta", firstDelta)
+	}
+
+	secondDelta, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("Recv second tool delta returned error: %v", err)
+	}
+	if secondDelta.Kind != model.StreamToolUseDelta || secondDelta.ToolUseDelta != `:"README.md"}` {
+		t.Fatalf("second delta = %#v, want tool-use delta", secondDelta)
+	}
+
 	second, err := stream.Recv()
 	if err != nil {
-		t.Fatalf("Recv tool returned error: %v", err)
+		t.Fatalf("Recv complete tool returned error: %v", err)
 	}
 	if second.Kind != model.StreamToolUse || second.ToolUse.ID != "call_1" || second.ToolUse.Name != "read_file" {
 		t.Fatalf("second event = %#v, want tool use", second)

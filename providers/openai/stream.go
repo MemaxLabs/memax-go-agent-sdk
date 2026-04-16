@@ -129,10 +129,25 @@ func (s *stream) handleData(eventName string, data []byte) (model.StreamEvent, e
 			return model.StreamEvent{}, err
 		}
 		s.calls[envelope.OutputIndex] = call
+		return model.StreamEvent{
+			Kind: model.StreamToolUseStart,
+			ToolUse: model.ToolUse{
+				ID:   firstNonEmpty(call.CallID, call.ID),
+				Name: call.Name,
+			},
+		}, nil
 	case "response.function_call_arguments.delta":
 		call := s.calls[envelope.OutputIndex]
 		if call != nil {
 			call.Arguments += envelope.Delta
+			return model.StreamEvent{
+				Kind: model.StreamToolUseDelta,
+				ToolUse: model.ToolUse{
+					ID:   firstNonEmpty(call.CallID, call.ID),
+					Name: call.Name,
+				},
+				ToolUseDelta: envelope.Delta,
+			}, nil
 		}
 	case "response.function_call_arguments.done":
 		call := s.calls[envelope.OutputIndex]

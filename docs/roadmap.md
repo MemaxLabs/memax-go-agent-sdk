@@ -64,6 +64,11 @@ system prompt.
 - Add structured output contracts. Initial `output.Contract`, `Options.Output`, prompt contract injection, JSON Schema validation, final-answer repair retry, and retry-exhaustion errors exist.
 - Add cost and token accounting. Initial provider-neutral `model.Usage`, stream usage events, `EventUsage`, final-result usage aggregation, token meter counters, and OpenAI/Anthropic usage mapping exist. Cost calculation remains future host/provider policy.
 - Add run budget governors. Initial `budget.Governor`, zero-value-disabled `budget.Policy`, `Options.Budget`, budget stop reason, and agent-loop enforcement exist for turn, model-call, tool-call, token, and elapsed-duration limits.
+- Add streaming tool execution. Initial provider tool-use lifecycle events
+  (`tool_use_start`, `tool_use_delta`, complete `tool_use`) exist for OpenAI
+  and Anthropic streams, and the agent loop can start read-only,
+  concurrency-safe tools before trailing assistant text finishes while
+  preserving durable transcript order.
 - Add autonomy eval harness. Initial `agenteval` runner, scripted model, result capture, expected-error assertions, reusable assertions, and `agenteval/scenarios` package exist for deterministic tool recovery, structured-output repair, memory search/save, memory distillation candidates, memory candidate handler persistence, session resume, context retry, subagent delegation, planner-guided tool use, planner/task-state updates, progressive skill disclosure, httptest-backed provider usage mapping, provider tool-use round trips, permission/hook denial recovery, large-result storage recovery, budget-stop enforcement, and deferred tool discovery. Live evals remain future work.
 - Add context retention hardening. Initial `contextwindow.PreserveImportant`
   support keeps loaded skills, stored result handles, and tool errors with

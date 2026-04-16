@@ -53,6 +53,17 @@ func (e Executor) Run(ctx context.Context, uses []model.ToolUse) <-chan model.To
 	return out
 }
 
+// CanRunConcurrently reports whether use resolves to a tool that has opted in
+// to concurrent execution. Unknown tools return false; execution will still
+// produce the normal model-visible tool error if the use is later run.
+func (e Executor) CanRunConcurrently(use model.ToolUse) bool {
+	if e.Registry == nil {
+		return false
+	}
+	t, ok := e.Registry.Get(use.Name)
+	return ok && t.CanRunConcurrently(use)
+}
+
 type batch struct {
 	concurrent bool
 	uses       []model.ToolUse
@@ -61,8 +72,7 @@ type batch struct {
 func (e Executor) partition(uses []model.ToolUse) []batch {
 	var batches []batch
 	for _, use := range uses {
-		t, ok := e.Registry.Get(use.Name)
-		concurrent := ok && t.CanRunConcurrently(use)
+		concurrent := e.CanRunConcurrently(use)
 		if concurrent && len(batches) > 0 && batches[len(batches)-1].concurrent {
 			batches[len(batches)-1].uses = append(batches[len(batches)-1].uses, use)
 			continue

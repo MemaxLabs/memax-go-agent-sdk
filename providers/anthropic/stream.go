@@ -145,6 +145,13 @@ func (s *stream) handleData(eventName string, data []byte) (model.StreamEvent, e
 			return model.StreamEvent{}, err
 		}
 		s.blocks[envelope.Index] = block
+		return model.StreamEvent{
+			Kind: model.StreamToolUseStart,
+			ToolUse: model.ToolUse{
+				ID:   block.ID,
+				Name: block.Name,
+			},
+		}, nil
 	case "content_block_delta":
 		return s.handleDelta(envelope.Index, envelope.Delta)
 	case "content_block_stop":
@@ -210,6 +217,14 @@ func (s *stream) handleDelta(index int, data json.RawMessage) (model.StreamEvent
 		block := s.blocks[index]
 		if block != nil {
 			block.Input = append(block.Input, delta.PartialJSON...)
+			return model.StreamEvent{
+				Kind: model.StreamToolUseDelta,
+				ToolUse: model.ToolUse{
+					ID:   block.ID,
+					Name: block.Name,
+				},
+				ToolUseDelta: delta.PartialJSON,
+			}, nil
 		}
 	}
 	return model.StreamEvent{}, nil

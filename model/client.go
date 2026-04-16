@@ -35,16 +35,25 @@ type Stream interface {
 type StreamEventKind string
 
 const (
-	StreamText    StreamEventKind = "text"
+	StreamText StreamEventKind = "text"
+	// StreamToolUseStart reports that a provider started emitting a tool-use
+	// block. ToolUse may contain only the stable ID and name.
+	StreamToolUseStart StreamEventKind = "tool_use_start"
+	// StreamToolUseDelta reports an incremental tool-use input chunk. It is
+	// observability/preparation data; callers must wait for StreamToolUse before
+	// executing the tool because only the complete event has validated input.
+	StreamToolUseDelta StreamEventKind = "tool_use_delta"
+	// StreamToolUse reports the complete executable tool call.
 	StreamToolUse StreamEventKind = "tool_use"
 	StreamUsage   StreamEventKind = "usage"
 )
 
 type StreamEvent struct {
-	Kind    StreamEventKind
-	Text    string
-	ToolUse ToolUse
-	Usage   *Usage
+	Kind         StreamEventKind
+	Text         string
+	ToolUse      ToolUse
+	ToolUseDelta string
+	Usage        *Usage
 }
 
 // Usage is provider-neutral model token accounting for one model stream event

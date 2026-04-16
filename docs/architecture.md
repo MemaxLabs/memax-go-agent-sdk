@@ -72,14 +72,24 @@ The target loop is:
 2. Normalize user input into session messages.
 3. Select active tool specs, build system prompt, user context, active skills, and model request.
 4. Stream model events to the caller.
-5. Collect assistant text and tool-use blocks.
+5. Collect assistant text and tool-use blocks. Provider adapters may emit
+   tool-use lifecycle events before the complete call; only the complete
+   `tool_use` event is executable.
 6. Validate each tool input.
 7. Run hook and permission checks.
-8. Execute tools with safe concurrency.
+8. Execute tools with safe concurrency. Read-only, concurrency-safe tools may
+   start while the assistant stream is still producing trailing text, but they
+   still pass through validation, hooks, permissions, result limiting, and
+   telemetry.
 9. Append tool results to the session.
 10. Continue until the model returns no tool calls, a stop condition fires, or a configured limit is reached.
 
-The current scaffold implements the minimal version of that loop with JSON Schema validation before permission checks and execution. Future work should add streaming tool execution, hook phases, compaction, structured output enforcement, subagents, resumable durable sessions, and richer cancellation semantics.
+The current scaffold implements that loop with JSON Schema validation before
+permission checks and execution, initial streaming execution for safe tools,
+compaction, structured output enforcement, subagents, resumable durable
+sessions, and context-aware cancellation. Future work should harden streaming
+permission-denial evals and goroutine-leak detection for non-cooperative tool
+handlers.
 
 ## Tool Layer
 

@@ -168,7 +168,10 @@ compaction provenance.
 
 ### 3. Streaming Tool Execution
 
-**Current state:** the loop collects assistant output, then executes tool calls.
+**Current state:** provider adapters expose tool-use start/delta/complete
+events. The agent loop starts read-only, concurrency-safe tools as soon as the
+complete validated tool call arrives, while keeping mutating tools serialized
+and preserving existing transcript order.
 
 **Gap:** Leading agents can begin safe tool execution as soon as complete tool
 use blocks arrive while keeping mutating tools serialized.
@@ -177,16 +180,16 @@ use blocks arrive while keeping mutating tools serialized.
 
 - Provider streams expose tool-use lifecycle information early enough for the
   agent loop to prepare execution while still validating complete inputs before
-  running tools.
+  running tools. Initial support exists.
 - Read-only, concurrency-safe tools can start before the full assistant message
-  finishes.
+  finishes. Initial support exists.
 - Mutating/destructive tools wait for safe ordering and policy checks.
 - Events make early execution visible.
 - Cancellation closes streams and in-flight safe tools cleanly.
 
 **Eval coverage:**
 
-- Safe tools overlap with streaming.
+- Safe tools overlap with streaming. Initial unit coverage exists.
 - Mutating tools preserve order.
 - Permission denial during streaming is model-visible.
 - Cancellation does not leak goroutines.
