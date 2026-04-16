@@ -267,6 +267,31 @@ Context-window policies transform session messages before each model request wit
 
 `SummarizingBudget` adds model-backed compaction behind the same `Policy` interface. It checks whether the full transcript fits, reserves part of the configured budget for a synthetic summary, asks a pluggable `Summarizer` to compact the older prefix, and prepends that summary to the newest structurally valid suffix. `ModelSummarizer` is the default model-client adapter; applications can provide their own summarizer for deterministic summaries, hosted summarization, cached summaries, or domain-specific compression.
 
+## Run Budgets
+
+Run budgets are separate from context-window budgets. Context-window policies
+decide how much transcript to send to the next model request. `Options.Budget`
+decides whether the current run may continue at all.
+
+The `budget` package defines a small `Governor` interface and a zero-value
+disabled `Policy` implementation. Positive limits can cap turns, model calls,
+tool calls, input tokens, output tokens, total tokens, and elapsed duration.
+The agent loop checks the governor at stable lifecycle boundaries: turn start,
+before model calls, after model usage is observed, before context-retry model
+calls, and before executing a tool batch. A denial emits `EventError`, finishes
+the run with `hook.StopReasonBudget`, and records a `memax.budget.exceeded`
+metric with the current resource snapshot.
+
+`Policy.MaxTurns` is intentionally separate from `Options.MaxTurns`.
+`Options.MaxTurns` is the hard loop bound. `Policy.MaxTurns` is a
+budget-governed limit that uses the same turn count but reports
+`hook.StopReasonBudget` when exceeded. If both are set, the lower effective
+limit stops the run.
+
+Hosts can provide custom governors for tenant quotas, hosted billing systems,
+or dynamic policies. The core package depends only on the provider-neutral
+`budget.Snapshot` and `model.Usage` types.
+
 ## Observability
 
 Tracing is optional and uses a small SDK-owned `telemetry.Tracer` interface so the core can be tested without a real exporter. Metrics are optional and use a matching SDK-owned `telemetry.Meter` interface with counter and value-recording methods. The `otel` package adapts both interfaces to OpenTelemetry. Current spans cover full query runs, turns, context policy application, model streaming, and individual tool executions. Metrics cover query starts/completions/errors, turn starts and durations, model stream starts/errors/durations, context compaction events, tool executions and durations, and hook errors. Spans and metrics carry stable attributes for session IDs, turn numbers, message counts, tool IDs, tool names, tool input/result byte counts, and tool policy flags.

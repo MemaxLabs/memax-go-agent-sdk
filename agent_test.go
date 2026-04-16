@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MemaxLabs/memax-go-agent-sdk/budget"
 	"github.com/MemaxLabs/memax-go-agent-sdk/contextwindow"
 	"github.com/MemaxLabs/memax-go-agent-sdk/hook"
 	"github.com/MemaxLabs/memax-go-agent-sdk/identity"
@@ -568,6 +569,111 @@ func TestQueryEmitsUsageAndAggregatesOnResult(t *testing.T) {
 		if !meter.hasCounter(want) {
 			t.Fatalf("meter counters = %#v, missing %s", meter.counterNames(), want)
 		}
+	}
+}
+
+func TestQueryBudgetStopsBeforeSecondModelCall(t *testing.T) {
+	registry := tool.NewRegistry(tool.Definition{
+		ToolSpec: model.ToolSpec{Name: "lookup", ReadOnly: true},
+		Handler: func(context.Context, tool.Call) (model.ToolResult, error) {
+			return model.ToolResult{Content: "tool result"}, nil
+		},
+	})
+	stopReasons := make(chan hook.StopReason, 1)
+	hooks := hook.NewRunner(hook.WithStop(func(_ context.Context, input hook.StopInput) error {
+		stopReasons <- input.Reason
+		return nil
+	}))
+	fake := &fakeModel{turns: [][]model.StreamEvent{
+		{{Kind: model.StreamToolUse, ToolUse: model.ToolUse{ID: "tool-1", Name: "lookup", Input: json.RawMessage(`{}`)}}},
+		{{Kind: model.StreamText, Text: "should not run"}},
+	}}
+
+	events, err := Query(context.Background(), "start", Options{
+		Model:  fake,
+		Tools:  registry,
+		Hooks:  hooks,
+		Budget: budget.Policy{MaxModelCalls: 1},
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+	var budgetErr error
+	for event := range events {
+		if event.Kind == EventError {
+			budgetErr = event.Err
+		}
+	}
+	if budgetErr == nil || !strings.Contains(budgetErr.Error(), "max model calls") {
+		t.Fatalf("budget error = %v, want max model calls budget error", budgetErr)
+	}
+	if len(fake.requests) != 1 {
+		t.Fatalf("model requests = %d, want 1", len(fake.requests))
+	}
+	select {
+	case stopReason := <-stopReasons:
+		if stopReason != hook.StopReasonBudget {
+			t.Fatalf("stop reason = %q, want budget", stopReason)
+		}
+	default:
+		t.Fatal("missing stop hook call")
+	}
+}
+
+func TestQueryBudgetStopsBeforeToolBatch(t *testing.T) {
+	runCount := 0
+	registry := tool.NewRegistry(tool.Definition{
+		ToolSpec: model.ToolSpec{Name: "lookup", ReadOnly: true},
+		Handler: func(context.Context, tool.Call) (model.ToolResult, error) {
+			runCount++
+			return model.ToolResult{Content: "tool result"}, nil
+		},
+	})
+	fake := &fakeModel{turns: [][]model.StreamEvent{{{
+		Kind:    model.StreamToolUse,
+		ToolUse: model.ToolUse{ID: "tool-1", Name: "lookup", Input: json.RawMessage(`{}`)},
+	}, {
+		Kind:    model.StreamToolUse,
+		ToolUse: model.ToolUse{ID: "tool-2", Name: "lookup", Input: json.RawMessage(`{}`)},
+	}}}}
+
+	events, err := Query(context.Background(), "start", Options{
+		Model:  fake,
+		Tools:  registry,
+		Budget: budget.Policy{MaxToolCalls: 1},
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+	if _, err := Drain(events); err == nil || !strings.Contains(err.Error(), "max tool calls") {
+		t.Fatalf("Drain error = %v, want max tool calls budget error", err)
+	}
+	if runCount != 0 {
+		t.Fatalf("tool handler ran %d times, want 0", runCount)
+	}
+}
+
+func TestQueryBudgetStopsAfterTokenUsage(t *testing.T) {
+	fake := &fakeModel{turns: [][]model.StreamEvent{{{
+		Kind: model.StreamText,
+		Text: "done",
+	}, {
+		Kind:  model.StreamUsage,
+		Usage: &model.Usage{InputTokens: 6, OutputTokens: 5, TotalTokens: 11},
+	}}}}
+
+	events, err := Query(context.Background(), "start", Options{
+		Model:  fake,
+		Budget: budget.Policy{MaxTotalTokens: 10},
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+	if _, err := Drain(events); err == nil || !strings.Contains(err.Error(), "max total tokens") {
+		t.Fatalf("Drain error = %v, want max total tokens budget error", err)
+	}
+	if len(fake.requests) != 1 {
+		t.Fatalf("model requests = %d, want 1", len(fake.requests))
 	}
 }
 

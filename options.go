@@ -3,6 +3,7 @@ package memaxagent
 import (
 	"time"
 
+	"github.com/MemaxLabs/memax-go-agent-sdk/budget"
 	"github.com/MemaxLabs/memax-go-agent-sdk/contextwindow"
 	"github.com/MemaxLabs/memax-go-agent-sdk/hook"
 	"github.com/MemaxLabs/memax-go-agent-sdk/identity"
@@ -31,6 +32,7 @@ type Options struct {
 	Context       contextwindow.Policy
 	ContextRetry  contextwindow.Policy
 	ToolSelector  tool.Selector
+	Budget        budget.Governor
 	ResultStore   resultstore.Store
 	Output        output.Contract
 	Tracer        telemetry.Tracer
@@ -80,6 +82,9 @@ func (o Options) Merge(override Options) Options {
 	}
 	if override.ToolSelector != nil {
 		o.ToolSelector = override.ToolSelector
+	}
+	if override.Budget != nil {
+		o.Budget = override.Budget
 	}
 	if override.ResultStore != nil {
 		o.ResultStore = override.ResultStore

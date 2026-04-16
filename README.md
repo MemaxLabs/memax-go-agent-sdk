@@ -29,6 +29,7 @@ Implemented foundation:
 - opt-in memory search/save/delete tools for host-owned durable memory backends
 - structured final-output contracts with JSON Schema validation and retry
 - provider-neutral model usage events and token telemetry
+- opt-in run budget governors for turns, model calls, tool calls, tokens, and duration
 - deterministic autonomy eval harness for scripted orchestration scenarios
 - skill discovery tools
 - OpenAI Responses API model adapter
@@ -318,6 +319,27 @@ delegate, err := subagents.NewTool(subagents.Config{
     }},
 })
 ```
+
+To bound an agent run across model calls, tool calls, tokens, turns, and wall
+time, set `Options.Budget`:
+
+```go
+events, err := memaxagent.Query(ctx, "Inspect the workspace.", memaxagent.Options{
+    Model: client,
+    Tools: registry,
+    Budget: budget.Policy{
+        MaxModelCalls: 8,
+        MaxToolCalls:  32,
+        MaxTotalTokens: 40_000,
+        MaxDuration:   2 * time.Minute,
+    },
+})
+```
+
+Budgets are checked at stable lifecycle boundaries: before a model call, after
+reported model usage, before a tool batch, and at turn start. Custom governors
+can implement `budget.Governor` for tenant-specific quotas or hosted cost
+systems.
 
 To regression-test agent behavior without a live model, use `agenteval` with a
 scripted model and assertions:

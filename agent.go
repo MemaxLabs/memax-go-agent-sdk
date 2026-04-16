@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MemaxLabs/memax-go-agent-sdk/budget"
 	"github.com/MemaxLabs/memax-go-agent-sdk/hook"
 	"github.com/MemaxLabs/memax-go-agent-sdk/memory"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
@@ -234,6 +235,7 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 	// cannot consume unbounded turns by repeatedly producing invalid finals.
 	outputRetries := 0
 	var totalUsage model.Usage
+	budgetState := budgetTracker{startedAt: time.Now().UTC()}
 	for turn := 1; turn <= opts.MaxTurns; turn++ {
 		turnStarted := time.Now()
 		turnCtx, turnSpan := opts.Tracer.Start(ctx, "memaxagent.turn",
@@ -244,6 +246,7 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 			telemetry.String("memax.session_id", sessionID),
 			telemetry.Int("memax.turn", turn),
 		)
+		budgetState.turns = turn
 		shouldStop := false
 		func() {
 			defer func() {
@@ -253,6 +256,14 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 				)
 				turnSpan.End()
 			}()
+
+			if err := checkBudget(turnCtx, opts, sessionID, turn, budgetState.snapshot()); err != nil {
+				turnSpan.RecordError(err)
+				emitError(turnCtx, emit, sessionID, turn, err)
+				_ = finish(turn, hook.StopReasonBudget, err)
+				shouldStop = true
+				return
+			}
 
 			messages, err := opts.Sessions.Messages(turnCtx, sessionID)
 			if err != nil {
@@ -300,6 +311,14 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 			}
 			turnSpan.Set(telemetry.Int("memax.model.messages", len(messages)))
 
+			if err := checkBudget(turnCtx, opts, sessionID, turn, budgetState.withModelCalls(1)); err != nil {
+				turnSpan.RecordError(err)
+				emitError(turnCtx, emit, sessionID, turn, err)
+				_ = finish(turn, hook.StopReasonBudget, err)
+				shouldStop = true
+				return
+			}
+			budgetState.modelCalls++
 			if !emit(newEvent(EventModelRequest, sessionID, turn)) {
 				shouldStop = true
 				return
@@ -378,6 +397,17 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 						toolSpecs = retryTools
 						promptResult = retryPrompt
 						modelSpan.Set(telemetry.Int("memax.model.retry_tools", len(toolSpecs)))
+						if budgetErr := checkBudget(modelCtx, opts, sessionID, turn, budgetState.withModelCalls(1)); budgetErr != nil {
+							err = budgetErr
+							modelSpan.RecordError(err)
+							modelSpan.End()
+							turnSpan.RecordError(err)
+							emitError(turnCtx, emit, sessionID, turn, err)
+							_ = finish(turn, hook.StopReasonBudget, err)
+							shouldStop = true
+							return
+						}
+						budgetState.modelCalls++
 						stream, err = opts.Model.Stream(modelCtx, model.Request{
 							SessionID:          sessionID,
 							Messages:           messages,
@@ -413,6 +443,7 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 
 			assistant, uses, usage, err := collectAssistant(modelCtx, emit, stream, sessionID, turn, opts.Meter)
 			totalUsage = totalUsage.Add(usage)
+			budgetState.usage = totalUsage
 			if closeErr := stream.Close(); closeErr != nil && err == nil {
 				err = closeErr
 			}
@@ -444,6 +475,13 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 				telemetry.Int("memax.model.tool_uses", len(uses)),
 				telemetry.Int("memax.model.assistant_blocks", len(assistant.Content)),
 			)
+			if err := checkBudget(turnCtx, opts, sessionID, turn, budgetState.snapshot()); err != nil {
+				turnSpan.RecordError(err)
+				emitError(turnCtx, emit, sessionID, turn, err)
+				_ = finish(turn, hook.StopReasonBudget, err)
+				shouldStop = true
+				return
+			}
 			if len(assistant.Content) > 0 {
 				if err := opts.Sessions.Append(turnCtx, sessionID, assistant); err != nil {
 					err = fmt.Errorf("append assistant message: %w", err)
@@ -497,6 +535,14 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 				return
 			}
 
+			if err := checkBudget(turnCtx, opts, sessionID, turn, budgetState.withToolCalls(len(uses))); err != nil {
+				turnSpan.RecordError(err)
+				emitError(turnCtx, emit, sessionID, turn, err)
+				_ = finish(turn, hook.StopReasonBudget, err)
+				shouldStop = true
+				return
+			}
+			budgetState.toolCalls += len(uses)
 			results := executor.Run(turnCtx, uses)
 			for result := range results {
 				event := newEvent(EventToolResult, sessionID, turn)
@@ -681,6 +727,62 @@ func memoryQuery(messages []model.Message) string {
 		b.WriteString(selected[i])
 	}
 	return limitStringBytes(b.String(), maxMemoryQueryBytes)
+}
+
+type budgetTracker struct {
+	startedAt  time.Time
+	turns      int
+	modelCalls int
+	toolCalls  int
+	usage      model.Usage
+}
+
+func (t budgetTracker) snapshot() budget.Snapshot {
+	now := time.Now().UTC()
+	return budget.Snapshot{
+		StartedAt:  t.startedAt,
+		Now:        now,
+		Elapsed:    now.Sub(t.startedAt),
+		Turns:      t.turns,
+		ModelCalls: t.modelCalls,
+		ToolCalls:  t.toolCalls,
+		Usage:      t.usage,
+	}
+}
+
+func (t budgetTracker) withModelCalls(delta int) budget.Snapshot {
+	t.modelCalls += delta
+	return t.snapshot()
+}
+
+func (t budgetTracker) withToolCalls(delta int) budget.Snapshot {
+	t.toolCalls += delta
+	return t.snapshot()
+}
+
+func checkBudget(ctx context.Context, opts Options, sessionID string, turn int, snapshot budget.Snapshot) error {
+	if opts.Budget == nil {
+		return nil
+	}
+	decision := opts.Budget.Check(ctx, snapshot)
+	if decision.Allow {
+		return nil
+	}
+	reason := strings.TrimSpace(decision.Reason)
+	if reason == "" {
+		reason = "budget exceeded"
+	}
+	opts.Meter.Add(ctx, "memax.budget.exceeded", 1,
+		telemetry.String("memax.session_id", sessionID),
+		telemetry.Int("memax.turn", turn),
+		telemetry.Int("memax.budget.turns", snapshot.Turns),
+		telemetry.Int("memax.budget.model_calls", snapshot.ModelCalls),
+		telemetry.Int("memax.budget.tool_calls", snapshot.ToolCalls),
+		telemetry.Int("memax.budget.input_tokens", snapshot.Usage.InputTokens),
+		telemetry.Int("memax.budget.output_tokens", snapshot.Usage.OutputTokens),
+		telemetry.Int("memax.budget.total_tokens", snapshot.Usage.TotalTokens),
+	)
+	return errors.New(reason)
 }
 
 func limitStringBytes(value string, max int) string {

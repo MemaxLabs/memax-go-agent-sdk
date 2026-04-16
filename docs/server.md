@@ -31,6 +31,8 @@ forward events to the socket as they arrive.
 - Set `Options.MaxRunDuration`.
 - Set `Options.MaxTurns`.
 - Set `Options.MaxToolConcurrency`.
+- Set `Options.Budget` when a request needs explicit caps on model calls,
+  tool calls, token usage, or elapsed runtime.
 - Use request-scoped contexts, for example `context.WithTimeout(r.Context(), ...)`.
 - Use provider clients and HTTP clients with timeouts. The built-in OpenAI and
   Anthropic adapters provide `WithTimeout` and `WithHTTPClient` options.

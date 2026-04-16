@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MemaxLabs/memax-go-agent-sdk/budget"
 	"github.com/MemaxLabs/memax-go-agent-sdk/identity"
 	"github.com/MemaxLabs/memax-go-agent-sdk/memory"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
@@ -20,6 +21,7 @@ func TestOptionsMergeAppliesOverridesAndCopiesSlices(t *testing.T) {
 		Tools:              tool.NewRegistry(),
 		Sessions:           session.NewMemoryStore(),
 		Output:             output.Contract{Schema: map[string]any{"type": "string"}},
+		Budget:             budget.Policy{MaxTurns: 1},
 		Identity:           identity.Identity{Name: "base"},
 		Memories:           []memory.Memory{{Name: "base"}},
 		Skills:             []skill.Skill{{Name: "base"}},
@@ -34,6 +36,7 @@ func TestOptionsMergeAppliesOverridesAndCopiesSlices(t *testing.T) {
 	override := Options{
 		Model:              &staticClient{id: "override"},
 		Output:             output.Contract{MaxRetries: -1},
+		Budget:             budget.Policy{MaxModelCalls: 1},
 		Identity:           identity.Identity{Name: "override"},
 		Memories:           overrideMemories,
 		Skills:             overrideSkills,
@@ -53,6 +56,9 @@ func TestOptionsMergeAppliesOverridesAndCopiesSlices(t *testing.T) {
 	}
 	if got.Output.MaxRetries != -1 {
 		t.Fatalf("Output = %#v, want override", got.Output)
+	}
+	if decision := got.Budget.Check(context.Background(), budget.Snapshot{ModelCalls: 2}); decision.Allow {
+		t.Fatalf("Budget override not applied: %#v", decision)
 	}
 	if got.Identity.Name != "override" {
 		t.Fatalf("Identity = %#v, want override", got.Identity)
