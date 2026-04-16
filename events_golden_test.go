@@ -7,8 +7,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/MemaxLabs/memax-go-agent-sdk/budget"
+	"github.com/MemaxLabs/memax-go-agent-sdk/contextwindow"
+	"github.com/MemaxLabs/memax-go-agent-sdk/memory"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
+	"github.com/MemaxLabs/memax-go-agent-sdk/skill"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
+	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/skilltools"
 )
 
 func TestQueryEventStreamGolden(t *testing.T) {
@@ -61,14 +66,205 @@ func TestQueryEventStreamGolden(t *testing.T) {
 	}
 }
 
+func TestQueryObservabilityEventStreamGolden(t *testing.T) {
+	skills := skill.StaticSource{{
+		Name:        "database-review",
+		Description: "SQL migration review.",
+		AlwaysOn:    true,
+		Content:     "Check rollback safety before approving database changes.",
+		Resources: []skill.ResourceRef{{
+			Name:        "migration-checklist",
+			Description: "Migration checklist.",
+			Path:        "resources/migration-checklist.md",
+		}},
+	}}
+	resources := skill.StaticResourceSource{{
+		SkillName: "database-review",
+		Name:      "migration-checklist",
+		Path:      "resources/migration-checklist.md",
+		Content:   "Confirm rollback plan and lock timeout.",
+	}}
+	searchTool, err := skilltools.NewSearchTool(skilltools.Config{Source: skills})
+	if err != nil {
+		t.Fatalf("NewSearchTool returned error: %v", err)
+	}
+	events, err := Query(context.Background(), "review SQL migration", Options{
+		Model: &fakeModel{turns: [][]model.StreamEvent{
+			{
+				{
+					Kind: model.StreamToolUseStart,
+					ToolUse: model.ToolUse{
+						ID:   "search-1",
+						Name: "search_skills",
+					},
+				},
+				{
+					Kind:         model.StreamToolUseDelta,
+					ToolUse:      model.ToolUse{ID: "search-1", Name: "search_skills"},
+					ToolUseDelta: `{"query":"SQL`,
+				},
+				{
+					Kind:         model.StreamToolUseDelta,
+					ToolUse:      model.ToolUse{ID: "search-1", Name: "search_skills"},
+					ToolUseDelta: ` migration","limit":1}`,
+				},
+				{
+					Kind: model.StreamToolUse,
+					ToolUse: model.ToolUse{
+						ID:    "search-1",
+						Name:  "search_skills",
+						Input: json.RawMessage(`{"query":"SQL migration","limit":1}`),
+					},
+				},
+			},
+			{{
+				Kind: model.StreamToolUse,
+				ToolUse: model.ToolUse{
+					ID:    "skill-1",
+					Name:  skill.LoadToolName,
+					Input: json.RawMessage(`{"name":"database-review"}`),
+				},
+			}},
+			{{
+				Kind: model.StreamToolUse,
+				ToolUse: model.ToolUse{
+					ID:    "resource-1",
+					Name:  skill.ResourceToolName,
+					Input: json.RawMessage(`{"skill_name":"database-review","resource":"migration-checklist"}`),
+				},
+			}},
+			{
+				{
+					Kind: model.StreamUsage,
+					Usage: &model.Usage{
+						InputTokens:  7,
+						OutputTokens: 5,
+						TotalTokens:  12,
+						Provider:     "scripted",
+						Model:        "golden",
+					},
+				},
+				{Kind: model.StreamText, Text: "rollback notes added"},
+			},
+		}},
+		Tools:               tool.NewRegistry(searchTool),
+		Context:             &oneShotCompactionPolicy{},
+		SkillSource:         skills,
+		SkillResourceSource: resources,
+		SkillDisclosure:     skill.DisclosureProgressive,
+		MemoryDistiller: memory.StaticDistiller{{
+			Memory: memory.Memory{
+				Name:    "migration-rollback",
+				Scope:   memory.ScopeProject,
+				Content: "Migration reviews require rollback notes.",
+			},
+			Reason:     "final answer confirmed rollback notes",
+			Confidence: 0.9,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+
+	var got []goldenEvent
+	for event := range events {
+		if event.Kind == EventError {
+			t.Fatalf("query error: %v", event.Err)
+		}
+		got = append(got, normalizeGoldenEvent(event))
+	}
+
+	data, err := json.MarshalIndent(got, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal golden events: %v", err)
+	}
+	data = append(data, '\n')
+
+	want, err := os.ReadFile("testdata/golden/observability_event_stream.json")
+	if err != nil {
+		t.Fatalf("read golden file: %v", err)
+	}
+	if strings.TrimSpace(string(data)) != strings.TrimSpace(string(want)) {
+		t.Fatalf("observability event stream golden mismatch\n got:\n%s\nwant:\n%s", data, want)
+	}
+}
+
+func TestQueryBudgetDenialEventStreamGolden(t *testing.T) {
+	registry := tool.NewRegistry(tool.Definition{
+		ToolSpec: model.ToolSpec{Name: "read", ReadOnly: true, ConcurrencySafe: true},
+		Handler: func(context.Context, tool.Call) (model.ToolResult, error) {
+			return model.ToolResult{Content: "content"}, nil
+		},
+	})
+	events, err := Query(context.Background(), "read once", Options{
+		Model: &fakeModel{turns: [][]model.StreamEvent{
+			{{
+				Kind: model.StreamToolUse,
+				ToolUse: model.ToolUse{
+					ID:    "tool-1",
+					Name:  "read",
+					Input: json.RawMessage(`{}`),
+				},
+			}},
+		}},
+		Tools:  registry,
+		Budget: budget.Policy{MaxModelCalls: 1},
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+
+	var got []goldenEvent
+	for event := range events {
+		got = append(got, normalizeGoldenEvent(event))
+	}
+
+	data, err := json.MarshalIndent(got, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal golden events: %v", err)
+	}
+	data = append(data, '\n')
+
+	want, err := os.ReadFile("testdata/golden/budget_denial_event_stream.json")
+	if err != nil {
+		t.Fatalf("read golden file: %v", err)
+	}
+	if strings.TrimSpace(string(data)) != strings.TrimSpace(string(want)) {
+		t.Fatalf("budget denial event stream golden mismatch\n got:\n%s\nwant:\n%s", data, want)
+	}
+}
+
 type goldenEvent struct {
-	Kind       EventKind `json:"kind"`
-	Turn       int       `json:"turn,omitempty"`
-	Text       string    `json:"text,omitempty"`
-	ToolID     string    `json:"tool_id,omitempty"`
-	ToolName   string    `json:"tool_name,omitempty"`
-	ToolResult string    `json:"tool_result,omitempty"`
-	Result     string    `json:"result,omitempty"`
+	Kind                EventKind `json:"kind"`
+	Turn                int       `json:"turn,omitempty"`
+	Text                string    `json:"text,omitempty"`
+	ToolID              string    `json:"tool_id,omitempty"`
+	ToolName            string    `json:"tool_name,omitempty"`
+	ToolUseDelta        string    `json:"tool_use_delta,omitempty"`
+	ToolResult          string    `json:"tool_result,omitempty"`
+	UsageInputTokens    int       `json:"usage_input_tokens,omitempty"`
+	UsageOutputTokens   int       `json:"usage_output_tokens,omitempty"`
+	UsageTotalTokens    int       `json:"usage_total_tokens,omitempty"`
+	UsageProvider       string    `json:"usage_provider,omitempty"`
+	UsageModel          string    `json:"usage_model,omitempty"`
+	ContextPolicy       string    `json:"context_policy,omitempty"`
+	ContextReason       string    `json:"context_reason,omitempty"`
+	ContextOriginal     int       `json:"context_original,omitempty"`
+	ContextSent         int       `json:"context_sent,omitempty"`
+	ContextSummaryHash  string    `json:"context_summary_hash,omitempty"`
+	SkillAction         string    `json:"skill_action,omitempty"`
+	SkillName           string    `json:"skill_name,omitempty"`
+	SkillResource       string    `json:"skill_resource,omitempty"`
+	SkillQuery          string    `json:"skill_query,omitempty"`
+	SkillSelectedNames  []string  `json:"skill_selected_names,omitempty"`
+	SkillSelected       int       `json:"skill_selected,omitempty"`
+	SkillOmitted        int       `json:"skill_omitted,omitempty"`
+	SkillMatches        int       `json:"skill_matches,omitempty"`
+	SkillMetadataOnly   bool      `json:"skill_metadata_only,omitempty"`
+	SkillPromptBytesSet bool      `json:"skill_prompt_bytes_set,omitempty"`
+	MemoryCandidates    []string  `json:"memory_candidates,omitempty"`
+	Result              string    `json:"result,omitempty"`
+	Error               string    `json:"error,omitempty"`
 }
 
 func normalizeGoldenEvent(event Event) goldenEvent {
@@ -78,19 +274,97 @@ func normalizeGoldenEvent(event Event) goldenEvent {
 		if event.Message != nil {
 			out.Text = event.Message.PlainText()
 		}
-	case EventToolUse:
+	case EventToolUseStart, EventToolUseDelta, EventToolUse:
 		if event.ToolUse != nil {
 			out.ToolID = event.ToolUse.ID
 			out.ToolName = event.ToolUse.Name
 		}
+		out.ToolUseDelta = event.ToolUseDelta
 	case EventToolResult:
 		if event.ToolResult != nil {
 			out.ToolID = event.ToolResult.ToolUseID
 			out.ToolName = event.ToolResult.Name
 			out.ToolResult = event.ToolResult.Content
 		}
+	case EventUsage:
+		if event.Usage != nil {
+			out.UsageInputTokens = event.Usage.InputTokens
+			out.UsageOutputTokens = event.Usage.OutputTokens
+			out.UsageTotalTokens = event.Usage.TotalTokens
+			out.UsageProvider = event.Usage.Provider
+			out.UsageModel = event.Usage.Model
+		}
+	case EventContextCompacted:
+		if event.Compaction != nil {
+			out.ContextPolicy = event.Compaction.Policy
+			out.ContextReason = string(event.Compaction.Reason)
+			out.ContextOriginal = event.Compaction.OriginalMessages
+			out.ContextSent = event.Compaction.SentMessages
+			out.ContextSummaryHash = event.Compaction.SummaryHash
+		}
+	case EventSkillDiscovery, EventSkillSearch, EventSkillLoaded, EventSkillResourceLoaded:
+		if event.Skill != nil {
+			out.SkillAction = event.Skill.Action
+			out.SkillName = event.Skill.SkillName
+			out.SkillResource = event.Skill.ResourceName
+			out.SkillQuery = event.Skill.Query
+			out.SkillSelectedNames = append([]string(nil), event.Skill.SelectedSkills...)
+			out.SkillSelected = event.Skill.Selected
+			out.SkillOmitted = event.Skill.Omitted
+			out.SkillMatches = event.Skill.Matches
+			out.SkillMetadataOnly = event.Skill.MetadataOnly
+			out.SkillPromptBytesSet = event.Skill.PromptBytes > 0
+		}
+	case EventMemoryCandidates:
+		if event.Memory != nil {
+			for _, candidate := range event.Memory.Candidates {
+				out.MemoryCandidates = append(out.MemoryCandidates, candidate.Memory.Name)
+			}
+		}
 	case EventResult:
 		out.Result = event.Result
+		if event.Usage != nil {
+			out.UsageInputTokens = event.Usage.InputTokens
+			out.UsageOutputTokens = event.Usage.OutputTokens
+			out.UsageTotalTokens = event.Usage.TotalTokens
+			out.UsageProvider = event.Usage.Provider
+			out.UsageModel = event.Usage.Model
+		}
+	case EventError:
+		if event.Err != nil {
+			out.Error = event.Err.Error()
+		}
 	}
 	return out
+}
+
+type oneShotCompactionPolicy struct {
+	emitted bool
+}
+
+func (p *oneShotCompactionPolicy) Apply(ctx context.Context, messages []model.Message) ([]model.Message, error) {
+	result, err := p.ApplyWithResult(ctx, messages)
+	return result.Messages, err
+}
+
+func (p *oneShotCompactionPolicy) ApplyWithResult(ctx context.Context, messages []model.Message) (contextwindow.PolicyResult, error) {
+	if err := ctx.Err(); err != nil {
+		return contextwindow.PolicyResult{}, err
+	}
+	out := model.CloneMessages(messages)
+	if p.emitted {
+		return contextwindow.PolicyResult{Messages: out}, nil
+	}
+	p.emitted = true
+	return contextwindow.PolicyResult{
+		Messages: out,
+		Compaction: &contextwindow.CompactionRecord{
+			Policy:           "observability_test",
+			Reason:           contextwindow.CompactionReasonBudget,
+			OriginalMessages: len(messages),
+			SentMessages:     len(out),
+			SummaryHash:      "summary-hash",
+			SummaryPreview:   "summary",
+		},
+	}, nil
 }

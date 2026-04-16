@@ -1,0 +1,185 @@
+[
+  {
+    "kind": "session_started"
+  },
+  {
+    "kind": "context_compacted",
+    "turn": 1,
+    "context_policy": "observability_test",
+    "context_reason": "budget",
+    "context_original": 1,
+    "context_sent": 1,
+    "context_summary_hash": "summary-hash"
+  },
+  {
+    "kind": "model_request",
+    "turn": 1
+  },
+  {
+    "kind": "skill_discovery",
+    "turn": 1,
+    "skill_action": "discovery",
+    "skill_selected_names": [
+      "database-review"
+    ],
+    "skill_selected": 1,
+    "skill_metadata_only": true,
+    "skill_prompt_bytes_set": true
+  },
+  {
+    "kind": "tool_use_start",
+    "turn": 1,
+    "tool_id": "search-1",
+    "tool_name": "search_skills"
+  },
+  {
+    "kind": "tool_use_delta",
+    "turn": 1,
+    "tool_id": "search-1",
+    "tool_name": "search_skills",
+    "tool_use_delta": "{\"query\":\"SQL"
+  },
+  {
+    "kind": "tool_use_delta",
+    "turn": 1,
+    "tool_id": "search-1",
+    "tool_name": "search_skills",
+    "tool_use_delta": " migration\",\"limit\":1}"
+  },
+  {
+    "kind": "tool_use",
+    "turn": 1,
+    "tool_id": "search-1",
+    "tool_name": "search_skills"
+  },
+  {
+    "kind": "tool_result",
+    "turn": 1,
+    "tool_id": "search-1",
+    "tool_name": "search_skills",
+    "tool_result": "- database-review: SQL migration review.\n  Resources:\n    - migration-checklist: Migration checklist. (path: resources/migration-checklist.md)"
+  },
+  {
+    "kind": "skill_search",
+    "turn": 1,
+    "skill_action": "search",
+    "skill_query": "SQL migration",
+    "skill_matches": 1,
+    "skill_metadata_only": true
+  },
+  {
+    "kind": "model_request",
+    "turn": 2
+  },
+  {
+    "kind": "skill_discovery",
+    "turn": 2,
+    "skill_action": "discovery",
+    "skill_selected_names": [
+      "database-review"
+    ],
+    "skill_selected": 1,
+    "skill_metadata_only": true,
+    "skill_prompt_bytes_set": true
+  },
+  {
+    "kind": "tool_use",
+    "turn": 2,
+    "tool_id": "skill-1",
+    "tool_name": "load_skill"
+  },
+  {
+    "kind": "tool_result",
+    "turn": 2,
+    "tool_id": "skill-1",
+    "tool_name": "load_skill",
+    "tool_result": "Skill: database-review\nDescription: SQL migration review.\nResources: use `read_skill_resource` with skill_name \"database-review\" and the resource name or path when supporting material is needed.\n- migration-checklist: Migration checklist. (path: resources/migration-checklist.md)\n\nInstructions:\nCheck rollback safety before approving database changes."
+  },
+  {
+    "kind": "skill_loaded",
+    "turn": 2,
+    "skill_action": "load",
+    "skill_name": "database-review"
+  },
+  {
+    "kind": "model_request",
+    "turn": 3
+  },
+  {
+    "kind": "skill_discovery",
+    "turn": 3,
+    "skill_action": "discovery",
+    "skill_selected_names": [
+      "database-review"
+    ],
+    "skill_selected": 1,
+    "skill_metadata_only": true,
+    "skill_prompt_bytes_set": true
+  },
+  {
+    "kind": "tool_use",
+    "turn": 3,
+    "tool_id": "resource-1",
+    "tool_name": "read_skill_resource"
+  },
+  {
+    "kind": "tool_result",
+    "turn": 3,
+    "tool_id": "resource-1",
+    "tool_name": "read_skill_resource",
+    "tool_result": "Skill resource: migration-checklist\nSkill: database-review\nDescription: Migration checklist.\nPath: resources/migration-checklist.md\nBytes: 39\n\nContent:\nConfirm rollback plan and lock timeout."
+  },
+  {
+    "kind": "skill_resource_loaded",
+    "turn": 3,
+    "skill_action": "resource_load",
+    "skill_name": "database-review",
+    "skill_resource": "migration-checklist"
+  },
+  {
+    "kind": "model_request",
+    "turn": 4
+  },
+  {
+    "kind": "skill_discovery",
+    "turn": 4,
+    "skill_action": "discovery",
+    "skill_selected_names": [
+      "database-review"
+    ],
+    "skill_selected": 1,
+    "skill_metadata_only": true,
+    "skill_prompt_bytes_set": true
+  },
+  {
+    "kind": "usage",
+    "turn": 4,
+    "usage_input_tokens": 7,
+    "usage_output_tokens": 5,
+    "usage_total_tokens": 12,
+    "usage_provider": "scripted",
+    "usage_model": "golden"
+  },
+  {
+    "kind": "assistant",
+    "turn": 4,
+    "text": "rollback notes added"
+  },
+  {
+    "kind": "memory_candidates",
+    "turn": 4,
+    "memory_candidates": [
+      "migration-rollback"
+    ]
+  },
+  {
+    "kind": "result",
+    "turn": 4,
+    "usage_input_tokens": 7,
+    "usage_output_tokens": 5,
+    "usage_total_tokens": 12,
+    "usage_provider": "scripted",
+    "usage_model": "golden",
+    "result": "rollback notes added"
+  }
+]

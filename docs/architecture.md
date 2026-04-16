@@ -146,6 +146,17 @@ duplicate keys. A parent run's usage covers the model calls made directly by
 that run; subagent usage is available on the child run's events and tool-result
 metadata can carry child session IDs for host-side rollups.
 
+## Observability
+
+`Query` exposes ordered lifecycle events for session start, context application,
+compaction provenance, model requests, streaming assistant text, tool-use
+starts/deltas/completions, tool results, usage, skill discovery/search/load,
+memory candidates, terminal results, and errors. Events are the SDK's
+application-facing observability contract; telemetry spans and metrics are the
+aggregate monitoring layer. The detailed event ordering, action-specific event
+payloads, metric names, and golden-test coverage are documented in
+[observability.md](observability.md).
+
 ## Agent Evals
 
 `agenteval` is an optional deterministic evaluation package for SDK embedders

@@ -1,0 +1,27 @@
+[
+  {
+    "kind": "session_started"
+  },
+  {
+    "kind": "model_request",
+    "turn": 1
+  },
+  {
+    "kind": "tool_use",
+    "turn": 1,
+    "tool_id": "tool-1",
+    "tool_name": "read"
+  },
+  {
+    "kind": "tool_result",
+    "turn": 1,
+    "tool_id": "tool-1",
+    "tool_name": "read",
+    "tool_result": "content"
+  },
+  {
+    "kind": "error",
+    "turn": 2,
+    "error": "budget exceeded: max model calls (2 \u003e 1)"
+  }
+]

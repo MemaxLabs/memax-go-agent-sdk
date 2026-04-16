@@ -169,6 +169,11 @@ for event := range events {
 }
 ```
 
+The full event ordering and telemetry contract is documented in
+[docs/observability.md](docs/observability.md), including progressive skill
+events, memory candidate events, context compaction provenance, streaming
+tool-use lifecycle events, and budget-denial behavior.
+
 To persist sessions in SQLite, use `session/sqlitestore` with any `database/sql` SQLite driver:
 
 ```go

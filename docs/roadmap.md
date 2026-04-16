@@ -38,7 +38,7 @@
 
 - Provide clear examples for server embedding, CI embedding, and local CLI embedding. Initial deterministic examples cover memory tools, session resume, CI embedding, advanced toolkit composition, and HTTP server embedding. Live OpenAI and Anthropic examples are available behind explicit environment variables.
 - Publish stable API docs.
-- Add golden tests for event streams and transcript compatibility. Initial golden coverage protects the public query event sequence for a tool-using run.
+- Add golden tests for event streams and transcript compatibility. Golden coverage protects the public query event sequence for a tool-using run, richer observability events, and budget-denial ordering.
 - Add adapters for common virtual filesystem and memory store implementations. Initial file workspace adapters cover in-memory maps, root-confined host directories, and read-only `io/fs.FS` sources. Initial durable session adapters cover memory, JSONL, and SQLite.
 
 ## Phase 5: Intelligence Layer
