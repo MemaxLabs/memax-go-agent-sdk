@@ -167,6 +167,59 @@ data: {"type":"message_stop"}
 	}
 }
 
+func TestClientUsesBaseURL(t *testing.T) {
+	var gotPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(`event: message_stop
+data: {"type":"message_stop"}
+
+`))
+	}))
+	defer server.Close()
+
+	stream, err := (&Client{
+		APIKey:  "test-key",
+		Model:   "test-model",
+		BaseURL: server.URL + "/v1/",
+	}).Stream(context.Background(), model.Request{})
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if gotPath != "/v1/messages" {
+		t.Fatalf("path = %q, want /v1/messages", gotPath)
+	}
+}
+
+func TestClientEndpointOverridesBaseURL(t *testing.T) {
+	if got := (&Client{Endpoint: "https://endpoint.test/messages", BaseURL: "https://base.test/v1"}).endpoint(); got != "https://endpoint.test/messages" {
+		t.Fatalf("endpoint = %q, want explicit endpoint", got)
+	}
+}
+
+func TestNewFromEnvUsesBaseURL(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "env-key")
+	t.Setenv("ANTHROPIC_MODEL", "env-model")
+	t.Setenv("ANTHROPIC_BASE_URL", "https://gateway.test/v1")
+
+	client := NewFromEnv("")
+	if client.APIKey != "env-key" {
+		t.Fatalf("APIKey = %q, want env-key", client.APIKey)
+	}
+	if client.Model != "env-model" {
+		t.Fatalf("Model = %q, want env-model", client.Model)
+	}
+	if client.BaseURL != "https://gateway.test/v1" {
+		t.Fatalf("BaseURL = %q, want env value", client.BaseURL)
+	}
+	if got := client.endpoint(); got != "https://gateway.test/v1/messages" {
+		t.Fatalf("endpoint = %q, want gateway messages endpoint", got)
+	}
+}
+
 func TestAPIErrorMarksContextWindowExceeded(t *testing.T) {
 	err := &apiError{Message: "prompt is too long"}
 	if !errors.Is(err, model.ErrContextWindowExceeded) {

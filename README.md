@@ -89,22 +89,34 @@ AGENT_PROVIDER=anthropic ANTHROPIC_API_KEY=... ANTHROPIC_MODEL=... go run ./exam
 To use the OpenAI adapter:
 
 ```go
-client := openai.New(os.Getenv("OPENAI_API_KEY"), os.Getenv("OPENAI_MODEL"))
+client := openai.NewFromEnv("")
 events, err := memaxagent.Query(ctx, "Inspect the workspace.", memaxagent.Options{
     Model: client,
     Tools: registry,
 })
 ```
+
+Set `client.BaseURL` or `OPENAI_BASE_URL` to route OpenAI requests through a
+gateway or compatible endpoint. The adapter sends requests to
+`BaseURL + "/responses"`. Set `client.Endpoint` only when you need to override
+the full Responses API endpoint directly; `Endpoint` takes precedence over
+`BaseURL`.
 
 To use the Anthropic adapter:
 
 ```go
-client := anthropic.New(os.Getenv("ANTHROPIC_API_KEY"), os.Getenv("ANTHROPIC_MODEL"))
+client := anthropic.NewFromEnv("")
 events, err := memaxagent.Query(ctx, "Inspect the workspace.", memaxagent.Options{
     Model: client,
     Tools: registry,
 })
 ```
+
+Set `client.BaseURL` or `ANTHROPIC_BASE_URL` to route Anthropic requests through
+a gateway or compatible endpoint. The adapter sends requests to
+`BaseURL + "/messages"`. Set `client.Endpoint` only when you need to override
+the full Messages API endpoint directly; `Endpoint` takes precedence over
+`BaseURL`.
 
 Runnable live-provider examples are available behind explicit environment variables:
 

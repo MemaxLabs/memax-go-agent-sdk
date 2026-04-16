@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"os"
 
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
 	"github.com/MemaxLabs/memax-go-agent-sdk/contextwindow"
@@ -15,9 +14,8 @@ import (
 )
 
 func main() {
-	apiKey := os.Getenv("ANTHROPIC_API_KEY")
-	modelName := os.Getenv("ANTHROPIC_MODEL")
-	if apiKey == "" || modelName == "" {
+	client := anthropic.NewFromEnv("")
+	if client.APIKey == "" || client.Model == "" {
 		log.Fatal("set ANTHROPIC_API_KEY and ANTHROPIC_MODEL")
 	}
 
@@ -28,8 +26,6 @@ func main() {
 		filetools.NewListTool(fs),
 		filetools.NewReadTool(fs),
 	)
-	client := anthropic.New(apiKey, modelName)
-
 	events, err := memaxagent.Query(context.Background(), "Inspect the workspace and summarize what you found.", memaxagent.Options{
 		Model:       client,
 		Tools:       registry,

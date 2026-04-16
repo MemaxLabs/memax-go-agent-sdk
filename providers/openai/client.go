@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 )
@@ -14,8 +15,13 @@ import (
 const defaultEndpoint = "https://api.openai.com/v1/responses"
 
 type Client struct {
-	APIKey          string
-	Model           string
+	APIKey string
+	Model  string
+	// BaseURL is the provider API base URL. When set, requests are sent to
+	// BaseURL + "/responses". Endpoint takes precedence over BaseURL.
+	BaseURL string
+	// Endpoint is the full Responses API endpoint. It is primarily useful for
+	// tests, proxies, and gateways that do not follow the default path layout.
 	Endpoint        string
 	HTTPClient      *http.Client
 	Store           bool
@@ -29,9 +35,15 @@ func New(apiKey string, modelName string) *Client {
 	return &Client{APIKey: apiKey, Model: modelName}
 }
 
-// NewFromEnv creates a client using OPENAI_API_KEY.
+// NewFromEnv creates a client using OPENAI_API_KEY and OPENAI_BASE_URL. If
+// modelName is empty, it uses OPENAI_MODEL.
 func NewFromEnv(modelName string) *Client {
-	return New(os.Getenv("OPENAI_API_KEY"), modelName)
+	if modelName == "" {
+		modelName = os.Getenv("OPENAI_MODEL")
+	}
+	client := New(os.Getenv("OPENAI_API_KEY"), modelName)
+	client.BaseURL = os.Getenv("OPENAI_BASE_URL")
+	return client
 }
 
 // Stream sends a streaming Responses API request and adapts text deltas and
@@ -48,10 +60,7 @@ func (c *Client) Stream(ctx context.Context, req model.Request) (model.Stream, e
 	if err != nil {
 		return nil, fmt.Errorf("openai: encode request: %w", err)
 	}
-	endpoint := c.Endpoint
-	if endpoint == "" {
-		endpoint = defaultEndpoint
-	}
+	endpoint := c.endpoint()
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("openai: create request: %w", err)
@@ -73,6 +82,16 @@ func (c *Client) Stream(ctx context.Context, req model.Request) (model.Stream, e
 		return nil, decodeError(resp)
 	}
 	return newStream(resp.Body, c.Model), nil
+}
+
+func (c *Client) endpoint() string {
+	if c.Endpoint != "" {
+		return c.Endpoint
+	}
+	if c.BaseURL != "" {
+		return strings.TrimRight(c.BaseURL, "/") + "/responses"
+	}
+	return defaultEndpoint
 }
 
 func (c *Client) requestBody(req model.Request) responsesRequest {

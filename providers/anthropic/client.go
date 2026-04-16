@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 )
@@ -18,8 +19,13 @@ const (
 
 // Client adapts the Anthropic Messages API to the SDK model.Client contract.
 type Client struct {
-	APIKey      string
-	Model       string
+	APIKey string
+	Model  string
+	// BaseURL is the provider API base URL. When set, requests are sent to
+	// BaseURL + "/messages". Endpoint takes precedence over BaseURL.
+	BaseURL string
+	// Endpoint is the full Messages API endpoint. It is primarily useful for
+	// tests, proxies, and gateways that do not follow the default path layout.
 	Endpoint    string
 	HTTPClient  *http.Client
 	MaxTokens   int
@@ -32,9 +38,15 @@ func New(apiKey string, modelName string) *Client {
 	return &Client{APIKey: apiKey, Model: modelName}
 }
 
-// NewFromEnv creates a client using ANTHROPIC_API_KEY.
+// NewFromEnv creates a client using ANTHROPIC_API_KEY and ANTHROPIC_BASE_URL.
+// If modelName is empty, it uses ANTHROPIC_MODEL.
 func NewFromEnv(modelName string) *Client {
-	return New(os.Getenv("ANTHROPIC_API_KEY"), modelName)
+	if modelName == "" {
+		modelName = os.Getenv("ANTHROPIC_MODEL")
+	}
+	client := New(os.Getenv("ANTHROPIC_API_KEY"), modelName)
+	client.BaseURL = os.Getenv("ANTHROPIC_BASE_URL")
+	return client
 }
 
 // Stream sends a streaming Messages API request and adapts text deltas and
@@ -51,10 +63,7 @@ func (c *Client) Stream(ctx context.Context, req model.Request) (model.Stream, e
 	if err != nil {
 		return nil, fmt.Errorf("anthropic: encode request: %w", err)
 	}
-	endpoint := c.Endpoint
-	if endpoint == "" {
-		endpoint = defaultEndpoint
-	}
+	endpoint := c.endpoint()
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("anthropic: create request: %w", err)
@@ -77,6 +86,16 @@ func (c *Client) Stream(ctx context.Context, req model.Request) (model.Stream, e
 		return nil, decodeError(resp)
 	}
 	return newStream(resp.Body, c.Model), nil
+}
+
+func (c *Client) endpoint() string {
+	if c.Endpoint != "" {
+		return c.Endpoint
+	}
+	if c.BaseURL != "" {
+		return strings.TrimRight(c.BaseURL, "/") + "/messages"
+	}
+	return defaultEndpoint
 }
 
 func (c *Client) requestBody(req model.Request) messagesRequest {
