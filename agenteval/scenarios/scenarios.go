@@ -45,6 +45,7 @@ func All() []agenteval.Case {
 		ProgressiveSkillSearchRecovery(),
 		ContextPreservesLoadedSkill(),
 		ContextCompactionProvenance(),
+		WorkspacePatchCheckpointRollback(),
 		OpenAIProviderTextAndUsage(),
 		AnthropicProviderTextAndUsage(),
 		OpenAIProviderToolUseRoundTrip(),

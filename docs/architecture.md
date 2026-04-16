@@ -50,6 +50,8 @@ gateway needs a nonstandard route.
 - `session/sqlitestore`: optional SQLite-backed session store for embedded durable agents.
 - `skill`: local skill manifests, loaders, and relevance selection.
 - `checkpoint`: checkpoint metadata, manager interface, and in-memory checkpoint manager.
+- `workspace`: optional source-neutral workspace state, guarded patch, diff,
+  checkpoint, and restore contracts for coding-agent toolkits.
 - `contextwindow`: deterministic message-window policies used before model requests.
 - `telemetry`: minimal SDK tracing and metrics interfaces used by core packages.
 - `otel`: OpenTelemetry adapter for SDK tracing and metrics.
@@ -59,10 +61,12 @@ gateway needs a nonstandard route.
 - `toolkit/subagents`: optional delegation tool for bounded child agents with parent/child session correlation.
 - `toolkit/tasktools`: optional task-state tools for planning, progress tracking, and resumable work summaries.
 - `toolkit/skilltools`: optional skill discovery tools over `skill.Source`.
+- `toolkit/workspacetools`: optional workspace read/list/patch/diff/checkpoint/restore tools over `workspace.Store`.
 
 Expected near-term packages:
 
-- `workspace`: optional virtual filesystem and checkpoint abstractions.
+- production workspace adapters for git-backed, database-backed, and remote
+  sandbox-backed workspaces.
 
 ## Core Loop
 
@@ -125,6 +129,15 @@ own goroutine until it returns. Tool implementations should still honor
 `context.Context` for cleanup.
 
 The optional `toolkit/tasktools` package provides `list_tasks`, `upsert_task`, and `delete_task` over a `Store` interface plus a concurrency-safe memory store. Task state is deliberately tool-owned state rather than implicit model memory; hosts can persist it in a database, scope it to a workspace, or discard it for short-lived runs.
+
+The optional `workspace` package provides a stronger coding-agent workspace
+contract than raw file reads and writes: file listing, guarded atomic patches,
+diffs against checkpoints, checkpoint creation, and restore. The in-memory
+implementation is for tests and examples; production embedders can implement
+the same interface over git worktrees, databases, object snapshots, or remote
+sandboxes. The core agent loop does not import `workspace`; hosts expose
+workspace capabilities only by registering tools such as
+`toolkit/workspacetools`.
 
 The optional `toolkit/checkpointtools` package provides `create_checkpoint`, `list_checkpoints`, `restore_checkpoint`, and `delete_checkpoint` over the `checkpoint.Manager` interface. The SDK's in-memory manager stores checkpoint metadata and is useful for tests; production managers should connect these operations to a virtual workspace, filesystem snapshot service, database branch, or remote sandbox. Checkpoints are not stored inside session transcripts, but checkpoint records carry session and parent-session IDs for correlation.
 

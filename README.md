@@ -193,6 +193,23 @@ events, err := memaxagent.Query(ctx, "Inspect the large report.", memaxagent.Opt
 })
 ```
 
+For coding-agent style edits, use the optional `workspace` package and
+`toolkit/workspacetools`. The core SDK still does not assume real filesystem
+access; hosts provide a `workspace.Store` backed by memory, git, a database, or
+a remote sandbox, then register only the tools they want the model to use:
+
+```go
+ws := workspace.NewMemoryStore(map[string]string{
+    "README.md": "hello",
+})
+workspaceTools, err := workspacetools.NewTools(ws)
+registry := tool.NewRegistry(workspaceTools...)
+```
+
+The standard workspace tools support read/list, guarded atomic patches, diffs,
+checkpoints, and restore through the normal tool, permission, hook, budget, and
+event pipeline.
+
 To require a machine-readable final answer, configure `Options.Output` with a
 JSON Schema. The default prompt builder includes the contract, and `Query`
 validates the final answer. If validation fails, the SDK appends a repair prompt

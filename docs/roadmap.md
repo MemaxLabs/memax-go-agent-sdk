@@ -39,7 +39,7 @@
 - Provide clear examples for server embedding, CI embedding, and local CLI embedding. Initial deterministic examples cover memory tools, session resume, CI embedding, advanced toolkit composition, and HTTP server embedding. Live OpenAI and Anthropic examples are available behind explicit environment variables.
 - Publish stable API docs.
 - Add golden tests for event streams and transcript compatibility. Golden coverage protects the public query event sequence for a tool-using run, richer observability events, and budget-denial ordering.
-- Add adapters for common virtual filesystem and memory store implementations. Initial file workspace adapters cover in-memory maps, root-confined host directories, and read-only `io/fs.FS` sources. Initial durable session adapters cover memory, JSONL, and SQLite.
+- Add adapters for common virtual filesystem and memory store implementations. Initial file workspace adapters cover in-memory maps, root-confined host directories, and read-only `io/fs.FS` sources. Initial durable session adapters cover memory, JSONL, and SQLite. Initial source-neutral `workspace.Store` support covers guarded patches, diffs, checkpoints, restores, toolkit tools, and eval coverage over an in-memory workspace.
 
 ## Phase 5: Intelligence Layer
 
@@ -93,7 +93,7 @@ system prompt.
   exist. Loaded-skill retention across aggressive trimming has initial
   context-policy and eval coverage. Next steps are larger catalog budget tests
   and resource adapters for common hosts.
-- Add more durable stores and workspace adapters, starting with production SQLite examples, object-store checkpoint managers, and git-backed workspace checkpoints.
+- Add more durable stores and workspace adapters, starting with production SQLite examples, object-store checkpoint managers, git-backed workspace checkpoints, remote sandbox workspaces, and richer patch approval events.
 - Add MCP/tool bridge examples while keeping the core tool contract provider-neutral.
 - Add release automation, API compatibility checks, and generated reference docs.
 - Add security hardening guides for filesystem adapters, approval flows, credentials, and multi-tenant server embedding.
