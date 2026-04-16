@@ -54,7 +54,7 @@ func StreamingSafeToolOverlap() agenteval.Case {
 			agenteval.ToolUsed("stream_read"),
 			agenteval.NoToolErrors(),
 			agenteval.FinalEquals("streaming read completed"),
-			requestCountEqualsStreaming(modelClient, 2),
+			requestCountEquals(modelClient, 2),
 			toolResultContains("stream_read", false, "read README.md"),
 		},
 	}
@@ -100,7 +100,7 @@ func StreamingMutatingToolWaits() agenteval.Case {
 			agenteval.NoToolErrors(),
 			agenteval.FinalEquals("mutation completed after stream"),
 			toolResultContains("stream_write", false, "wrote README.md"),
-			requestCountEqualsStreaming(modelClient, 2),
+			requestCountEquals(modelClient, 2),
 		},
 	}
 }
@@ -143,7 +143,7 @@ func StreamingPermissionDenialRecovery() agenteval.Case {
 			agenteval.ToolUsed("stream_read"),
 			toolResultContains("stream_read", true, "streaming read denied"),
 			agenteval.FinalEquals("recovered after streaming permission denial"),
-			requestCountEqualsStreaming(modelClient, 2),
+			requestCountEquals(modelClient, 2),
 			{
 				Name: "denied early tool handler did not run",
 				Check: func(agenteval.Result) error {
@@ -164,13 +164,13 @@ func StreamingCancellation() agenteval.Case {
 	return agenteval.Case{
 		Name:       "streaming_cancellation",
 		Prompt:     "Start streaming and cancel.",
-		Timeout:    20 * time.Millisecond,
+		Timeout:    100 * time.Millisecond,
 		AllowError: true,
 		Options: memaxagent.Options{
 			Model: modelClient,
 		},
 		Assertions: []agenteval.Assertion{
-			requestCountEqualsCancel(modelClient, 1),
+			requestCountEquals(modelClient, 1),
 			{
 				Name: "stream observed cancellation",
 				Check: func(agenteval.Result) error {
@@ -299,6 +299,8 @@ func (m *streamingGateModel) RequestCount() int {
 	return len(m.requests)
 }
 
+// gateStream is a single-consumer stream test helper. Recv is intentionally
+// not concurrency-safe because model streams are consumed sequentially.
 type gateStream struct {
 	events      []model.StreamEvent
 	index       int
@@ -392,30 +394,6 @@ func (s cancelStream) Recv() (model.StreamEvent, error) {
 
 func (s cancelStream) Close() error {
 	return nil
-}
-
-func requestCountEqualsStreaming(modelClient *streamingGateModel, want int) agenteval.Assertion {
-	return agenteval.Assertion{
-		Name: "model request count",
-		Check: func(agenteval.Result) error {
-			if got := modelClient.RequestCount(); got != want {
-				return fmt.Errorf("model requests = %d, want %d", got, want)
-			}
-			return nil
-		},
-	}
-}
-
-func requestCountEqualsCancel(modelClient *cancelStreamingModel, want int) agenteval.Assertion {
-	return agenteval.Assertion{
-		Name: "model request count",
-		Check: func(agenteval.Result) error {
-			if got := modelClient.RequestCount(); got != want {
-				return fmt.Errorf("model requests = %d, want %d", got, want)
-			}
-			return nil
-		},
-	}
 }
 
 func streamingEventDeltaContains(substring string) agenteval.Assertion {

@@ -47,6 +47,13 @@ func (m *ScriptedModel) Requests() []model.Request {
 	return out
 }
 
+// RequestCount returns the number of model requests received so far.
+func (m *ScriptedModel) RequestCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.requests)
+}
+
 type scriptedStream struct {
 	events []model.StreamEvent
 	index  int

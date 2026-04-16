@@ -514,11 +514,15 @@ func toolResultContains(name string, isError bool, substring string) agenteval.A
 	}
 }
 
-func requestCountEquals(modelClient *agenteval.ScriptedModel, want int) agenteval.Assertion {
+type requestCounter interface {
+	RequestCount() int
+}
+
+func requestCountEquals(modelClient requestCounter, want int) agenteval.Assertion {
 	return agenteval.Assertion{
 		Name: "model request count",
 		Check: func(agenteval.Result) error {
-			if got := len(modelClient.Requests()); got != want {
+			if got := modelClient.RequestCount(); got != want {
 				return fmt.Errorf("model requests = %d, want %d", got, want)
 			}
 			return nil
