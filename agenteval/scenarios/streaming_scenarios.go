@@ -157,6 +157,61 @@ func StreamingPermissionDenialRecovery() agenteval.Case {
 	}
 }
 
+// StreamingFailureCancelsEarlyTool returns a single-use scenario where a model
+// stream failure cancels an already-started early safe tool and emits a paired
+// cancellation result before the run error.
+func StreamingFailureCancelsEarlyTool() agenteval.Case {
+	started := make(chan struct{})
+	cancelled := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	modelClient := &streamingErrorModel{
+		started: started,
+		err:     errors.New("stream exploded"),
+		events: []model.StreamEvent{
+			{Kind: model.StreamToolUseStart, ToolUse: model.ToolUse{ID: "tool-1", Name: "stream_read"}},
+			{Kind: model.StreamToolUseDelta, ToolUse: model.ToolUse{ID: "tool-1", Name: "stream_read"}, ToolUseDelta: `{"path":"README.md"}`},
+			{Kind: model.StreamToolUse, ToolUse: model.ToolUse{
+				ID:    "tool-1",
+				Name:  "stream_read",
+				Input: json.RawMessage(`{"path":"README.md"}`),
+			}},
+		},
+	}
+
+	return agenteval.Case{
+		Name:       "streaming_failure_cancels_early_tool",
+		Prompt:     "Start a read, then handle stream failure.",
+		AllowError: true,
+		Cleanup: func() {
+			releaseOnce.Do(func() { close(release) })
+		},
+		Options: memaxagent.Options{
+			Model: modelClient,
+			Tools: tool.NewRegistry(streamBlockingReadTool(started, cancelled, release)),
+		},
+		Assertions: []agenteval.Assertion{
+			agenteval.EventKindEmitted(memaxagent.EventToolUseStart),
+			agenteval.EventKindEmitted(memaxagent.EventToolUseDelta),
+			agenteval.ToolUsed("stream_read"),
+			toolResultContains("stream_read", true, "model streaming stopped"),
+			agenteval.RunErrorContains("stream exploded"),
+			requestCountEquals(modelClient, 1),
+			{
+				Name: "early tool observed cancellation",
+				Check: func(agenteval.Result) error {
+					select {
+					case <-cancelled:
+						return nil
+					case <-time.After(5 * time.Second):
+						return fmt.Errorf("early tool did not observe cancellation")
+					}
+				},
+			},
+		},
+	}
+}
+
 // StreamingCancellation returns a single-use scenario where cancellation while
 // streaming stops the run cleanly instead of hanging.
 func StreamingCancellation() agenteval.Case {
@@ -229,6 +284,29 @@ func streamReadCountingTool(count *atomic.Int32) tool.Tool {
 				return model.ToolResult{}, err
 			}
 			return model.ToolResult{Content: "read " + path}, nil
+		},
+	}
+}
+
+func streamBlockingReadTool(started chan<- struct{}, cancelled chan<- struct{}, release <-chan struct{}) tool.Tool {
+	return tool.Definition{
+		ToolSpec: model.ToolSpec{
+			Name:            "stream_read",
+			Description:     "Read a file during streaming until canceled.",
+			ReadOnly:        true,
+			ConcurrencySafe: true,
+			InputSchema:     stringFieldSchema("path"),
+		},
+		Handler: func(ctx context.Context, call tool.Call) (model.ToolResult, error) {
+			close(started)
+			<-ctx.Done()
+			close(cancelled)
+			<-release
+			path, err := pathInput(call.Use)
+			if err != nil {
+				return model.ToolResult{}, err
+			}
+			return model.ToolResult{Content: "canceled read " + path, IsError: true}, nil
 		},
 	}
 }
@@ -393,6 +471,49 @@ func (s cancelStream) Recv() (model.StreamEvent, error) {
 }
 
 func (s cancelStream) Close() error {
+	return nil
+}
+
+type streamingErrorModel struct {
+	requests atomic.Int32
+	started  <-chan struct{}
+	events   []model.StreamEvent
+	err      error
+}
+
+func (m *streamingErrorModel) Stream(context.Context, model.Request) (model.Stream, error) {
+	m.requests.Add(1)
+	return &streamingErrorStream{events: m.events, started: m.started, err: m.err}, nil
+}
+
+func (m *streamingErrorModel) RequestCount() int {
+	return int(m.requests.Load())
+}
+
+type streamingErrorStream struct {
+	events  []model.StreamEvent
+	index   int
+	started <-chan struct{}
+	err     error
+}
+
+func (s *streamingErrorStream) Recv() (model.StreamEvent, error) {
+	if s.index >= len(s.events) {
+		if s.started != nil {
+			select {
+			case <-s.started:
+			case <-time.After(5 * time.Second):
+				return model.StreamEvent{}, errors.New("early tool did not start before stream error")
+			}
+		}
+		return model.StreamEvent{}, s.err
+	}
+	event := s.events[s.index]
+	s.index++
+	return event, nil
+}
+
+func (s *streamingErrorStream) Close() error {
 	return nil
 }
 

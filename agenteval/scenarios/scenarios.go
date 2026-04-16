@@ -55,6 +55,7 @@ func All() []agenteval.Case {
 		StreamingSafeToolOverlap(),
 		StreamingMutatingToolWaits(),
 		StreamingPermissionDenialRecovery(),
+		StreamingFailureCancelsEarlyTool(),
 		StreamingCancellation(),
 	}
 }

@@ -19,8 +19,11 @@ const (
 	EventToolUseStart EventKind = "tool_use_start"
 	// EventToolUseDelta is emitted for incremental provider tool-use input
 	// chunks. The complete, executable call is still emitted as EventToolUse.
-	EventToolUseDelta   EventKind = "tool_use_delta"
-	EventToolUse        EventKind = "tool_use"
+	EventToolUseDelta EventKind = "tool_use_delta"
+	EventToolUse      EventKind = "tool_use"
+	// EventToolResult is emitted for tool execution results. If streaming fails
+	// after an early safe tool has started, a cancellation result may be emitted
+	// before EventError so observers do not see an orphaned tool-use event.
 	EventToolResult     EventKind = "tool_result"
 	EventUsage          EventKind = "usage"
 	EventContextApplied EventKind = "context_applied"

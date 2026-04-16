@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -501,6 +502,11 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 			)
 			if err != nil {
 				cancelEarlyTools()
+				if !emitCanceledEarlyToolResults(turnCtx, emit, sessionID, turn, uses, earlyResults, err) {
+					modelSpan.End()
+					shouldStop = true
+					return
+				}
 				modelSpan.RecordError(err)
 				modelSpan.End()
 				opts.Meter.Add(modelCtx, "memax.model.stream.errors", 1,
@@ -1058,6 +1064,60 @@ func bufferedToolResults(results <-chan model.ToolResult) <-chan model.ToolResul
 	return buffered
 }
 
+func emitCanceledEarlyToolResults(
+	ctx context.Context,
+	emit func(Event) bool,
+	sessionID string,
+	turn int,
+	uses []model.ToolUse,
+	earlyResults map[int]<-chan model.ToolResult,
+	reason error,
+) bool {
+	if len(earlyResults) == 0 {
+		return true
+	}
+	indices := make([]int, 0, len(earlyResults))
+	for index := range earlyResults {
+		indices = append(indices, index)
+	}
+	sort.Ints(indices)
+	for _, index := range indices {
+		results := earlyResults[index]
+		if index < 0 || index >= len(uses) {
+			continue
+		}
+		use := uses[index]
+		result := model.ToolResult{
+			ToolUseID: use.ID,
+			Name:      use.Name,
+			Content:   fmt.Sprintf("tool execution canceled because model streaming stopped: %v", reason),
+			IsError:   true,
+			Metadata: map[string]any{
+				"streaming_status": "canceled",
+				"streaming_reason": reason.Error(),
+			},
+		}
+		select {
+		case actual, ok := <-results:
+			if ok {
+				result = actual
+			}
+		default:
+		}
+		event := newEvent(EventToolResult, sessionID, turn)
+		event.ToolResult = &result
+		if !emit(event) {
+			return false
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		default:
+		}
+	}
+	return true
+}
+
 func memoryQuery(messages []model.Message) string {
 	if len(messages) == 0 {
 		return ""
@@ -1239,7 +1299,7 @@ func collectAssistant(
 			return model.Message{Role: model.RoleAssistant, Content: blocks}, uses, earlyResults, usage, nil
 		}
 		if err != nil {
-			return model.Message{}, nil, nil, model.Usage{}, fmt.Errorf("receive model event: %w", err)
+			return model.Message{Role: model.RoleAssistant, Content: blocks}, uses, earlyResults, usage, fmt.Errorf("receive model event: %w", err)
 		}
 
 		switch event.Kind {
@@ -1250,7 +1310,7 @@ func collectAssistant(
 				out := newEvent(EventAssistant, sessionID, turn)
 				out.Message = &model.Message{Role: model.RoleAssistant, Content: []model.ContentBlock{block}}
 				if !emit(out) {
-					return model.Message{}, nil, nil, model.Usage{}, ctx.Err()
+					return model.Message{Role: model.RoleAssistant, Content: blocks}, uses, earlyResults, usage, ctx.Err()
 				}
 			}
 		case model.StreamToolUseStart:
@@ -1258,7 +1318,7 @@ func collectAssistant(
 			use := event.ToolUse
 			out.ToolUse = &use
 			if !emit(out) {
-				return model.Message{}, nil, nil, model.Usage{}, ctx.Err()
+				return model.Message{Role: model.RoleAssistant, Content: blocks}, uses, earlyResults, usage, ctx.Err()
 			}
 		case model.StreamToolUseDelta:
 			out := newEvent(EventToolUseDelta, sessionID, turn)
@@ -1266,7 +1326,7 @@ func collectAssistant(
 			out.ToolUse = &use
 			out.ToolUseDelta = event.ToolUseDelta
 			if !emit(out) {
-				return model.Message{}, nil, nil, model.Usage{}, ctx.Err()
+				return model.Message{Role: model.RoleAssistant, Content: blocks}, uses, earlyResults, usage, ctx.Err()
 			}
 		case model.StreamToolUse:
 			index := len(uses)
@@ -1275,12 +1335,12 @@ func collectAssistant(
 			out := newEvent(EventToolUse, sessionID, turn)
 			out.ToolUse = &event.ToolUse
 			if !emit(out) {
-				return model.Message{}, nil, nil, model.Usage{}, ctx.Err()
+				return model.Message{Role: model.RoleAssistant, Content: blocks}, uses, earlyResults, usage, ctx.Err()
 			}
 			if startEarlyTool != nil {
 				results, started, err := startEarlyTool(event.ToolUse)
 				if err != nil {
-					return model.Message{}, nil, nil, model.Usage{}, err
+					return model.Message{Role: model.RoleAssistant, Content: blocks}, uses, earlyResults, usage, err
 				}
 				if started && results != nil {
 					earlyResults[index] = results
@@ -1296,7 +1356,7 @@ func collectAssistant(
 			current := *event.Usage
 			out.Usage = &current
 			if !emit(out) {
-				return model.Message{}, nil, nil, model.Usage{}, ctx.Err()
+				return model.Message{Role: model.RoleAssistant, Content: blocks}, uses, earlyResults, usage, ctx.Err()
 			}
 		}
 	}

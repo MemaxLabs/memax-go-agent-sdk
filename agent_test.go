@@ -143,6 +143,72 @@ func TestQueryStartsSafeToolBeforeAssistantStreamEnds(t *testing.T) {
 	}
 }
 
+func TestQueryCancelsEarlyToolAndEmitsToolResultWhenStreamFails(t *testing.T) {
+	started := make(chan struct{})
+	cancelled := make(chan struct{})
+	release := make(chan struct{})
+	registry := tool.NewRegistry(tool.Definition{
+		ToolSpec: model.ToolSpec{Name: "lookup", ReadOnly: true, ConcurrencySafe: true},
+		Handler: func(ctx context.Context, _ tool.Call) (model.ToolResult, error) {
+			close(started)
+			<-ctx.Done()
+			close(cancelled)
+			<-release
+			return model.ToolResult{Content: "observed cancel", IsError: true}, nil
+		},
+	})
+	events, err := Query(context.Background(), "lookup before stream failure", Options{
+		Model: &streamErrorModel{
+			started: started,
+			events: []model.StreamEvent{
+				{
+					Kind: model.StreamToolUse,
+					ToolUse: model.ToolUse{
+						ID:    "tool-1",
+						Name:  "lookup",
+						Input: json.RawMessage(`{}`),
+					},
+				},
+			},
+			err: errors.New("stream exploded"),
+		},
+		Tools: registry,
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+
+	var toolResult *model.ToolResult
+	var gotErr error
+	for event := range events {
+		switch event.Kind {
+		case EventToolResult:
+			result := *event.ToolResult
+			toolResult = &result
+		case EventError:
+			gotErr = event.Err
+		}
+	}
+	close(release)
+	if gotErr == nil || !strings.Contains(gotErr.Error(), "stream exploded") {
+		t.Fatalf("error = %v, want stream failure", gotErr)
+	}
+	if toolResult == nil {
+		t.Fatal("missing cancellation tool result")
+	}
+	if !toolResult.IsError || toolResult.ToolUseID != "tool-1" || toolResult.Name != "lookup" {
+		t.Fatalf("tool result = %#v, want cancellation error for lookup", toolResult)
+	}
+	if !strings.Contains(toolResult.Content, "model streaming stopped") {
+		t.Fatalf("tool result content = %q, want streaming cancellation reason", toolResult.Content)
+	}
+	select {
+	case <-cancelled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("early tool did not observe cancellation")
+	}
+}
+
 func TestQueryAsyncReturnsBeforeStartupIOCompletes(t *testing.T) {
 	store := &blockingCreateStore{
 		inner:   session.NewMemoryStore(),
@@ -1761,6 +1827,43 @@ func (s *earlyToolStream) Recv() (model.StreamEvent, error) {
 }
 
 func (s *earlyToolStream) Close() error {
+	return nil
+}
+
+type streamErrorModel struct {
+	started <-chan struct{}
+	events  []model.StreamEvent
+	err     error
+}
+
+func (m *streamErrorModel) Stream(context.Context, model.Request) (model.Stream, error) {
+	return &streamErrorStream{events: m.events, started: m.started, err: m.err}, nil
+}
+
+type streamErrorStream struct {
+	events  []model.StreamEvent
+	index   int
+	started <-chan struct{}
+	err     error
+}
+
+func (s *streamErrorStream) Recv() (model.StreamEvent, error) {
+	if s.index >= len(s.events) {
+		if s.started != nil {
+			select {
+			case <-s.started:
+			case <-time.After(5 * time.Second):
+				return model.StreamEvent{}, errors.New("early tool did not start before stream error")
+			}
+		}
+		return model.StreamEvent{}, s.err
+	}
+	event := s.events[s.index]
+	s.index++
+	return event, nil
+}
+
+func (s *streamErrorStream) Close() error {
 	return nil
 }
 

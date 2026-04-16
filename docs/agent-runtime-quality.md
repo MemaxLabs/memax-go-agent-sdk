@@ -193,6 +193,8 @@ use blocks arrive while keeping mutating tools serialized.
 - Mutating tools preserve order. Initial eval coverage exists.
 - Permission denial during streaming is model-visible. Initial eval coverage
   exists.
+- Stream failure after early execution emits a paired cancellation result.
+  Initial unit and eval coverage exists.
 - Cancellation does not hang the event loop. Initial eval coverage exists.
 
 ### 4. Workspace and Checkpoint Model
