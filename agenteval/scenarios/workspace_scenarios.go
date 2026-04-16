@@ -451,6 +451,106 @@ func WorkspaceCheckpointPolicyRecovery() agenteval.Case {
 	}
 }
 
+// WorkspaceRollbackPolicyRecovery returns a single-use scenario where a failed
+// verification includes model-visible rollback guidance from an agent policy,
+// and the model restores the latest checkpoint through the normal workspace
+// tool.
+func WorkspaceRollbackPolicyRecovery() agenteval.Case {
+	store := workspace.NewMemoryStore(map[string]string{
+		"README.md": "status: good",
+	})
+	workspaceTools, toolsErr := workspacetools.NewTools(store)
+	policy := agentpolicy.RecommendRollbackOnFailedVerification()
+	verifyTool := verifytools.NewTool(verifytools.Config{
+		Verifier: policy.WrapVerifier(verifierForReadmeStatus(store, "status: good")),
+	})
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "checkpoint-1",
+				Name:  workspacetools.CheckpointToolName,
+				Input: json.RawMessage(`{"label":"before risky edit"}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "patch-1",
+				Name: workspacetools.ApplyPatchToolName,
+				Input: json.RawMessage(`{"operations":[
+					{"path":"README.md","old_content":"status: good","new_content":"status: bad"}
+				]}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "verify-1",
+				Name:  verifytools.ToolName,
+				Input: json.RawMessage(`{"name":"test","target":"README.md"}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "restore-1",
+				Name:  workspacetools.RestoreToolName,
+				Input: json.RawMessage(`{"id":"checkpoint-1"}`),
+			},
+		}},
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "Restored after rollback policy guidance."}},
+	)
+
+	return agenteval.Case{
+		Name:   "workspace_rollback_policy_recovery",
+		Prompt: "Checkpoint, patch README.md, verify it, and follow rollback policy guidance if verification fails.",
+		Options: memaxagent.Options{
+			Model: modelClient,
+			Tools: tool.NewRegistry(append(workspaceTools, verifyTool)...),
+			Hooks: hook.NewRunner(policy.Options()...),
+		},
+		Assertions: []agenteval.Assertion{
+			toolConstructionSucceeded(toolsErr),
+			agenteval.ToolUsed(workspacetools.CheckpointToolName),
+			agenteval.ToolUsed(workspacetools.ApplyPatchToolName),
+			agenteval.ToolUsed(verifytools.ToolName),
+			agenteval.ToolUsed(workspacetools.RestoreToolName),
+			agenteval.FinalEquals("Restored after rollback policy guidance."),
+			requestCountEquals(modelClient, 5),
+			{
+				Name: "rollback policy guidance drives explicit restore",
+				Check: func(result agenteval.Result) error {
+					results := result.ToolResults()
+					if len(results) < 4 {
+						return fmt.Errorf("tool results = %#v, want checkpoint patch verify restore", results)
+					}
+					if !results[2].IsError || !strings.Contains(results[2].Content, "restore workspace checkpoint checkpoint-1") {
+						return fmt.Errorf("verification result = %#v, want rollback guidance", results[2])
+					}
+					if results[2].Metadata[agentpolicy.MetadataRollbackRecommended] != true {
+						return fmt.Errorf("verification metadata = %#v, want rollback recommendation", results[2].Metadata)
+					}
+					if results[2].Metadata[agentpolicy.MetadataRollbackCheckpointID] != "checkpoint-1" {
+						return fmt.Errorf("verification metadata = %#v, want checkpoint-1", results[2].Metadata)
+					}
+					if results[3].IsError || !strings.Contains(results[3].Content, "restored workspace checkpoint checkpoint-1") {
+						return fmt.Errorf("restore result = %#v, want checkpoint restore", results[3])
+					}
+					content, err := store.ReadFile(context.Background(), "README.md")
+					if err != nil {
+						return err
+					}
+					if content != "status: good" {
+						return fmt.Errorf("README.md = %q, want rollback to good status", content)
+					}
+					return nil
+				},
+			},
+		},
+	}
+}
+
 // PlannerTaskProgressFromVerification returns a single-use scenario where
 // verification results update task state and the next planner prompt reflects
 // completed progress before the model finalizes.

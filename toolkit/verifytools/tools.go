@@ -15,14 +15,16 @@ const (
 	defaultName = "default"
 )
 
-// Request describes one verification check requested by the model. Name is a
-// host-defined check identifier such as "test", "lint", "typecheck", or
-// "policy". Target is optional and can scope the check to a package, path, or
-// other host-owned selector.
+// Request describes one verification check requested by the model. SessionID is
+// the active agent session for hosts that need to correlate verification with
+// checkpoint, approval, or task state. Name is a host-defined check identifier
+// such as "test", "lint", "typecheck", or "policy". Target is optional and
+// can scope the check to a package, path, or other host-owned selector.
 type Request struct {
-	Name     string
-	Target   string
-	Metadata map[string]any
+	SessionID string
+	Name      string
+	Target    string
+	Metadata  map[string]any
 }
 
 // Diagnostic is one actionable verification finding.
@@ -129,9 +131,10 @@ func NewTool(config Config) tool.Tool {
 				return model.ToolResult{}, err
 			}
 			req := Request{
-				Name:     strings.TrimSpace(input.Name),
-				Target:   strings.TrimSpace(input.Target),
-				Metadata: model.CloneMetadata(input.Metadata),
+				SessionID: call.Runtime.SessionID,
+				Name:      strings.TrimSpace(input.Name),
+				Target:    strings.TrimSpace(input.Target),
+				Metadata:  model.CloneMetadata(input.Metadata),
 			}
 			if req.Name == "" {
 				req.Name = defaultName

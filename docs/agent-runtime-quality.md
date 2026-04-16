@@ -216,7 +216,8 @@ use blocks arrive while keeping mutating tools serialized.
 tools, in-memory workspace state, root-confined OS-backed workspace state,
 guarded structured patches, unified diffs, dry-run previews, patch review,
 diffs, checkpoints, restore, host-owned verification tools, lifecycle events,
-and eval coverage exist as optional packages.
+model-visible rollback guidance after failed verification, and eval coverage
+exist as optional packages.
 
 **Gap:** A serious coding agent needs a workspace abstraction with diffs,
 patches, snapshots, restore, reviewable mutations, and sandbox boundaries.
@@ -246,7 +247,9 @@ patches, snapshots, restore, reviewable mutations, and sandbox boundaries.
 - Workspace diff is available after a run.
 - Verification failure returns diagnostics, the model repairs, and verification
   passes. Initial coverage exists.
-- Verification failure can drive checkpoint restore. Initial coverage exists.
+- Verification failure can drive checkpoint restore, including opt-in policy
+  guidance that recommends the latest session checkpoint without restoring
+  hiddenly. Initial coverage exists.
 - Read-only policies prevent mutation.
 - Symlink/path containment tests cover OS-backed adapters. Initial coverage
   exists.
@@ -284,7 +287,8 @@ retrieval, usage, and review infrastructure.
 **Current state:** planner policies, task-derived plans, plan-visible
 verification hints, scoped subagent plan handoff, and opt-in progress updates
 from verification or subagent results exist. Initial hook-based agent policy
-presets exist for checkpoint-before-patch recovery.
+presets exist for checkpoint-before-patch recovery and rollback guidance after
+failed verification.
 
 **Gap:** The SDK lacks explicit policies for when to plan, update, delegate,
 verify, ask the user, or stop.
@@ -308,6 +312,8 @@ verify, ask the user, or stop.
   failure triggers repair.
 - Checkpoint-before-patch policy denial drives checkpoint creation and retry
   through normal tool results.
+- Rollback-on-failed-verification policy guidance drives explicit checkpoint
+  restore through normal tool results.
 
 ### 7. Provider Fidelity and Compatibility
 

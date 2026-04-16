@@ -13,7 +13,7 @@ import (
 func TestVerifyToolReturnsFailedResultAsToolError(t *testing.T) {
 	verify := NewTool(Config{
 		Verifier: VerifierFunc(func(_ context.Context, req Request) (Result, error) {
-			if req.Name != "test" || req.Target != "./..." {
+			if req.SessionID != "session-1" || req.Name != "test" || req.Target != "./..." {
 				t.Fatalf("request = %#v, want decoded check", req)
 			}
 			return Result{
@@ -34,7 +34,7 @@ func TestVerifyToolReturnsFailedResultAsToolError(t *testing.T) {
 		ID:    "verify-1",
 		Name:  ToolName,
 		Input: json.RawMessage(`{"name":"test","target":"./..."}`),
-	}})
+	}, Runtime: tool.Runtime{SessionID: "session-1"}})
 	if err != nil {
 		t.Fatalf("Execute returned error: %v", err)
 	}

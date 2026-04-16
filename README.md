@@ -446,6 +446,14 @@ The first patch attempt is denied as a recoverable tool result until
 `workspace_checkpoint` succeeds in the same session. Dry-run patch previews are
 allowed.
 
+For rollback guidance after failed verification, install
+`agentpolicy.RecommendRollbackOnFailedVerification()` into hooks and wrap the
+host verifier. The policy records successful `workspace_checkpoint` results and
+adds model-visible restore guidance to failed `workspace_verify` results. It
+does not restore automatically; rollback still happens through the normal
+`workspace_restore` tool so the transcript, permissions, hooks, and events stay
+observable.
+
 To bound an agent run across model calls, tool calls, tokens, turns, and wall
 time, set `Options.Budget`:
 
