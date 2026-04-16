@@ -72,3 +72,14 @@ type ToolResult struct {
 	IsError   bool           `json:"is_error,omitempty"`
 	Metadata  map[string]any `json:"metadata,omitempty"`
 }
+
+const (
+	// MetadataContextRetention marks ToolResult metadata with an explicit
+	// context-window retention hint.
+	MetadataContextRetention = "context_retention"
+	// RetentionImportant is the MetadataContextRetention value for tool results
+	// that should survive aggressive context trimming.
+	RetentionImportant = "important"
+	// MetadataLoadedSkill marks a tool result as loaded skill instructions.
+	MetadataLoadedSkill = "loaded_skill"
+)

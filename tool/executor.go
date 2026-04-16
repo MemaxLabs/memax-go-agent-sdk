@@ -252,6 +252,7 @@ func (e Executor) enforceResultLimit(ctx context.Context, result model.ToolResul
 			if !storedHandle.CreatedAt.IsZero() {
 				result.Metadata["stored_result_created_at"] = storedHandle.CreatedAt.Format(time.RFC3339Nano)
 			}
+			result.Metadata[model.MetadataContextRetention] = model.RetentionImportant
 		}
 	}
 	result.Metadata["truncated"] = true

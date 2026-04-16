@@ -534,6 +534,15 @@ func requestToolNames(req model.Request) []string {
 	return names
 }
 
+func messageContainsToolUse(msg model.Message, id, name string) bool {
+	for _, block := range msg.Content {
+		if block.ToolUse != nil && block.ToolUse.ID == id && block.ToolUse.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 func sameStringSet(got []string, want []string) bool {
 	if len(got) != len(want) {
 		return false

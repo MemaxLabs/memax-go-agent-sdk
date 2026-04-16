@@ -160,9 +160,9 @@ compaction provenance.
 **Eval coverage:**
 
 - Long transcript compacts while preserving active task, recent tool errors, and
-  loaded skill instructions.
+  loaded skill instructions. Initial loaded-skill preservation coverage exists.
 - Summaries are not duplicated across retries.
-- Result handles survive compaction.
+- Result handles survive compaction. Initial policy-level coverage exists.
 - Orphan tool results are never sent to providers.
 
 ### 3. Streaming Tool Execution

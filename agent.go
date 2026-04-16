@@ -778,10 +778,12 @@ func loadSkillTool(loader *skillLoader) tool.Tool {
 			return model.ToolResult{
 				Content: formatLoadedSkill(item),
 				Metadata: map[string]any{
-					"skill_name": item.Name,
-					"source":     item.Source,
-					"path":       item.Path,
-					"tags":       append([]string(nil), item.Tags...),
+					model.MetadataLoadedSkill:      true,
+					model.MetadataContextRetention: model.RetentionImportant,
+					"skill_name":                   item.Name,
+					"source":                       item.Source,
+					"path":                         item.Path,
+					"tags":                         append([]string(nil), item.Tags...),
 				},
 			}, nil
 		},

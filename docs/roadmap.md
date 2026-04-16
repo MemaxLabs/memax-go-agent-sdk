@@ -65,6 +65,9 @@ system prompt.
 - Add cost and token accounting. Initial provider-neutral `model.Usage`, stream usage events, `EventUsage`, final-result usage aggregation, token meter counters, and OpenAI/Anthropic usage mapping exist. Cost calculation remains future host/provider policy.
 - Add run budget governors. Initial `budget.Governor`, zero-value-disabled `budget.Policy`, `Options.Budget`, budget stop reason, and agent-loop enforcement exist for turn, model-call, tool-call, token, and elapsed-duration limits.
 - Add autonomy eval harness. Initial `agenteval` runner, scripted model, result capture, expected-error assertions, reusable assertions, and `agenteval/scenarios` package exist for deterministic tool recovery, structured-output repair, memory search/save, memory distillation candidates, memory candidate handler persistence, session resume, context retry, subagent delegation, planner-guided tool use, planner/task-state updates, progressive skill disclosure, httptest-backed provider usage mapping, provider tool-use round trips, permission/hook denial recovery, large-result storage recovery, budget-stop enforcement, and deferred tool discovery. Live evals remain future work.
+- Add context retention hardening. Initial `contextwindow.PreserveImportant`
+  support keeps loaded skills, stored result handles, and tool errors with
+  structurally valid tool-use groups under aggressive trimming.
 
 ## Phase 6: Ecosystem and Hardening
 
@@ -74,8 +77,9 @@ system prompt.
   Foundation to Competitive or Leading with eval coverage.
 - Harden progressive skill disclosure. Initial metadata-only prompt discovery,
   explicit `load_skill`, transcript-visible loaded skill content, and eval
-  coverage exist. Next steps are optional resource loading, loaded-skill
-  retention across compaction, and larger catalog budget tests.
+  coverage exist. Loaded-skill retention across aggressive trimming has initial
+  context-policy and eval coverage. Next steps are optional resource loading and
+  larger catalog budget tests.
 - Add more durable stores and workspace adapters, starting with production SQLite examples, object-store checkpoint managers, and git-backed workspace checkpoints.
 - Add MCP/tool bridge examples while keeping the core tool contract provider-neutral.
 - Add release automation, API compatibility checks, and generated reference docs.

@@ -326,6 +326,15 @@ Context-window policies transform session messages before each model request wit
 
 `SummarizingBudget` adds model-backed compaction behind the same `Policy` interface. It checks whether the full transcript fits, reserves part of the configured budget for a synthetic summary, asks a pluggable `Summarizer` to compact the older prefix, and prepends that summary to the newest structurally valid suffix. `ModelSummarizer` is the default model-client adapter; applications can provide their own summarizer for deterministic summaries, hosted summarization, cached summaries, or domain-specific compression.
 
+`PreserveImportant` wraps any context policy and prepends explicit retention
+groups that the wrapped policy would otherwise drop. Current retention signals
+include loaded skill instructions, stored large-result handles, and tool errors.
+Tool results are preserved with the assistant tool-use message that produced
+them so provider transcripts remain structurally valid. This is opt-in because
+preserved groups may exceed the wrapped policy's strict message or token
+budget; hosts use it when preserving recovery state matters more than a hard
+window target.
+
 ## Run Budgets
 
 Run budgets are separate from context-window budgets. Context-window policies

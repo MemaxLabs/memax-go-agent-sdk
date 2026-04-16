@@ -256,11 +256,156 @@ func TestModelSummarizerStreamsSummary(t *testing.T) {
 	}
 }
 
+func TestPreserveImportantKeepsLoadedSkillWithToolUse(t *testing.T) {
+	messages := []model.Message{
+		textMessage(model.RoleUser, "use the database skill"),
+		toolUseMessage("skill-1", "load_skill"),
+		toolResultMessage("skill-1", "load_skill", "skill instructions", map[string]any{
+			model.MetadataLoadedSkill:      true,
+			model.MetadataContextRetention: model.RetentionImportant,
+		}, false),
+		textMessage(model.RoleUser, "now answer"),
+	}
+
+	got, err := (PreserveImportant{Policy: RecentMessages{MaxMessages: 1}}).Apply(context.Background(), messages)
+	if err != nil {
+		t.Fatalf("Apply returned error: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("messages len = %d, want retained tool-use pair plus selected suffix: %#v", len(got), got)
+	}
+	if got[0].Role != model.RoleAssistant || !messageHasToolUse(got[0], "skill-1") {
+		t.Fatalf("first message = %#v, want assistant tool use", got[0])
+	}
+	if got[1].ToolResult == nil || got[1].ToolResult.Name != "load_skill" {
+		t.Fatalf("second message = %#v, want load_skill result", got[1])
+	}
+	if got[2].PlainText() != "now answer" {
+		t.Fatalf("last message = %#v, want selected suffix", got[2])
+	}
+}
+
+func TestPreserveImportantKeepsStoredResultHandle(t *testing.T) {
+	messages := []model.Message{
+		textMessage(model.RoleUser, "read report"),
+		toolUseMessage("tool-1", "read_large_report"),
+		toolResultMessage("tool-1", "read_large_report", "preview", map[string]any{
+			"stored_result_id":             "result-1",
+			model.MetadataContextRetention: model.RetentionImportant,
+		}, false),
+		textMessage(model.RoleUser, "continue"),
+	}
+
+	got, err := (PreserveImportant{Policy: RecentMessages{MaxMessages: 1}}).Apply(context.Background(), messages)
+	if err != nil {
+		t.Fatalf("Apply returned error: %v", err)
+	}
+	if len(got) != 3 || got[1].ToolResult == nil || got[1].ToolResult.Metadata["stored_result_id"] != "result-1" {
+		t.Fatalf("messages = %#v, want stored result handle preserved", got)
+	}
+}
+
+func TestPreserveImportantKeepsToolErrors(t *testing.T) {
+	messages := []model.Message{
+		textMessage(model.RoleUser, "write file"),
+		toolUseMessage("tool-1", "write_file"),
+		toolResultMessage("tool-1", "write_file", "permission denied", nil, true),
+		textMessage(model.RoleUser, "recover"),
+	}
+
+	got, err := (PreserveImportant{Policy: RecentMessages{MaxMessages: 1}}).Apply(context.Background(), messages)
+	if err != nil {
+		t.Fatalf("Apply returned error: %v", err)
+	}
+	if len(got) != 3 || got[1].ToolResult == nil || !got[1].ToolResult.IsError {
+		t.Fatalf("messages = %#v, want tool error group preserved", got)
+	}
+}
+
+func TestPreserveImportantAvoidsDuplicates(t *testing.T) {
+	messages := []model.Message{
+		textMessage(model.RoleUser, "read"),
+		toolUseMessage("tool-1", "read_large_report"),
+		toolResultMessage("tool-1", "read_large_report", "preview", map[string]any{
+			"stored_result_id": "result-1",
+		}, false),
+	}
+
+	got, err := (PreserveImportant{Policy: RecentMessages{MaxMessages: 2}}).Apply(context.Background(), messages)
+	if err != nil {
+		t.Fatalf("Apply returned error: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("messages len = %d, want no duplicate retained group: %#v", len(got), got)
+	}
+}
+
+func TestPreserveImportantDoesNotCreatePartialGroups(t *testing.T) {
+	messages := []model.Message{
+		textMessage(model.RoleUser, "read"),
+		toolUseMessage("tool-1", "read_large_report"),
+		toolResultMessage("tool-1", "read_large_report", "preview", map[string]any{
+			"stored_result_id": "result-1",
+		}, false),
+	}
+	selected := []model.Message{toolUseMessage("tool-1", "read_large_report")}
+
+	got := PreserveImportantMessages(messages, selected, 0)
+	if len(got) != 3 {
+		t.Fatalf("messages len = %d, want full retained group plus selected partial group: %#v", len(got), got)
+	}
+	if !messageHasToolUse(got[0], "tool-1") || got[1].ToolResult == nil {
+		t.Fatalf("messages = %#v, want retained assistant/result group first", got)
+	}
+}
+
+func TestPreserveImportantReturnsDefensiveCopies(t *testing.T) {
+	messages := []model.Message{
+		toolUseMessage("tool-1", "read_large_report"),
+		toolResultMessage("tool-1", "read_large_report", "preview", map[string]any{
+			"stored_result_id": "result-1",
+		}, false),
+	}
+
+	got := PreserveImportantMessages(messages, nil, 0)
+	got[0].Content[0].ToolUse.Name = "mutated"
+	got[1].ToolResult.Metadata["stored_result_id"] = "mutated"
+
+	if messages[0].Content[0].ToolUse.Name != "read_large_report" {
+		t.Fatalf("original tool use mutated: %#v", messages[0])
+	}
+	if messages[1].ToolResult.Metadata["stored_result_id"] != "result-1" {
+		t.Fatalf("original metadata mutated: %#v", messages[1].ToolResult.Metadata)
+	}
+}
+
 func textMessage(role model.Role, text string) model.Message {
 	return model.Message{
 		Role: role,
 		Content: []model.ContentBlock{
 			{Type: model.ContentText, Text: text},
+		},
+	}
+}
+
+func toolUseMessage(id, name string) model.Message {
+	return model.Message{
+		Role: model.RoleAssistant,
+		Content: []model.ContentBlock{
+			{Type: model.ContentToolUse, ToolUse: &model.ToolUse{ID: id, Name: name}},
+		},
+	}
+}
+
+func toolResultMessage(id, name, content string, metadata map[string]any, isError bool) model.Message {
+	return model.Message{
+		Role: model.RoleTool,
+		ToolResult: &model.ToolResult{
+			ToolUseID: id,
+			Name:      name,
+			Content:   content,
+			IsError:   isError,
+			Metadata:  metadata,
 		},
 	}
 }

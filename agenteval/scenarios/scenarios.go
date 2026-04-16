@@ -39,6 +39,7 @@ func All() []agenteval.Case {
 		PlannerGuidedToolUse(),
 		PlannerTaskStateUpdates(),
 		ProgressiveSkillDisclosure(),
+		ContextPreservesLoadedSkill(),
 		OpenAIProviderTextAndUsage(),
 		AnthropicProviderTextAndUsage(),
 		OpenAIProviderToolUseRoundTrip(),
@@ -293,6 +294,71 @@ func ProgressiveSkillDisclosure() agenteval.Case {
 						}
 					}
 					return fmt.Errorf("load_skill result did not contain full instructions: %#v", result.ToolResults())
+				},
+			},
+		},
+	}
+}
+
+// ContextPreservesLoadedSkill returns a single-use scenario where aggressive
+// context trimming keeps a previously loaded progressive skill as a valid
+// assistant tool-use plus tool-result group.
+func ContextPreservesLoadedSkill() agenteval.Case {
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "skill-1",
+				Name:  skill.LoadToolName,
+				Input: json.RawMessage(`{"name":"database-review"}`),
+			},
+		}},
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "context kept the loaded skill"}},
+	)
+	skills := skill.StaticSource{{
+		Name:        "database-review",
+		Description: "Review database migrations.",
+		WhenToUse:   "SQL migrations or rollback plans are involved.",
+		AlwaysOn:    true,
+		Content:     "Check lock behavior, rollback safety, and data backfill risk.",
+	}}
+
+	return agenteval.Case{
+		Name:   "context_preserves_loaded_skill",
+		Prompt: "Review the SQL migration with the right skill.",
+		Options: memaxagent.Options{
+			Model:           modelClient,
+			SkillSource:     skills,
+			SkillDisclosure: skill.DisclosureProgressive,
+			Context: contextwindow.PreserveImportant{
+				Policy: contextwindow.RecentMessages{MaxMessages: 1},
+			},
+		},
+		Assertions: []agenteval.Assertion{
+			agenteval.ToolUsed(skill.LoadToolName),
+			agenteval.FinalEquals("context kept the loaded skill"),
+			requestCountEquals(modelClient, 2),
+			{
+				Name: "trimmed context retained loaded skill group",
+				Check: func(agenteval.Result) error {
+					requests := modelClient.Requests()
+					if len(requests) != 2 {
+						return fmt.Errorf("model requests = %d, want 2", len(requests))
+					}
+					messages := requests[1].Messages
+					if len(messages) != 2 {
+						return fmt.Errorf("second request messages = %#v, want assistant tool use plus skill result", messages)
+					}
+					if !messageContainsToolUse(messages[0], "skill-1", skill.LoadToolName) {
+						return fmt.Errorf("first retained message = %#v, want load_skill tool use", messages[0])
+					}
+					if messages[1].ToolResult == nil || messages[1].ToolResult.Name != skill.LoadToolName {
+						return fmt.Errorf("second retained message = %#v, want load_skill result", messages[1])
+					}
+					if !strings.Contains(messages[1].ToolResult.Content, "rollback safety") {
+						return fmt.Errorf("loaded skill content = %q, want instructions", messages[1].ToolResult.Content)
+					}
+					return nil
 				},
 			},
 		},
