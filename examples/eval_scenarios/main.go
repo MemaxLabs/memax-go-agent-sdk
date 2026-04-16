@@ -12,10 +12,13 @@ import (
 
 func main() {
 	report := agenteval.Runner{}.Run(context.Background(), scenarios.All()...)
+	passed := 0
 	for _, result := range report.Results {
 		status := "PASS"
 		if !result.Passed() {
 			status = "FAIL"
+		} else {
+			passed++
 		}
 		fmt.Printf(
 			"%s %s events=%d tools=%s duration=%s result=%q\n",
@@ -27,10 +30,10 @@ func main() {
 			result.Final,
 		)
 	}
+	fmt.Printf("%d passed, %d failed\n", passed, len(report.Results)-passed)
 	if err := report.Error(); err != nil {
 		log.Fatal(err)
 	}
-	fmt.Printf("%d passed, 0 failed\n", len(report.Results))
 }
 
 func toolNames(result agenteval.Result) string {
