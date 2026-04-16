@@ -131,7 +131,7 @@ func NewTool(config Config) tool.Tool {
 			req := Request{
 				Name:     strings.TrimSpace(input.Name),
 				Target:   strings.TrimSpace(input.Target),
-				Metadata: cloneMetadata(input.Metadata),
+				Metadata: model.CloneMetadata(input.Metadata),
 			}
 			if req.Name == "" {
 				req.Name = defaultName
@@ -144,7 +144,7 @@ func NewTool(config Config) tool.Tool {
 				result.Name = req.Name
 			}
 			paths := diagnosticPaths(result.Diagnostics)
-			metadata := cloneMetadata(result.Metadata)
+			metadata := model.CloneMetadata(result.Metadata)
 			if metadata == nil {
 				metadata = map[string]any{}
 			}
@@ -216,15 +216,4 @@ func diagnosticPaths(diagnostics []Diagnostic) []string {
 		paths = append(paths, path)
 	}
 	return paths
-}
-
-func cloneMetadata(metadata map[string]any) map[string]any {
-	if len(metadata) == 0 {
-		return nil
-	}
-	out := make(map[string]any, len(metadata))
-	for key, value := range metadata {
-		out[key] = value
-	}
-	return out
 }
