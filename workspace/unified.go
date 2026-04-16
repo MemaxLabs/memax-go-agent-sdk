@@ -66,6 +66,13 @@ func unifiedDiffOperations(diff string, files map[string]string) ([]PatchOperati
 	return ops, nil
 }
 
+// parseUnifiedDiff accepts the text-hunk subset of standard unified diffs:
+// ---/+++ file headers, @@ hunks, a/ and b/ path prefixes, /dev/null for
+// add/delete, CRLF input normalization, and "\ No newline at end of file"
+// markers. It deliberately ignores surrounding git extended headers such as
+// diff --git, index, mode, rename, and copy lines. Binary patches, permission
+// changes, and rename-only diffs are not represented in the workspace text
+// patch model and therefore fail when no text hunks are present.
 func parseUnifiedDiff(diff string) ([]unifiedFilePatch, error) {
 	diff = strings.ReplaceAll(diff, "\r\n", "\n")
 	raw := strings.Split(diff, "\n")

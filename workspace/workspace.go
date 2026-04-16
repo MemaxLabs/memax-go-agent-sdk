@@ -232,7 +232,10 @@ func (s *MemoryStore) PreviewPatch(ctx context.Context, ops []PatchOperation) (P
 
 // ApplyUnifiedDiff parses and applies a standard unified diff atomically. When
 // opts.DryRun is true, it validates and previews the change without mutating
-// workspace state.
+// workspace state. MemoryStore parses while holding its write lock so the
+// preview is computed against the same snapshot that would be mutated; larger
+// production stores should consider parsing outside their critical section and
+// validating guards under lock or transaction.
 func (s *MemoryStore) ApplyUnifiedDiff(ctx context.Context, diff string, opts PatchOptions) (PatchResult, error) {
 	if err := contextError(ctx); err != nil {
 		return PatchResult{}, err
