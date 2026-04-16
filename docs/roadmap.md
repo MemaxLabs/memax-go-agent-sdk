@@ -39,7 +39,7 @@
 - Provide clear examples for server embedding, CI embedding, and local CLI embedding. Initial deterministic examples cover memory tools, session resume, CI embedding, advanced toolkit composition, and HTTP server embedding. Live OpenAI and Anthropic examples are available behind explicit environment variables.
 - Publish stable API docs.
 - Add golden tests for event streams and transcript compatibility. Golden coverage protects the public query event sequence for a tool-using run, richer observability events, budget-denial ordering, and workspace lifecycle events.
-- Add adapters for common virtual filesystem and memory store implementations. Initial file workspace adapters cover in-memory maps, root-confined host directories, and read-only `io/fs.FS` sources. Initial durable session adapters cover memory, JSONL, and SQLite. Initial source-neutral `workspace.Store` support covers guarded patches, unified diffs with dry-run previews, conflict diagnostics, diffs, checkpoints, restores, toolkit tools, and eval coverage over an in-memory workspace.
+- Add adapters for common virtual filesystem and memory store implementations. Initial file workspace adapters cover in-memory maps, root-confined host directories, and read-only `io/fs.FS` sources. Initial durable session adapters cover memory, JSONL, and SQLite. Initial source-neutral `workspace.Store` support covers guarded patches, unified diffs with dry-run previews, conflict diagnostics, diffs, checkpoints, restores, toolkit tools, eval coverage over an in-memory workspace, and a root-confined `workspace.OSStore` for real directories.
 
 ## Phase 5: Intelligence Layer
 

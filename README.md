@@ -206,6 +206,14 @@ workspaceTools, err := workspacetools.NewTools(ws)
 registry := tool.NewRegistry(workspaceTools...)
 ```
 
+For a real root-confined directory, use `workspace.NewOSStore`. It uses
+forward-slash workspace paths at the SDK boundary, contains symlinks by default,
+and keeps checkpoints as in-memory snapshots for the lifetime of the store:
+
+```go
+ws, err := workspace.NewOSStore("/path/to/repo")
+```
+
 The standard workspace tools support read/list, guarded atomic patches,
 standard unified diffs, dry-run patch previews, diffs, checkpoints, and restore
 through the normal tool, permission, hook, budget, and event pipeline. Unified

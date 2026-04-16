@@ -48,6 +48,7 @@ func All() []agenteval.Case {
 		WorkspacePatchCheckpointRollback(),
 		WorkspaceUnifiedDiffRecovery(),
 		WorkspacePatchReviewDenialRecovery(),
+		WorkspaceOSStorePatchRollback(),
 		OpenAIProviderTextAndUsage(),
 		AnthropicProviderTextAndUsage(),
 		OpenAIProviderToolUseRoundTrip(),

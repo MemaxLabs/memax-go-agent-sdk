@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
@@ -267,6 +269,90 @@ func WorkspacePatchReviewDenialRecovery() agenteval.Case {
 					}
 					if notes != "safe note" {
 						return fmt.Errorf("docs/notes.md = %q, want allowed patch", notes)
+					}
+					return nil
+				},
+			},
+		},
+	}
+}
+
+// WorkspaceOSStorePatchRollback returns a single-use scenario that exercises
+// the standard workspace tools against a root-confined host directory.
+func WorkspaceOSStorePatchRollback() agenteval.Case {
+	root, setupErr := os.MkdirTemp("", "memax-workspace-*")
+	if setupErr == nil {
+		setupErr = os.WriteFile(filepath.Join(root, "README.md"), []byte("version one"), 0o644)
+	}
+	var store *workspace.OSStore
+	if setupErr == nil {
+		store, setupErr = workspace.NewOSStore(root)
+	}
+	var tools []tool.Tool
+	var toolsErr error
+	if setupErr == nil {
+		tools, toolsErr = workspacetools.NewTools(store)
+	}
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "checkpoint-1",
+				Name:  workspacetools.CheckpointToolName,
+				Input: json.RawMessage(`{"label":"before disk patch"}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "patch-1",
+				Name: workspacetools.ApplyPatchToolName,
+				Input: json.RawMessage(`{
+					"unified_diff":"--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-version one\n+version two"
+				}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "restore-1",
+				Name:  workspacetools.RestoreToolName,
+				Input: json.RawMessage(`{"id":"checkpoint-1"}`),
+			},
+		}},
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "Disk workspace restored."}},
+	)
+
+	return agenteval.Case{
+		Name:   "workspace_os_store_patch_rollback",
+		Prompt: "Patch README.md on disk, then restore the checkpoint.",
+		Options: memaxagent.Options{
+			Model: modelClient,
+			Tools: tool.NewRegistry(tools...),
+		},
+		Cleanup: func() {
+			if root != "" {
+				_ = os.RemoveAll(root)
+			}
+		},
+		Assertions: []agenteval.Assertion{
+			setupSucceeded(setupErr),
+			toolConstructionSucceeded(toolsErr),
+			agenteval.ToolUsed(workspacetools.CheckpointToolName),
+			agenteval.ToolUsed(workspacetools.ApplyPatchToolName),
+			agenteval.ToolUsed(workspacetools.RestoreToolName),
+			agenteval.NoToolErrors(),
+			agenteval.FinalEquals("Disk workspace restored."),
+			requestCountEquals(modelClient, 4),
+			{
+				Name: "disk content restored",
+				Check: func(result agenteval.Result) error {
+					content, err := os.ReadFile(filepath.Join(root, "README.md"))
+					if err != nil {
+						return err
+					}
+					if string(content) != "version one" {
+						return fmt.Errorf("README.md = %q, want restored version one", content)
 					}
 					return nil
 				},

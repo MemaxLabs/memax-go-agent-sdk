@@ -40,7 +40,7 @@ code or implementation text.
 | Memory | Foundation | Competitive |
 | Planner and tasks | Foundation | Competitive |
 | Subagents | Foundation | Competitive |
-| Workspace and checkpoints | Foundation | Competitive |
+| Workspace and checkpoints | Competitive foundation | Competitive |
 | Budgets and usage | Competitive foundation | Competitive |
 | Evals | Strong foundation | Leading |
 | Observability | Competitive foundation | Competitive |
@@ -212,8 +212,11 @@ use blocks arrive while keeping mutating tools serialized.
 
 ### 4. Workspace and Checkpoint Model
 
-**Current state:** file tools and checkpoint metadata exist as optional toolkit
-packages.
+**Current state:** file tools, source-neutral workspace contracts, workspace
+tools, in-memory workspace state, root-confined OS-backed workspace state,
+guarded structured patches, unified diffs, dry-run previews, patch review,
+diffs, checkpoints, restore, lifecycle events, and eval coverage exist as
+optional packages.
 
 **Gap:** A serious coding agent needs a workspace abstraction with diffs,
 patches, snapshots, restore, reviewable mutations, and sandbox boundaries.
@@ -226,6 +229,8 @@ patches, snapshots, restore, reviewable mutations, and sandbox boundaries.
   actionable conflict diagnostics, compact patch summaries, and optional
   host review before mutation.
 - Checkpoints can snapshot and restore host-owned workspace state.
+- Root-confined OS adapters contain symlinks by default while keeping the core
+  workspace contract source-neutral.
 - File tools emit structured metadata for modified paths and checkpoint IDs.
 - CI/server examples use workspace adapters instead of raw OS assumptions.
 
@@ -238,7 +243,8 @@ patches, snapshots, restore, reviewable mutations, and sandbox boundaries.
   tool error.
 - Workspace diff is available after a run.
 - Read-only policies prevent mutation.
-- Symlink/path containment tests cover OS-backed adapters.
+- Symlink/path containment tests cover OS-backed adapters. Initial coverage
+  exists.
 
 ### 5. Memory Lifecycle Maturity
 
@@ -335,15 +341,16 @@ mapping.
 
 ## Immediate Next Milestones
 
-1. Commit provider URL semantic cleanup separately from strategy documents.
-2. Commit AGENTS and runtime-quality documentation separately from provider
-   behavior changes.
-3. Add optional skill resource loading for progressive disclosure.
-4. Add context-stack evals that include loaded skills and result handles.
-5. Add larger-catalog budget tests for progressive skill prompts.
-6. Begin workspace abstraction design only after skill progressive disclosure is
-   stable, because the same resource-loading pattern should inform workspace
-   resource handling.
+1. Add workspace adapters for git-backed and remote sandbox execution, reusing
+   the same source-neutral `workspace` contracts.
+2. Add workspace-oriented planner verification scenarios: patch, test/verify,
+   repair, and checkpoint rollback.
+3. Add memory lifecycle proposals for update/delete/merge, not only new memory
+   candidates.
+4. Add provider-fidelity fixtures for error payloads, cancellation, and
+   provider-specific tool edge cases.
+5. Add long-horizon eval scenarios that compose planner, workspace, skills,
+   memory, budgets, and context compaction in one deterministic run.
 
 ## Definition Of Done For New Intelligence Features
 
