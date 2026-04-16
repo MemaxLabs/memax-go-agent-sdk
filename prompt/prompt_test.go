@@ -128,6 +128,9 @@ func TestDefaultBuilderProgressiveSkillsAreBoundedByDefault(t *testing.T) {
 	if got := strings.Count(result.SystemPrompt, "\n\n- "); got != defaultProgressiveSkillLimit {
 		t.Fatalf("selected skill count = %d, want %d:\n%s", got, defaultProgressiveSkillLimit, result.SystemPrompt)
 	}
+	if result.SkillDiscovery == nil || result.SkillDiscovery.Selected != defaultProgressiveSkillLimit || result.SkillDiscovery.Omitted != 17 || result.SkillDiscovery.PromptBytes == 0 {
+		t.Fatalf("skill discovery = %#v, want selected count, omitted count, and prompt bytes", result.SkillDiscovery)
+	}
 	if !strings.Contains(result.SystemPrompt, "omitted because the skill discovery budget was reached") {
 		t.Fatalf("system prompt missing item-bound omission note:\n%s", result.SystemPrompt)
 	}

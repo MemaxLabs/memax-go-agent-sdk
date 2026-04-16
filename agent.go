@@ -380,6 +380,10 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 					telemetry.Int("memax.prompt.parts", len(promptResult.Parts)),
 				)
 			}
+			if !emitSkillDiscovery(turnCtx, emit, opts, sessionID, turn, promptResult.SkillDiscovery) {
+				shouldStop = true
+				return
+			}
 			modelCtx, modelSpan := opts.Tracer.Start(turnCtx, "memaxagent.model.stream",
 				telemetry.String("memax.session_id", sessionID),
 				telemetry.Int("memax.turn", turn),
@@ -432,6 +436,11 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 							}
 						}
 						modelSpan.Set(telemetry.Int("memax.model.retry_tools", len(toolSpecs)))
+						if !emitSkillDiscovery(turnCtx, emit, opts, sessionID, turn, promptResult.SkillDiscovery) {
+							modelSpan.End()
+							shouldStop = true
+							return
+						}
 						if budgetErr := checkBudget(modelCtx, opts, sessionID, turn, budgetState.withModelCalls(1)); budgetErr != nil {
 							err = budgetErr
 							modelSpan.RecordError(err)
@@ -658,6 +667,10 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 					shouldStop = true
 					return false
 				}
+				if !emitSkillToolEvent(turnCtx, emit, opts, sessionID, turn, result) {
+					shouldStop = true
+					return false
+				}
 				if err := opts.Sessions.Append(turnCtx, sessionID, model.Message{
 					Role: model.RoleTool,
 					ToolResult: &model.ToolResult{
@@ -743,6 +756,7 @@ type builtPrompt struct {
 	Hash               string
 	Parts              []promptpkg.Part
 	Plan               planner.Plan
+	SkillDiscovery     *promptpkg.SkillDiscovery
 }
 
 type skillLoader struct {
@@ -1155,11 +1169,21 @@ func buildPrompt(ctx context.Context, opts Options, memories *memoryLoader, skil
 		return builtPrompt{}, err
 	}
 	return builtPrompt{
-		SystemPrompt: result.SystemPrompt,
-		Hash:         result.Hash,
-		Parts:        result.Parts,
-		Plan:         plan,
+		SystemPrompt:   result.SystemPrompt,
+		Hash:           result.Hash,
+		Parts:          result.Parts,
+		Plan:           plan,
+		SkillDiscovery: clonePromptSkillDiscovery(result.SkillDiscovery),
 	}, nil
+}
+
+func clonePromptSkillDiscovery(in *promptpkg.SkillDiscovery) *promptpkg.SkillDiscovery {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	out.SelectedSkills = append([]string(nil), in.SelectedSkills...)
+	return &out
 }
 
 type memoryLoader struct {
@@ -1517,6 +1541,87 @@ func emitContextCompacted(
 	return true
 }
 
+func emitSkillDiscovery(ctx context.Context, emit func(Event) bool, opts Options, sessionID string, turn int, discovery *promptpkg.SkillDiscovery) bool {
+	if discovery == nil {
+		return true
+	}
+	event := newEvent(EventSkillDiscovery, sessionID, turn)
+	event.Skill = &SkillEvent{
+		Action:         "discovery",
+		SelectedSkills: append([]string(nil), discovery.SelectedSkills...),
+		Selected:       discovery.Selected,
+		Omitted:        discovery.Omitted,
+		PromptBytes:    discovery.PromptBytes,
+		MetadataOnly:   true,
+	}
+	if !emit(event) {
+		return false
+	}
+	opts.Meter.Add(ctx, "memax.skill.discovery", 1,
+		telemetry.String("memax.session_id", sessionID),
+		telemetry.Int("memax.turn", turn),
+		telemetry.Int("memax.skill.selected", discovery.Selected),
+		telemetry.Int("memax.skill.omitted", discovery.Omitted),
+		telemetry.Int("memax.skill.discovery_bytes", discovery.PromptBytes),
+	)
+	return true
+}
+
+func emitSkillToolEvent(ctx context.Context, emit func(Event) bool, opts Options, sessionID string, turn int, result model.ToolResult) bool {
+	if result.Metadata == nil {
+		return true
+	}
+	switch {
+	case metadataBool(result.Metadata, model.MetadataSkillSearch):
+		event := newEvent(EventSkillSearch, sessionID, turn)
+		event.Skill = &SkillEvent{
+			Action:       "search",
+			Query:        metadataString(result.Metadata, "query"),
+			Matches:      metadataInt(result.Metadata, "matches"),
+			MetadataOnly: metadataBool(result.Metadata, "metadata_only"),
+		}
+		if !emit(event) {
+			return false
+		}
+		opts.Meter.Add(ctx, "memax.skill.search", 1,
+			telemetry.String("memax.session_id", sessionID),
+			telemetry.Int("memax.turn", turn),
+			telemetry.Int("memax.skill.matches", event.Skill.Matches),
+		)
+	case metadataBool(result.Metadata, model.MetadataLoadedSkill):
+		event := newEvent(EventSkillLoaded, sessionID, turn)
+		event.Skill = &SkillEvent{
+			Action:    "load",
+			SkillName: metadataString(result.Metadata, "skill_name"),
+		}
+		if !emit(event) {
+			return false
+		}
+		opts.Meter.Add(ctx, "memax.skill.loaded", 1,
+			telemetry.String("memax.session_id", sessionID),
+			telemetry.Int("memax.turn", turn),
+			telemetry.String("memax.skill.name", event.Skill.SkillName),
+		)
+	case metadataBool(result.Metadata, model.MetadataLoadedSkillResource):
+		event := newEvent(EventSkillResourceLoaded, sessionID, turn)
+		event.Skill = &SkillEvent{
+			Action:       "resource_load",
+			SkillName:    metadataString(result.Metadata, "skill_name"),
+			ResourceName: metadataString(result.Metadata, "resource"),
+		}
+		if !emit(event) {
+			return false
+		}
+		opts.Meter.Add(ctx, "memax.skill.resource_loaded", 1,
+			telemetry.String("memax.session_id", sessionID),
+			telemetry.Int("memax.turn", turn),
+			telemetry.String("memax.skill.name", event.Skill.SkillName),
+			telemetry.String("memax.skill.resource", event.Skill.ResourceName),
+		)
+	}
+	return true
+}
+
 // collectAssistant consumes a provider stream and returns the assistant message
 // plus any complete tool uses. On receive or emit errors it returns the partial
 // assistant state accumulated so far so callers can preserve tool-use/result
@@ -1637,6 +1742,29 @@ func emitError(_ context.Context, emit func(Event) bool, sessionID string, turn 
 	event := newEvent(EventError, sessionID, turn)
 	event.Err = err
 	emit(event)
+}
+
+func metadataBool(metadata map[string]any, key string) bool {
+	value, _ := metadata[key].(bool)
+	return value
+}
+
+func metadataString(metadata map[string]any, key string) string {
+	value, _ := metadata[key].(string)
+	return value
+}
+
+func metadataInt(metadata map[string]any, key string) int {
+	switch value := metadata[key].(type) {
+	case int:
+		return value
+	case int64:
+		return int(value)
+	case float64:
+		return int(value)
+	default:
+		return 0
+	}
 }
 
 func durationMilliseconds(d time.Duration) float64 {

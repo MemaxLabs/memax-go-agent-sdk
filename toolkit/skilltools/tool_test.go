@@ -55,6 +55,9 @@ func TestSearchToolReturnsRelevantSkills(t *testing.T) {
 	if result.Metadata["matches"] != 1 {
 		t.Fatalf("metadata = %#v, want one match", result.Metadata)
 	}
+	if result.Metadata[model.MetadataSkillSearch] != true || result.Metadata["metadata_only"] != true {
+		t.Fatalf("metadata = %#v, want skill search marker and metadata-only flag", result.Metadata)
+	}
 }
 
 func TestSearchToolCanIncludeContent(t *testing.T) {
@@ -80,6 +83,9 @@ func TestSearchToolCanIncludeContent(t *testing.T) {
 	}
 	if !strings.Contains(result.Content, "Instructions: Check rollback.") {
 		t.Fatalf("result = %q, want opt-in instructions", result.Content)
+	}
+	if result.Metadata["metadata_only"] != false || result.Metadata["include_content"] != true {
+		t.Fatalf("metadata = %#v, want include-content flags", result.Metadata)
 	}
 }
 

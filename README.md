@@ -255,7 +255,9 @@ events, err := memaxagent.Query(ctx, "Review the migration plan.", memaxagent.Op
 In progressive mode, the SDK automatically exposes a read-only `load_skill`
 tool. The tool returns the selected skill body as a normal tool result, so skill
 use is visible in events and durable session history instead of being hidden
-prompt state.
+prompt state. Progressive discovery and skill tool activity also emit dedicated
+events: `EventSkillDiscovery`, `EventSkillSearch`, `EventSkillLoaded`, and
+`EventSkillResourceLoaded`.
 
 Other source adapters are available:
 

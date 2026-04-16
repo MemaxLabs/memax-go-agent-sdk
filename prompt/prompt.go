@@ -60,9 +60,18 @@ type Part struct {
 
 // Result is a built prompt plus prompt metadata.
 type Result struct {
-	SystemPrompt string
-	Parts        []Part
-	Hash         string
+	SystemPrompt   string
+	Parts          []Part
+	Hash           string
+	SkillDiscovery *SkillDiscovery
+}
+
+// SkillDiscovery describes progressive skill metadata included in a prompt.
+type SkillDiscovery struct {
+	SelectedSkills []string
+	Selected       int
+	Omitted        int
+	PromptBytes    int
 }
 
 // DefaultBuilder is the SDK's default Memax-native prompt assembler. In
@@ -105,10 +114,17 @@ func (b DefaultBuilder) Build(ctx context.Context, req Request) (Result, error) 
 	if selected := b.MemorySelector.Select(req.Memories, requestQuery(req)); len(selected) > 0 {
 		parts = append(parts, Part{Name: "memax.memories", Content: formatMemories(selected)})
 	}
+	var discovery *SkillDiscovery
 	if selected, omitted := b.selectSkills(req.Skills, requestQuery(req), req.SkillDisclosure); len(selected) > 0 {
 		if req.SkillDisclosure == skill.DisclosureProgressive {
 			if content := formatSkillDiscovery(selected, req.SkillResources, b.skillDiscoveryMaxBytes(req.SkillDisclosure), omitted); content != "" {
 				parts = append(parts, Part{Name: "memax.skill_discovery", Content: content})
+				discovery = &SkillDiscovery{
+					SelectedSkills: skillNames(selected),
+					Selected:       countNamedSkills(selected),
+					Omitted:        omitted,
+					PromptBytes:    len(content),
+				}
 			}
 		} else {
 			parts = append(parts, Part{Name: "memax.skills", Content: formatSkills(selected)})
@@ -121,7 +137,7 @@ func (b DefaultBuilder) Build(ctx context.Context, req Request) (Result, error) 
 		parts = append(parts, Part{Name: "host.append_system", Content: strings.TrimSpace(req.AppendSystemPrompt)})
 	}
 
-	result := Result{Parts: parts}
+	result := Result{Parts: parts, SkillDiscovery: discovery}
 	result.SystemPrompt = joinParts(parts)
 	result.Hash = hashParts(parts)
 	return result, nil
@@ -297,6 +313,27 @@ func formatSkills(skills []skill.Skill) string {
 		}
 	}
 	return b.String()
+}
+
+func skillNames(skills []skill.Skill) []string {
+	names := make([]string, 0, len(skills))
+	for _, item := range skills {
+		name := strings.TrimSpace(item.Name)
+		if name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+func countNamedSkills(skills []skill.Skill) int {
+	count := 0
+	for _, item := range skills {
+		if strings.TrimSpace(item.Name) != "" {
+			count++
+		}
+	}
+	return count
 }
 
 func formatSkillDiscovery(skills []skill.Skill, resourcesAvailable bool, maxBytes int, priorOmitted int) string {

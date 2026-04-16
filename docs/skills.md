@@ -168,3 +168,10 @@ tool-loaded and auditable.
 Progressive disclosure requires named skills. Anonymous instruction blocks are
 not loadable by `load_skill`; use direct injection for those or give them stable
 names.
+
+Skill operations are observable in the normal query event stream. Progressive
+metadata injection emits `EventSkillDiscovery`; catalog search emits
+`EventSkillSearch`; `load_skill` emits `EventSkillLoaded`; and
+`read_skill_resource` emits `EventSkillResourceLoaded`. The corresponding meter
+counters are `memax.skill.discovery`, `memax.skill.search`,
+`memax.skill.loaded`, and `memax.skill.resource_loaded`.

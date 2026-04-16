@@ -90,6 +90,8 @@ const (
 	// MetadataLoadedSkillResource marks a tool result as a loaded skill
 	// supporting resource.
 	MetadataLoadedSkillResource = "loaded_skill_resource"
+	// MetadataSkillSearch marks a tool result as skill catalog search output.
+	MetadataSkillSearch = "skill_search"
 )
 
 // CloneMessages returns a deep copy of messages.

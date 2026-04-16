@@ -22,6 +22,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/skill"
 	"github.com/MemaxLabs/memax-go-agent-sdk/telemetry"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
+	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/skilltools"
 )
 
 func TestQueryRunsToolAndContinuesToResult(t *testing.T) {
@@ -471,6 +472,104 @@ func TestQueryProgressiveSkillResourceLoadsThroughTool(t *testing.T) {
 	}
 	if secondLast.ToolResult.Metadata["skill_loaded"] != true {
 		t.Fatalf("resource metadata = %#v, want skill_loaded true", secondLast.ToolResult.Metadata)
+	}
+}
+
+func TestQueryEmitsSkillEventsAndMetrics(t *testing.T) {
+	fake := &fakeModel{turns: [][]model.StreamEvent{
+		{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "search-1",
+				Name:  "search_skills",
+				Input: json.RawMessage(`{"query":"SQL migration","limit":1}`),
+			},
+		}},
+		{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "skill-1",
+				Name:  skill.LoadToolName,
+				Input: json.RawMessage(`{"name":"database-review"}`),
+			},
+		}},
+		{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "resource-1",
+				Name:  skill.ResourceToolName,
+				Input: json.RawMessage(`{"skill_name":"database-review","resource":"migration-checklist"}`),
+			},
+		}},
+		{{Kind: model.StreamText, Text: "done"}},
+	}}
+	source := skill.StaticSource{{
+		Name:        "database-review",
+		Description: "SQL migration review.",
+		AlwaysOn:    true,
+		Content:     "Check rollback safety.",
+		Resources: []skill.ResourceRef{{
+			Name:        "migration-checklist",
+			Description: "Migration checklist.",
+			Path:        "resources/migration-checklist.md",
+		}},
+	}}
+	resources := skill.StaticResourceSource{{
+		SkillName: "database-review",
+		Name:      "migration-checklist",
+		Path:      "resources/migration-checklist.md",
+		Content:   "Confirm rollback.",
+	}}
+	searchTool, err := skilltools.NewSearchTool(skilltools.Config{Source: source})
+	if err != nil {
+		t.Fatalf("NewSearchTool returned error: %v", err)
+	}
+	meter := &recordingMeter{}
+
+	stream, err := Query(context.Background(), "review SQL migration", Options{
+		Model:               fake,
+		Tools:               tool.NewRegistry(searchTool),
+		SkillSource:         source,
+		SkillResourceSource: resources,
+		SkillDisclosure:     skill.DisclosureProgressive,
+		Meter:               meter,
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+	var events []Event
+	for event := range stream {
+		if event.Kind == EventError {
+			t.Fatalf("unexpected error event: %v", event.Err)
+		}
+		events = append(events, event)
+	}
+
+	discovery := findSkillEvent(events, EventSkillDiscovery)
+	if discovery == nil || discovery.Selected != 1 || discovery.PromptBytes == 0 || len(discovery.SelectedSkills) != 1 || discovery.SelectedSkills[0] != "database-review" {
+		t.Fatalf("skill discovery event = %#v", discovery)
+	}
+	search := findSkillEvent(events, EventSkillSearch)
+	if search == nil || search.Query != "SQL migration" || search.Matches != 1 || !search.MetadataOnly {
+		t.Fatalf("skill search event = %#v", search)
+	}
+	loaded := findSkillEvent(events, EventSkillLoaded)
+	if loaded == nil || loaded.SkillName != "database-review" {
+		t.Fatalf("skill loaded event = %#v", loaded)
+	}
+	resource := findSkillEvent(events, EventSkillResourceLoaded)
+	if resource == nil || resource.SkillName != "database-review" || resource.ResourceName != "migration-checklist" {
+		t.Fatalf("skill resource event = %#v", resource)
+	}
+	for _, counter := range []string{
+		"memax.skill.discovery",
+		"memax.skill.search",
+		"memax.skill.loaded",
+		"memax.skill.resource_loaded",
+	} {
+		if !meter.hasCounter(counter) {
+			t.Fatalf("meter counters = %#v, missing %s", meter.counterNames(), counter)
+		}
 	}
 }
 
@@ -2160,6 +2259,15 @@ func sameStrings(a []string, b []string) bool {
 		}
 	}
 	return true
+}
+
+func findSkillEvent(events []Event, kind EventKind) *SkillEvent {
+	for _, event := range events {
+		if event.Kind == kind && event.Skill != nil {
+			return event.Skill
+		}
+	}
+	return nil
 }
 
 func answerOutputContract() output.Contract {

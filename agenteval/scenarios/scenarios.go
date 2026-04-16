@@ -192,6 +192,9 @@ func ProgressiveSkillSearchRecovery() agenteval.Case {
 			toolConstructionSucceeded(searchErr),
 			agenteval.ToolUsed("search_skills"),
 			agenteval.ToolUsed(skill.LoadToolName),
+			agenteval.EventKindEmitted(memaxagent.EventSkillDiscovery),
+			agenteval.EventKindEmitted(memaxagent.EventSkillSearch),
+			agenteval.EventKindEmitted(memaxagent.EventSkillLoaded),
 			agenteval.NoToolErrors(),
 			agenteval.FinalEquals("Recovered omitted skill through search."),
 			{
@@ -624,6 +627,9 @@ func ProgressiveSkillResourceLoading() agenteval.Case {
 		Assertions: []agenteval.Assertion{
 			agenteval.ToolUsed(skill.LoadToolName),
 			agenteval.ToolUsed(skill.ResourceToolName),
+			agenteval.EventKindEmitted(memaxagent.EventSkillDiscovery),
+			agenteval.EventKindEmitted(memaxagent.EventSkillLoaded),
+			agenteval.EventKindEmitted(memaxagent.EventSkillResourceLoaded),
 			agenteval.NoToolErrors(),
 			agenteval.FinalEquals("Migration reviewed with the resource checklist."),
 			{

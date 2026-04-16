@@ -320,6 +320,14 @@ through the normal tool layer for hosts that want explicit catalog search. This
 keeps skills inspectable and governable by the same registry, permission, hook,
 and telemetry machinery as every other capability.
 
+Skill visibility is evented. Progressive prompt metadata emits
+`EventSkillDiscovery` with selected skill names, omitted count, and prompt byte
+size. `toolkit/skilltools` results emit `EventSkillSearch` with query, match
+count, and whether results were metadata-only. `load_skill` emits
+`EventSkillLoaded`, and `read_skill_resource` emits `EventSkillResourceLoaded`.
+The same operations increment `memax.skill.discovery`, `memax.skill.search`,
+`memax.skill.loaded`, and `memax.skill.resource_loaded` counters.
+
 If a provider rejects a model request because the context window is too large,
 adapters can mark the error with `model.ErrContextWindowExceeded`. `Query` can
 then apply `Options.ContextRetry` once and retry the model request without
@@ -397,7 +405,7 @@ or dynamic policies. The core package depends only on the provider-neutral
 
 ## Observability
 
-Tracing is optional and uses a small SDK-owned `telemetry.Tracer` interface so the core can be tested without a real exporter. Metrics are optional and use a matching SDK-owned `telemetry.Meter` interface with counter and value-recording methods. The `otel` package adapts both interfaces to OpenTelemetry. Current spans cover full query runs, turns, context policy application, model streaming, and individual tool executions. Metrics cover query starts/completions/errors, turn starts and durations, model stream starts/errors/durations, context compaction events, tool executions and durations, and hook errors. Spans and metrics carry stable attributes for session IDs, turn numbers, message counts, tool IDs, tool names, tool input/result byte counts, and tool policy flags.
+Tracing is optional and uses a small SDK-owned `telemetry.Tracer` interface so the core can be tested without a real exporter. Metrics are optional and use a matching SDK-owned `telemetry.Meter` interface with counter and value-recording methods. The `otel` package adapts both interfaces to OpenTelemetry. Current spans cover full query runs, turns, context policy application, model streaming, and individual tool executions. Metrics cover query starts/completions/errors, turn starts and durations, model stream starts/errors/durations, context compaction events, skill discovery/search/load operations, tool executions and durations, and hook errors. Spans and metrics carry stable attributes for session IDs, turn numbers, message counts, tool IDs, tool names, skill names, tool input/result byte counts, and tool policy flags.
 
 Durable session stores should support:
 

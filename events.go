@@ -38,8 +38,18 @@ const (
 	// EventMemoryCandidateHandlerError is emitted when an optional memory
 	// candidate handler fails. It is non-terminal; EventResult is still emitted.
 	EventMemoryCandidateHandlerError EventKind = "memory_candidate_handler_error"
-	EventError                       EventKind = "error"
-	EventResult                      EventKind = "result"
+	// EventSkillDiscovery is emitted when the prompt exposes progressive skill
+	// metadata for a model request.
+	EventSkillDiscovery EventKind = "skill_discovery"
+	// EventSkillSearch is emitted when a skill catalog search tool returns.
+	EventSkillSearch EventKind = "skill_search"
+	// EventSkillLoaded is emitted when load_skill returns full instructions.
+	EventSkillLoaded EventKind = "skill_loaded"
+	// EventSkillResourceLoaded is emitted when read_skill_resource returns a
+	// supporting resource.
+	EventSkillResourceLoaded EventKind = "skill_resource_loaded"
+	EventError               EventKind = "error"
+	EventResult              EventKind = "result"
 )
 
 // Event is emitted by Query as the orchestration loop progresses.
@@ -58,6 +68,7 @@ type Event struct {
 	Context      *ContextEvent
 	Compaction   *contextwindow.CompactionRecord
 	Memory       *MemoryCandidatesEvent
+	Skill        *SkillEvent
 	Result       string
 	Err          error
 }
@@ -69,6 +80,19 @@ type ContextEvent struct {
 
 type MemoryCandidatesEvent struct {
 	Candidates []memory.Candidate
+}
+
+type SkillEvent struct {
+	Action         string
+	SkillName      string
+	ResourceName   string
+	Query          string
+	SelectedSkills []string
+	Selected       int
+	Omitted        int
+	Matches        int
+	PromptBytes    int
+	MetadataOnly   bool
 }
 
 func newEvent(kind EventKind, sessionID string, turn int) Event {

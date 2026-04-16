@@ -106,8 +106,11 @@ func (t *searchTool) Execute(ctx context.Context, use tool.Call) (model.ToolResu
 	return model.ToolResult{
 		Content: formatSkills(selected, t.includeContent),
 		Metadata: map[string]any{
-			"query":   input.Query,
-			"matches": len(selected),
+			model.MetadataSkillSearch: true,
+			"query":                   input.Query,
+			"matches":                 len(selected),
+			"metadata_only":           !t.includeContent,
+			"include_content":         t.includeContent,
 		},
 	}, nil
 }
