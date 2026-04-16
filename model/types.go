@@ -92,6 +92,20 @@ const (
 	MetadataLoadedSkillResource = "loaded_skill_resource"
 	// MetadataSkillSearch marks a tool result as skill catalog search output.
 	MetadataSkillSearch = "skill_search"
+	// MetadataWorkspaceOperation identifies workspace tool results that should
+	// produce workspace lifecycle events.
+	MetadataWorkspaceOperation = "workspace_operation"
+	// MetadataWorkspacePaths carries the workspace-relative paths affected by a
+	// workspace operation.
+	MetadataWorkspacePaths = "workspace_paths"
+	// MetadataWorkspaceChanges carries the number of file-level changes
+	// reported by a workspace operation.
+	MetadataWorkspaceChanges = "workspace_changes"
+	// MetadataWorkspaceCheckpointID carries the checkpoint ID created, diffed,
+	// or restored by a workspace operation.
+	MetadataWorkspaceCheckpointID = "workspace_checkpoint_id"
+	// MetadataWorkspaceBaseID carries the checkpoint ID used as a diff base.
+	MetadataWorkspaceBaseID = "workspace_base_id"
 )
 
 // CloneMessages returns a deep copy of messages.

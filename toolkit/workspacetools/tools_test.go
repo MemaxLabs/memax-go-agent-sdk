@@ -30,14 +30,20 @@ func TestWorkspaceToolsPatchDiffAndRestore(t *testing.T) {
 	if !strings.Contains(patch.Content, "modified README.md") || !strings.Contains(patch.Content, "added docs/new.md") {
 		t.Fatalf("patch content = %q", patch.Content)
 	}
+	if patch.Metadata[model.MetadataWorkspaceOperation] != "patch" || patch.Metadata[model.MetadataWorkspaceChanges] != 2 {
+		t.Fatalf("patch metadata = %#v, want workspace patch metadata", patch.Metadata)
+	}
 
 	diff := mustRun(t, registry, model.ToolUse{ID: "diff-1", Name: DiffToolName, Input: json.RawMessage(`{}`)})
 	if !strings.Contains(diff.Content, "modified README.md") || !strings.Contains(diff.Content, "added docs/new.md") {
 		t.Fatalf("diff content = %q", diff.Content)
 	}
+	if diff.Metadata[model.MetadataWorkspaceOperation] != "diff" || diff.Metadata[model.MetadataWorkspaceBaseID] != "checkpoint-0" {
+		t.Fatalf("diff metadata = %#v, want workspace diff metadata", diff.Metadata)
+	}
 
 	cp := mustRun(t, registry, model.ToolUse{ID: "cp-1", Name: CheckpointToolName, Input: json.RawMessage(`{"label":"after patch"}`)})
-	if cp.Metadata["id"] != "checkpoint-1" {
+	if cp.Metadata["id"] != "checkpoint-1" || cp.Metadata[model.MetadataWorkspaceOperation] != "checkpoint" {
 		t.Fatalf("checkpoint metadata = %#v, want checkpoint-1", cp.Metadata)
 	}
 	_ = mustRun(t, registry, model.ToolUse{
@@ -50,6 +56,9 @@ func TestWorkspaceToolsPatchDiffAndRestore(t *testing.T) {
 	restore := mustRun(t, registry, model.ToolUse{ID: "restore-1", Name: RestoreToolName, Input: json.RawMessage(`{"id":"checkpoint-1"}`)})
 	if !strings.Contains(restore.Content, "restored workspace checkpoint checkpoint-1") {
 		t.Fatalf("restore content = %q", restore.Content)
+	}
+	if restore.Metadata[model.MetadataWorkspaceOperation] != "restore" || restore.Metadata[model.MetadataWorkspaceCheckpointID] != "checkpoint-1" {
+		t.Fatalf("restore metadata = %#v, want workspace restore metadata", restore.Metadata)
 	}
 	read := mustRun(t, registry, model.ToolUse{ID: "read-1", Name: ReadToolName, Input: json.RawMessage(`{"path":"README.md"}`)})
 	if read.Content != "hello world" {

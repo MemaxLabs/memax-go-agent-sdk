@@ -49,8 +49,18 @@ const (
 	// EventSkillResourceLoaded is emitted when read_skill_resource returns a
 	// supporting resource.
 	EventSkillResourceLoaded EventKind = "skill_resource_loaded"
-	EventError               EventKind = "error"
-	EventResult              EventKind = "result"
+	// EventWorkspacePatch is emitted when a workspace patch tool applies file
+	// changes.
+	EventWorkspacePatch EventKind = "workspace_patch"
+	// EventWorkspaceDiff is emitted when a workspace diff tool reports changes.
+	EventWorkspaceDiff EventKind = "workspace_diff"
+	// EventWorkspaceCheckpoint is emitted when a workspace checkpoint is
+	// created.
+	EventWorkspaceCheckpoint EventKind = "workspace_checkpoint"
+	// EventWorkspaceRestore is emitted when a workspace checkpoint is restored.
+	EventWorkspaceRestore EventKind = "workspace_restore"
+	EventError            EventKind = "error"
+	EventResult           EventKind = "result"
 )
 
 // Event is emitted by Query as the orchestration loop progresses.
@@ -70,6 +80,7 @@ type Event struct {
 	Compaction   *contextwindow.CompactionRecord
 	Memory       *MemoryCandidatesEvent
 	Skill        *SkillEvent
+	Workspace    *WorkspaceEvent
 	Result       string
 	Err          error
 }
@@ -98,6 +109,18 @@ type SkillEvent struct {
 	Matches        int
 	PromptBytes    int
 	MetadataOnly   bool
+}
+
+// WorkspaceEvent describes one workspace lifecycle observation derived from
+// tool result metadata. Operation is one of "patch", "diff", "checkpoint", or
+// "restore". Patch and diff events use Paths and Changes; checkpoint and
+// restore events use CheckpointID. Diff events may also set BaseID.
+type WorkspaceEvent struct {
+	Operation    string
+	Paths        []string
+	Changes      int
+	CheckpointID string
+	BaseID       string
 }
 
 func newEvent(kind EventKind, sessionID string, turn int) Event {

@@ -211,7 +211,8 @@ checkpoints, and restore through the normal tool, permission, hook, budget, and
 event pipeline. Use individual `workspacetools.New*Tool` constructors when a
 host wants to expose only a subset of capabilities. Workspace paths use
 forward-slash, workspace-relative syntax; OS-backed adapters should translate
-and contain paths at the adapter boundary.
+and contain paths at the adapter boundary. Patch, diff, checkpoint, and restore
+tools emit dedicated workspace lifecycle events derived from result metadata.
 
 To require a machine-readable final answer, configure `Options.Output` with a
 JSON Schema. The default prompt builder includes the contract, and `Query`

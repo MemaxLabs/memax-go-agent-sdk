@@ -23,7 +23,9 @@ configured:
    `EventToolUseDelta`, `EventToolUse`, and `EventUsage`.
 6. `EventToolResult` for each executable tool call. Skill-related tool results
    can be followed by `EventSkillSearch`, `EventSkillLoaded`, or
-   `EventSkillResourceLoaded`.
+   `EventSkillResourceLoaded`. Workspace-related tool results can be followed
+   by `EventWorkspacePatch`, `EventWorkspaceDiff`,
+   `EventWorkspaceCheckpoint`, or `EventWorkspaceRestore`.
 7. If the assistant returns a final answer, optional `EventMemoryCandidates`
    after successful distillation and before `EventResult`.
 8. Optional non-terminal `EventMemoryCandidateHandlerError` if the opt-in
@@ -56,6 +58,8 @@ orphaned `EventToolUse`.
 - `EventMemoryCandidates`: `Memory`
 - `EventSkillDiscovery`, `EventSkillSearch`, `EventSkillLoaded`,
   `EventSkillResourceLoaded`: `Skill`
+- `EventWorkspacePatch`, `EventWorkspaceDiff`, `EventWorkspaceCheckpoint`,
+  `EventWorkspaceRestore`: `Workspace`
 - `EventResult`: `Result` and optional aggregate `Usage`
 - `EventError` and `EventMemoryCandidateHandlerError`: `Err`
 
@@ -71,6 +75,11 @@ Memory candidates are proposals. The SDK emits them before the final result but
 does not persist them unless `Options.MemoryCandidateHandler` is configured.
 Handler failures are non-terminal and are surfaced as
 `EventMemoryCandidateHandlerError`.
+
+Workspace events are derived from tool-result metadata rather than direct core
+imports of the `workspace` package. This keeps the core provider- and
+workspace-neutral while giving hosts first-class audit events for patch, diff,
+checkpoint, and restore operations.
 
 ## Metrics And Spans
 
@@ -92,6 +101,8 @@ Important metric names include:
 - `memax.memory.candidates`, `memax.memory.candidate_handler.errors`
 - `memax.skill.discovery`, `memax.skill.search`, `memax.skill.loaded`,
   `memax.skill.resource_loaded`
+- `memax.workspace.patch`, `memax.workspace.diff`,
+  `memax.workspace.checkpoint`, `memax.workspace.restore`
 
 Telemetry complements events; it should not be the only source of application
 state. Use events for ordered behavior and spans/metrics for aggregate
@@ -108,6 +119,8 @@ The public event contract is protected by golden tests:
   aggregation.
 - `testdata/golden/budget_denial_event_stream.json` covers budget-denial
   ordering and error emission.
+- `testdata/golden/workspace_event_stream.json` covers workspace checkpoint,
+  patch, diff, and restore event ordering.
 
 When adding a new event kind or changing event order, update the docs and golden
 files in the same change.

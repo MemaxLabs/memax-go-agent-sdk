@@ -23,6 +23,8 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/telemetry"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/skilltools"
+	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/workspacetools"
+	"github.com/MemaxLabs/memax-go-agent-sdk/workspace"
 )
 
 func TestQueryRunsToolAndContinuesToResult(t *testing.T) {
@@ -566,6 +568,91 @@ func TestQueryEmitsSkillEventsAndMetrics(t *testing.T) {
 		"memax.skill.search",
 		"memax.skill.loaded",
 		"memax.skill.resource_loaded",
+	} {
+		if !meter.hasCounter(counter) {
+			t.Fatalf("meter counters = %#v, missing %s", meter.counterNames(), counter)
+		}
+	}
+}
+
+func TestQueryEmitsWorkspaceEventsAndMetrics(t *testing.T) {
+	store := workspace.NewMemoryStore(map[string]string{"README.md": "one"})
+	workspaceTools, err := workspacetools.NewTools(store)
+	if err != nil {
+		t.Fatalf("NewTools returned error: %v", err)
+	}
+	fake := &fakeModel{turns: [][]model.StreamEvent{
+		{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "checkpoint-1",
+				Name:  workspacetools.CheckpointToolName,
+				Input: json.RawMessage(`{"label":"before"}`),
+			},
+		}},
+		{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "patch-1",
+				Name:  workspacetools.ApplyPatchToolName,
+				Input: json.RawMessage(`{"operations":[{"path":"README.md","old_content":"one","new_content":"two"}]}`),
+			},
+		}},
+		{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "diff-1",
+				Name:  workspacetools.DiffToolName,
+				Input: json.RawMessage(`{}`),
+			},
+		}},
+		{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "restore-1",
+				Name:  workspacetools.RestoreToolName,
+				Input: json.RawMessage(`{"id":"checkpoint-1"}`),
+			},
+		}},
+		{{Kind: model.StreamText, Text: "done"}},
+	}}
+	meter := &recordingMeter{}
+	stream, err := Query(context.Background(), "patch README and restore it", Options{
+		Model: fake,
+		Tools: tool.NewRegistry(workspaceTools...),
+		Meter: meter,
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+	var events []Event
+	for event := range stream {
+		if event.Kind == EventError {
+			t.Fatalf("unexpected error event: %v", event.Err)
+		}
+		events = append(events, event)
+	}
+	checkpoint := findWorkspaceEvent(events, EventWorkspaceCheckpoint)
+	if checkpoint == nil || checkpoint.Operation != "checkpoint" || checkpoint.CheckpointID != "checkpoint-1" {
+		t.Fatalf("checkpoint event = %#v", checkpoint)
+	}
+	patch := findWorkspaceEvent(events, EventWorkspacePatch)
+	if patch == nil || patch.Operation != "patch" || patch.Changes != 1 || !sameStrings(patch.Paths, []string{"README.md"}) {
+		t.Fatalf("patch event = %#v", patch)
+	}
+	diff := findWorkspaceEvent(events, EventWorkspaceDiff)
+	if diff == nil || diff.Operation != "diff" || diff.BaseID != "checkpoint-0" || diff.Changes != 1 {
+		t.Fatalf("diff event = %#v", diff)
+	}
+	restore := findWorkspaceEvent(events, EventWorkspaceRestore)
+	if restore == nil || restore.Operation != "restore" || restore.CheckpointID != "checkpoint-1" {
+		t.Fatalf("restore event = %#v", restore)
+	}
+	for _, counter := range []string{
+		"memax.workspace.checkpoint",
+		"memax.workspace.patch",
+		"memax.workspace.diff",
+		"memax.workspace.restore",
 	} {
 		if !meter.hasCounter(counter) {
 			t.Fatalf("meter counters = %#v, missing %s", meter.counterNames(), counter)
@@ -2265,6 +2352,15 @@ func findSkillEvent(events []Event, kind EventKind) *SkillEvent {
 	for _, event := range events {
 		if event.Kind == kind && event.Skill != nil {
 			return event.Skill
+		}
+	}
+	return nil
+}
+
+func findWorkspaceEvent(events []Event, kind EventKind) *WorkspaceEvent {
+	for _, event := range events {
+		if event.Kind == kind && event.Workspace != nil {
+			return event.Workspace
 		}
 	}
 	return nil

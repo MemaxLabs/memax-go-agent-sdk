@@ -1,0 +1,119 @@
+[
+  {
+    "kind": "session_started"
+  },
+  {
+    "kind": "model_request",
+    "turn": 1
+  },
+  {
+    "kind": "tool_use",
+    "turn": 1,
+    "tool_id": "checkpoint-1",
+    "tool_name": "workspace_checkpoint"
+  },
+  {
+    "kind": "tool_result",
+    "turn": 1,
+    "tool_id": "checkpoint-1",
+    "tool_name": "workspace_checkpoint",
+    "tool_result": "created workspace checkpoint checkpoint-1"
+  },
+  {
+    "kind": "workspace_checkpoint",
+    "turn": 1,
+    "workspace_operation": "checkpoint",
+    "workspace_checkpoint": "checkpoint-1"
+  },
+  {
+    "kind": "model_request",
+    "turn": 2
+  },
+  {
+    "kind": "tool_use",
+    "turn": 2,
+    "tool_id": "patch-1",
+    "tool_name": "workspace_apply_patch"
+  },
+  {
+    "kind": "tool_result",
+    "turn": 2,
+    "tool_id": "patch-1",
+    "tool_name": "workspace_apply_patch",
+    "tool_result": "- modified README.md (11 -\u003e 11 bytes)"
+  },
+  {
+    "kind": "workspace_patch",
+    "turn": 2,
+    "workspace_operation": "patch",
+    "workspace_paths": [
+      "README.md"
+    ],
+    "workspace_changes": 1
+  },
+  {
+    "kind": "model_request",
+    "turn": 3
+  },
+  {
+    "kind": "tool_use",
+    "turn": 3,
+    "tool_id": "diff-1",
+    "tool_name": "workspace_diff"
+  },
+  {
+    "kind": "tool_result",
+    "turn": 3,
+    "tool_id": "diff-1",
+    "tool_name": "workspace_diff",
+    "tool_result": "- modified README.md (11 -\u003e 11 bytes)"
+  },
+  {
+    "kind": "workspace_diff",
+    "turn": 3,
+    "workspace_operation": "diff",
+    "workspace_paths": [
+      "README.md"
+    ],
+    "workspace_changes": 1,
+    "workspace_checkpoint": "checkpoint-0",
+    "workspace_base": "checkpoint-0"
+  },
+  {
+    "kind": "model_request",
+    "turn": 4
+  },
+  {
+    "kind": "tool_use",
+    "turn": 4,
+    "tool_id": "restore-1",
+    "tool_name": "workspace_restore"
+  },
+  {
+    "kind": "tool_result",
+    "turn": 4,
+    "tool_id": "restore-1",
+    "tool_name": "workspace_restore",
+    "tool_result": "restored workspace checkpoint checkpoint-1"
+  },
+  {
+    "kind": "workspace_restore",
+    "turn": 4,
+    "workspace_operation": "restore",
+    "workspace_checkpoint": "checkpoint-1"
+  },
+  {
+    "kind": "model_request",
+    "turn": 5
+  },
+  {
+    "kind": "assistant",
+    "turn": 5,
+    "text": "workspace restored"
+  },
+  {
+    "kind": "result",
+    "turn": 5,
+    "result": "workspace restored"
+  }
+]

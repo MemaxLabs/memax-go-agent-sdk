@@ -14,6 +14,8 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/skill"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/skilltools"
+	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/workspacetools"
+	"github.com/MemaxLabs/memax-go-agent-sdk/workspace"
 )
 
 func TestQueryEventStreamGolden(t *testing.T) {
@@ -234,6 +236,79 @@ func TestQueryBudgetDenialEventStreamGolden(t *testing.T) {
 	}
 }
 
+func TestQueryWorkspaceEventStreamGolden(t *testing.T) {
+	store := workspace.NewMemoryStore(map[string]string{"README.md": "version one"})
+	tools, err := workspacetools.NewTools(store)
+	if err != nil {
+		t.Fatalf("NewTools returned error: %v", err)
+	}
+	events, err := Query(context.Background(), "patch and restore the workspace", Options{
+		Model: &fakeModel{turns: [][]model.StreamEvent{
+			{{
+				Kind: model.StreamToolUse,
+				ToolUse: model.ToolUse{
+					ID:    "checkpoint-1",
+					Name:  workspacetools.CheckpointToolName,
+					Input: json.RawMessage(`{"label":"before patch"}`),
+				},
+			}},
+			{{
+				Kind: model.StreamToolUse,
+				ToolUse: model.ToolUse{
+					ID:   "patch-1",
+					Name: workspacetools.ApplyPatchToolName,
+					Input: json.RawMessage(`{"operations":[
+						{"path":"README.md","old_content":"version one","new_content":"version two"}
+					]}`),
+				},
+			}},
+			{{
+				Kind: model.StreamToolUse,
+				ToolUse: model.ToolUse{
+					ID:    "diff-1",
+					Name:  workspacetools.DiffToolName,
+					Input: json.RawMessage(`{}`),
+				},
+			}},
+			{{
+				Kind: model.StreamToolUse,
+				ToolUse: model.ToolUse{
+					ID:    "restore-1",
+					Name:  workspacetools.RestoreToolName,
+					Input: json.RawMessage(`{"id":"checkpoint-1"}`),
+				},
+			}},
+			{{Kind: model.StreamText, Text: "workspace restored"}},
+		}},
+		Tools: tool.NewRegistry(tools...),
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+
+	var got []goldenEvent
+	for event := range events {
+		if event.Kind == EventError {
+			t.Fatalf("query error: %v", event.Err)
+		}
+		got = append(got, normalizeGoldenEvent(event))
+	}
+
+	data, err := json.MarshalIndent(got, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal golden events: %v", err)
+	}
+	data = append(data, '\n')
+
+	want, err := os.ReadFile("testdata/golden/workspace_event_stream.json")
+	if err != nil {
+		t.Fatalf("read golden file: %v", err)
+	}
+	if strings.TrimSpace(string(data)) != strings.TrimSpace(string(want)) {
+		t.Fatalf("workspace event stream golden mismatch\n got:\n%s\nwant:\n%s", data, want)
+	}
+}
+
 type goldenEvent struct {
 	Kind                EventKind `json:"kind"`
 	Turn                int       `json:"turn,omitempty"`
@@ -263,6 +338,11 @@ type goldenEvent struct {
 	SkillMetadataOnly   bool      `json:"skill_metadata_only,omitempty"`
 	SkillPromptBytesSet bool      `json:"skill_prompt_bytes_set,omitempty"`
 	MemoryCandidates    []string  `json:"memory_candidates,omitempty"`
+	WorkspaceOperation  string    `json:"workspace_operation,omitempty"`
+	WorkspacePaths      []string  `json:"workspace_paths,omitempty"`
+	WorkspaceChanges    int       `json:"workspace_changes,omitempty"`
+	WorkspaceCheckpoint string    `json:"workspace_checkpoint,omitempty"`
+	WorkspaceBase       string    `json:"workspace_base,omitempty"`
 	Result              string    `json:"result,omitempty"`
 	Error               string    `json:"error,omitempty"`
 }
@@ -320,6 +400,14 @@ func normalizeGoldenEvent(event Event) goldenEvent {
 			for _, candidate := range event.Memory.Candidates {
 				out.MemoryCandidates = append(out.MemoryCandidates, candidate.Memory.Name)
 			}
+		}
+	case EventWorkspacePatch, EventWorkspaceDiff, EventWorkspaceCheckpoint, EventWorkspaceRestore:
+		if event.Workspace != nil {
+			out.WorkspaceOperation = event.Workspace.Operation
+			out.WorkspacePaths = append([]string(nil), event.Workspace.Paths...)
+			out.WorkspaceChanges = event.Workspace.Changes
+			out.WorkspaceCheckpoint = event.Workspace.CheckpointID
+			out.WorkspaceBase = event.Workspace.BaseID
 		}
 	case EventResult:
 		out.Result = event.Result

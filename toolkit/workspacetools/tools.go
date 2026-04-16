@@ -189,8 +189,12 @@ func NewApplyPatchTool(store Patcher) tool.Tool {
 				return model.ToolResult{}, err
 			}
 			return model.ToolResult{
-				Content:  formatChanges(result.Changes),
-				Metadata: map[string]any{"changes": len(result.Changes)},
+				Content: formatChanges(result.Changes),
+				Metadata: map[string]any{
+					model.MetadataWorkspaceOperation: "patch",
+					model.MetadataWorkspaceChanges:   len(result.Changes),
+					model.MetadataWorkspacePaths:     changePaths(result.Changes),
+				},
 			}, nil
 		},
 	}
@@ -229,8 +233,11 @@ func NewDiffTool(store Differ) tool.Tool {
 			return model.ToolResult{
 				Content: formatChanges(diff.Changes),
 				Metadata: map[string]any{
-					"base_id": diff.BaseID,
-					"changes": len(diff.Changes),
+					model.MetadataWorkspaceOperation:    "diff",
+					model.MetadataWorkspaceBaseID:       diff.BaseID,
+					model.MetadataWorkspaceCheckpointID: diff.BaseID,
+					model.MetadataWorkspaceChanges:      len(diff.Changes),
+					model.MetadataWorkspacePaths:        changePaths(diff.Changes),
 				},
 			}, nil
 		},
@@ -317,7 +324,7 @@ func NewRestoreTool(store Restorer) tool.Tool {
 			}
 			return model.ToolResult{
 				Content:  "restored workspace checkpoint " + cp.ID,
-				Metadata: checkpointMetadata(cp),
+				Metadata: checkpointMetadata(cp, "restore"),
 			}, nil
 		},
 	}
@@ -398,17 +405,34 @@ func formatChanges(changes []workspace.Change) string {
 	return b.String()
 }
 
-func checkpointMetadata(cp workspace.Checkpoint) map[string]any {
+func checkpointMetadata(cp workspace.Checkpoint, operation ...string) map[string]any {
+	op := "checkpoint"
+	if len(operation) > 0 && operation[0] != "" {
+		op = operation[0]
+	}
 	out := map[string]any{
-		"id":         cp.ID,
-		"label":      cp.Label,
-		"created_at": cp.CreatedAt.Format("2006-01-02T15:04:05Z"),
-		"files":      cp.Files,
+		"id":                                cp.ID,
+		model.MetadataWorkspaceOperation:    op,
+		model.MetadataWorkspaceCheckpointID: cp.ID,
+		"label":                             cp.Label,
+		"created_at":                        cp.CreatedAt.Format("2006-01-02T15:04:05Z"),
+		"files":                             cp.Files,
 	}
 	if len(cp.Metadata) > 0 {
 		out["metadata"] = cp.Metadata
 	}
 	return out
+}
+
+func changePaths(changes []workspace.Change) []string {
+	if len(changes) == 0 {
+		return nil
+	}
+	paths := make([]string, len(changes))
+	for i, change := range changes {
+		paths[i] = change.Path
+	}
+	return paths
 }
 
 func pathInputSchema(description string) map[string]any {

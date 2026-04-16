@@ -672,6 +672,10 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 					shouldStop = true
 					return false
 				}
+				if !emitWorkspaceToolEvent(turnCtx, emit, opts, sessionID, turn, result) {
+					shouldStop = true
+					return false
+				}
 				if err := opts.Sessions.Append(turnCtx, sessionID, model.Message{
 					Role: model.RoleTool,
 					ToolResult: &model.ToolResult{
@@ -1621,6 +1625,67 @@ func emitSkillToolEvent(ctx context.Context, emit func(Event) bool, opts Options
 		)
 	}
 	return true
+}
+
+func emitWorkspaceToolEvent(ctx context.Context, emit func(Event) bool, opts Options, sessionID string, turn int, result model.ToolResult) bool {
+	operation := metadatavalues.String(result.Metadata, model.MetadataWorkspaceOperation)
+	if operation == "" {
+		return true
+	}
+	workspaceEvent := &WorkspaceEvent{
+		Operation:    operation,
+		Paths:        metadataStrings(result.Metadata, model.MetadataWorkspacePaths),
+		Changes:      metadatavalues.Int(result.Metadata, model.MetadataWorkspaceChanges),
+		CheckpointID: metadatavalues.String(result.Metadata, model.MetadataWorkspaceCheckpointID),
+		BaseID:       metadatavalues.String(result.Metadata, model.MetadataWorkspaceBaseID),
+	}
+	var kind EventKind
+	var meterName string
+	switch operation {
+	case "patch":
+		kind = EventWorkspacePatch
+		meterName = "memax.workspace.patch"
+	case "diff":
+		kind = EventWorkspaceDiff
+		meterName = "memax.workspace.diff"
+	case "checkpoint":
+		kind = EventWorkspaceCheckpoint
+		meterName = "memax.workspace.checkpoint"
+	case "restore":
+		kind = EventWorkspaceRestore
+		meterName = "memax.workspace.restore"
+	default:
+		return true
+	}
+	event := newEvent(kind, sessionID, turn)
+	event.Workspace = workspaceEvent
+	if !emit(event) {
+		return false
+	}
+	opts.Meter.Add(ctx, meterName, 1,
+		telemetry.String("memax.session_id", sessionID),
+		telemetry.Int("memax.turn", turn),
+		telemetry.Int("memax.workspace.changes", workspaceEvent.Changes),
+		telemetry.String("memax.workspace.checkpoint_id", workspaceEvent.CheckpointID),
+	)
+	return true
+}
+
+func metadataStrings(metadata map[string]any, key string) []string {
+	switch values := metadata[key].(type) {
+	case []string:
+		return append([]string(nil), values...)
+	case []any:
+		out := make([]string, 0, len(values))
+		for _, value := range values {
+			if str, ok := value.(string); ok {
+				out = append(out, str)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 // collectAssistant consumes a provider stream and returns the assistant message
