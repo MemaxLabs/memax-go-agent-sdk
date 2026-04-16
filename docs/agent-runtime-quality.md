@@ -189,10 +189,11 @@ use blocks arrive while keeping mutating tools serialized.
 
 **Eval coverage:**
 
-- Safe tools overlap with streaming. Initial unit coverage exists.
-- Mutating tools preserve order.
-- Permission denial during streaming is model-visible.
-- Cancellation does not leak goroutines.
+- Safe tools overlap with streaming. Initial unit and eval coverage exists.
+- Mutating tools preserve order. Initial eval coverage exists.
+- Permission denial during streaming is model-visible. Initial eval coverage
+  exists.
+- Cancellation does not hang the event loop. Initial eval coverage exists.
 
 ### 4. Workspace and Checkpoint Model
 

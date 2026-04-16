@@ -68,7 +68,8 @@ system prompt.
   (`tool_use_start`, `tool_use_delta`, complete `tool_use`) exist for OpenAI
   and Anthropic streams, and the agent loop can start read-only,
   concurrency-safe tools before trailing assistant text finishes while
-  preserving durable transcript order.
+  preserving durable transcript order. Eval coverage exists for safe overlap,
+  mutating-tool ordering, permission-denial recovery, and cancellation.
 - Add autonomy eval harness. Initial `agenteval` runner, scripted model, result capture, expected-error assertions, reusable assertions, and `agenteval/scenarios` package exist for deterministic tool recovery, structured-output repair, memory search/save, memory distillation candidates, memory candidate handler persistence, session resume, context retry, subagent delegation, planner-guided tool use, planner/task-state updates, progressive skill disclosure, httptest-backed provider usage mapping, provider tool-use round trips, permission/hook denial recovery, large-result storage recovery, budget-stop enforcement, and deferred tool discovery. Live evals remain future work.
 - Add context retention hardening. Initial `contextwindow.PreserveImportant`
   support keeps loaded skills, stored result handles, and tool errors with

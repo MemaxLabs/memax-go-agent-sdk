@@ -12,8 +12,8 @@ func TestScenariosPass(t *testing.T) {
 	if err := report.Error(); err != nil {
 		t.Fatalf("scenario report error = %v", err)
 	}
-	if !report.Passed() || len(report.Results) != 24 {
-		t.Fatalf("report = %#v, want twenty-four passing scenarios", report)
+	if !report.Passed() || len(report.Results) != 28 {
+		t.Fatalf("report = %#v, want twenty-eight passing scenarios", report)
 	}
 }
 
@@ -48,6 +48,10 @@ func TestScenarioNamesAreStable(t *testing.T) {
 		"budget_stops_before_tool_batch",
 		"budget_stops_after_token_usage",
 		"deferred_tool_discovery_recovery",
+		"streaming_safe_tool_overlap",
+		"streaming_mutating_tool_waits",
+		"streaming_permission_denial_recovery",
+		"streaming_cancellation",
 	}
 	if len(got) != len(want) {
 		t.Fatalf("scenario names = %#v, want %#v", got, want)

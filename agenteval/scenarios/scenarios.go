@@ -52,6 +52,10 @@ func All() []agenteval.Case {
 		BudgetStopsBeforeToolBatch(),
 		BudgetStopsAfterTokenUsage(),
 		DeferredToolDiscoveryRecovery(),
+		StreamingSafeToolOverlap(),
+		StreamingMutatingToolWaits(),
+		StreamingPermissionDenialRecovery(),
+		StreamingCancellation(),
 	}
 }
 
