@@ -123,13 +123,13 @@ func (s *agentServer) query(w http.ResponseWriter, r *http.Request) {
 func modelClientFromEnv() (model.Client, error) {
 	switch strings.ToLower(os.Getenv("AGENT_PROVIDER")) {
 	case "openai":
-		client := openai.NewFromEnv("")
+		client := openai.NewFromEnv("", openai.WithTimeout(60*time.Second))
 		if client.APIKey == "" || client.Model == "" {
 			return nil, fmt.Errorf("set OPENAI_API_KEY and OPENAI_MODEL")
 		}
 		return client, nil
 	case "anthropic":
-		client := anthropic.NewFromEnv("")
+		client := anthropic.NewFromEnv("", anthropic.WithTimeout(60*time.Second))
 		if client.APIKey == "" || client.Model == "" {
 			return nil, fmt.Errorf("set ANTHROPIC_API_KEY and ANTHROPIC_MODEL")
 		}

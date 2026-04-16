@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"time"
 
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
 	"github.com/MemaxLabs/memax-go-agent-sdk/contextwindow"
@@ -14,7 +15,7 @@ import (
 )
 
 func main() {
-	client := anthropic.NewFromEnv("")
+	client := anthropic.NewFromEnv("", anthropic.WithTimeout(60*time.Second))
 	if client.APIKey == "" || client.Model == "" {
 		log.Fatal("set ANTHROPIC_API_KEY and ANTHROPIC_MODEL")
 	}

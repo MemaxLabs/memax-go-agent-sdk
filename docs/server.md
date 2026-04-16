@@ -32,7 +32,8 @@ forward events to the socket as they arrive.
 - Set `Options.MaxTurns`.
 - Set `Options.MaxToolConcurrency`.
 - Use request-scoped contexts, for example `context.WithTimeout(r.Context(), ...)`.
-- Use provider clients and HTTP clients with timeouts.
+- Use provider clients and HTTP clients with timeouts. The built-in OpenAI and
+  Anthropic adapters provide `WithTimeout` and `WithHTTPClient` options.
 - Use session stores with bounded connection pools.
 - Wrap remote or slow skill sources with `skill.TimeoutSource`,
   `skill.CachedSource`, or `skill.PrefetchSource`.

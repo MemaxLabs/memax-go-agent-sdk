@@ -5,14 +5,19 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 )
 
 const defaultEndpoint = "https://api.openai.com/v1/responses"
+
+// Option configures a Client. Nil options are ignored.
+type Option func(*Client)
 
 type Client struct {
 	APIKey string
@@ -24,6 +29,7 @@ type Client struct {
 	// tests, proxies, and gateways that do not follow the default path layout.
 	Endpoint        string
 	HTTPClient      *http.Client
+	Timeout         time.Duration
 	Store           bool
 	MaxOutputTokens int
 	Temperature     *float64
@@ -31,19 +37,90 @@ type Client struct {
 }
 
 // New creates a Responses API model client.
-func New(apiKey string, modelName string) *Client {
-	return &Client{APIKey: apiKey, Model: modelName}
+func New(apiKey string, modelName string, opts ...Option) *Client {
+	client := &Client{APIKey: apiKey, Model: modelName}
+	applyOptions(client, opts)
+	return client
 }
 
 // NewFromEnv creates a client using OPENAI_API_KEY and OPENAI_BASE_URL. If
 // modelName is empty, it uses OPENAI_MODEL.
-func NewFromEnv(modelName string) *Client {
+func NewFromEnv(modelName string, opts ...Option) *Client {
 	if modelName == "" {
 		modelName = os.Getenv("OPENAI_MODEL")
 	}
-	client := New(os.Getenv("OPENAI_API_KEY"), modelName)
-	client.BaseURL = os.Getenv("OPENAI_BASE_URL")
-	return client
+	envOpts := make([]Option, 0, len(opts)+1)
+	if baseURL := os.Getenv("OPENAI_BASE_URL"); baseURL != "" {
+		envOpts = append(envOpts, WithBaseURL(baseURL))
+	}
+	envOpts = append(envOpts, opts...)
+	return New(os.Getenv("OPENAI_API_KEY"), modelName, envOpts...)
+}
+
+// WithBaseURL sets the provider API base URL. Requests are sent to
+// BaseURL + "/responses" unless WithEndpoint is also configured.
+func WithBaseURL(baseURL string) Option {
+	return func(c *Client) {
+		c.BaseURL = baseURL
+	}
+}
+
+// WithEndpoint sets the full Responses API endpoint. It takes precedence over
+// BaseURL and is useful for tests, proxies, and gateways with custom paths.
+func WithEndpoint(endpoint string) Option {
+	return func(c *Client) {
+		c.Endpoint = endpoint
+	}
+}
+
+// WithHTTPClient sets the HTTP client used for provider requests.
+func WithHTTPClient(client *http.Client) Option {
+	return func(c *Client) {
+		c.HTTPClient = client
+	}
+}
+
+// WithTimeout sets a per-request timeout. It composes with WithHTTPClient.
+func WithTimeout(timeout time.Duration) Option {
+	return func(c *Client) {
+		c.Timeout = timeout
+	}
+}
+
+// WithStore controls the OpenAI Responses API store flag.
+func WithStore(store bool) Option {
+	return func(c *Client) {
+		c.Store = store
+	}
+}
+
+// WithMaxOutputTokens limits the model output token budget for the request.
+func WithMaxOutputTokens(tokens int) Option {
+	return func(c *Client) {
+		c.MaxOutputTokens = tokens
+	}
+}
+
+// WithTemperature sets the sampling temperature.
+func WithTemperature(temperature float64) Option {
+	return func(c *Client) {
+		c.Temperature = &temperature
+	}
+}
+
+// WithTopP sets nucleus sampling.
+func WithTopP(topP float64) Option {
+	return func(c *Client) {
+		c.TopP = &topP
+	}
+}
+
+func applyOptions(client *Client, opts []Option) {
+	for _, opt := range opts {
+		if opt != nil {
+			opt(client)
+		}
+	}
 }
 
 // Stream sends a streaming Responses API request and adapts text deltas and
@@ -61,8 +138,16 @@ func (c *Client) Stream(ctx context.Context, req model.Request) (model.Stream, e
 		return nil, fmt.Errorf("openai: encode request: %w", err)
 	}
 	endpoint := c.endpoint()
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	reqCtx := ctx
+	var cancel context.CancelFunc
+	if c.Timeout > 0 {
+		reqCtx, cancel = context.WithTimeout(ctx, c.Timeout)
+	}
+	httpReq, err := http.NewRequestWithContext(reqCtx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
+		if cancel != nil {
+			cancel()
+		}
 		return nil, fmt.Errorf("openai: create request: %w", err)
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
@@ -75,13 +160,34 @@ func (c *Client) Stream(ctx context.Context, req model.Request) (model.Stream, e
 	}
 	resp, err := client.Do(httpReq)
 	if err != nil {
+		if cancel != nil {
+			cancel()
+		}
 		return nil, fmt.Errorf("openai: send request: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		defer resp.Body.Close()
+		if cancel != nil {
+			defer cancel()
+		}
 		return nil, decodeError(resp)
 	}
-	return newStream(resp.Body, c.Model), nil
+	responseBody := resp.Body
+	if cancel != nil {
+		responseBody = cancelReadCloser{ReadCloser: resp.Body, cancel: cancel}
+	}
+	return newStream(responseBody, c.Model), nil
+}
+
+type cancelReadCloser struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (c cancelReadCloser) Close() error {
+	err := c.ReadCloser.Close()
+	c.cancel()
+	return err
 }
 
 func (c *Client) endpoint() string {

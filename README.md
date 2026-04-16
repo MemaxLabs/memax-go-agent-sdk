@@ -89,34 +89,44 @@ AGENT_PROVIDER=anthropic ANTHROPIC_API_KEY=... ANTHROPIC_MODEL=... go run ./exam
 To use the OpenAI adapter:
 
 ```go
-client := openai.NewFromEnv("")
+client := openai.NewFromEnv("",
+    openai.WithBaseURL("https://gateway.example.com/v1"),
+    openai.WithTimeout(60*time.Second),
+    openai.WithMaxOutputTokens(4096),
+)
 events, err := memaxagent.Query(ctx, "Inspect the workspace.", memaxagent.Options{
     Model: client,
     Tools: registry,
 })
 ```
 
-Set `client.BaseURL` or `OPENAI_BASE_URL` to route OpenAI requests through a
-gateway or compatible endpoint. The adapter sends requests to
-`BaseURL + "/responses"`. Set `client.Endpoint` only when you need to override
-the full Responses API endpoint directly; `Endpoint` takes precedence over
-`BaseURL`.
+Set `OPENAI_BASE_URL` or use `openai.WithBaseURL` to route OpenAI requests
+through a gateway or compatible endpoint. The adapter sends requests to
+`BaseURL + "/responses"`. Use `openai.WithEndpoint` only when you need to
+override the full Responses API endpoint directly; `Endpoint` takes precedence
+over `BaseURL`. `openai.WithTimeout` applies a request-scoped timeout and can be
+combined with `openai.WithHTTPClient` when you need a custom transport.
 
 To use the Anthropic adapter:
 
 ```go
-client := anthropic.NewFromEnv("")
+client := anthropic.NewFromEnv("",
+    anthropic.WithBaseURL("https://gateway.example.com/v1"),
+    anthropic.WithTimeout(60*time.Second),
+    anthropic.WithMaxTokens(4096),
+)
 events, err := memaxagent.Query(ctx, "Inspect the workspace.", memaxagent.Options{
     Model: client,
     Tools: registry,
 })
 ```
 
-Set `client.BaseURL` or `ANTHROPIC_BASE_URL` to route Anthropic requests through
-a gateway or compatible endpoint. The adapter sends requests to
-`BaseURL + "/messages"`. Set `client.Endpoint` only when you need to override
-the full Messages API endpoint directly; `Endpoint` takes precedence over
-`BaseURL`.
+Set `ANTHROPIC_BASE_URL` or use `anthropic.WithBaseURL` to route Anthropic
+requests through a gateway or compatible endpoint. The adapter sends requests to
+`BaseURL + "/messages"`. Use `anthropic.WithEndpoint` only when you need to
+override the full Messages API endpoint directly; `Endpoint` takes precedence
+over `BaseURL`. `anthropic.WithTimeout` applies a request-scoped timeout and can
+be combined with `anthropic.WithHTTPClient` when you need a custom transport.
 
 Runnable live-provider examples are available behind explicit environment variables:
 

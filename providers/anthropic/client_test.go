@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 )
@@ -217,6 +218,112 @@ func TestNewFromEnvUsesBaseURL(t *testing.T) {
 	}
 	if got := client.endpoint(); got != "https://gateway.test/v1/messages" {
 		t.Fatalf("endpoint = %q, want gateway messages endpoint", got)
+	}
+}
+
+func TestClientOptions(t *testing.T) {
+	httpClient := &http.Client{}
+	client := New("key", "model",
+		WithBaseURL("https://gateway.test/v1"),
+		WithEndpoint("https://endpoint.test/messages"),
+		WithHTTPClient(httpClient),
+		WithTimeout(3*time.Second),
+		WithMaxTokens(123),
+		WithTemperature(0.2),
+		WithTopP(0.9),
+		nil,
+	)
+
+	if client.APIKey != "key" || client.Model != "model" {
+		t.Fatalf("client identity = %#v, want key/model", client)
+	}
+	if client.BaseURL != "https://gateway.test/v1" {
+		t.Fatalf("BaseURL = %q, want gateway", client.BaseURL)
+	}
+	if client.Endpoint != "https://endpoint.test/messages" {
+		t.Fatalf("Endpoint = %q, want endpoint", client.Endpoint)
+	}
+	if client.HTTPClient != httpClient {
+		t.Fatalf("HTTPClient = %#v, want configured client", client.HTTPClient)
+	}
+	if client.Timeout != 3*time.Second {
+		t.Fatalf("Timeout = %s, want 3s", client.Timeout)
+	}
+	if client.MaxTokens != 123 {
+		t.Fatalf("MaxTokens = %d, want 123", client.MaxTokens)
+	}
+	if client.Temperature == nil || *client.Temperature != 0.2 {
+		t.Fatalf("Temperature = %#v, want 0.2", client.Temperature)
+	}
+	if client.TopP == nil || *client.TopP != 0.9 {
+		t.Fatalf("TopP = %#v, want 0.9", client.TopP)
+	}
+}
+
+func TestNewFromEnvOptionsOverrideEnv(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "env-key")
+	t.Setenv("ANTHROPIC_MODEL", "env-model")
+	t.Setenv("ANTHROPIC_BASE_URL", "https://env.test/v1")
+
+	client := NewFromEnv("", WithBaseURL("https://option.test/v1"))
+	if client.APIKey != "env-key" || client.Model != "env-model" {
+		t.Fatalf("client = %#v, want env identity", client)
+	}
+	if client.BaseURL != "https://option.test/v1" {
+		t.Fatalf("BaseURL = %q, want option override", client.BaseURL)
+	}
+}
+
+func TestNewFromEnvIgnoresEmptyBaseURLEnv(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "env-key")
+	t.Setenv("ANTHROPIC_MODEL", "env-model")
+	t.Setenv("ANTHROPIC_BASE_URL", "")
+
+	client := NewFromEnv("")
+	if client.BaseURL != "" {
+		t.Fatalf("BaseURL = %q, want empty", client.BaseURL)
+	}
+}
+
+func TestWithTimeout(t *testing.T) {
+	httpClient := &http.Client{}
+	client := New("key", "model", WithHTTPClient(httpClient), WithTimeout(2*time.Second))
+	if client.HTTPClient != httpClient {
+		t.Fatalf("HTTPClient = %#v, want configured client", client.HTTPClient)
+	}
+	if client.Timeout != 2*time.Second {
+		t.Fatalf("timeout = %s, want 2s", client.Timeout)
+	}
+}
+
+func TestWithTimeoutKeepsReturnedStreamReadable(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(`event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+`))
+	}))
+	defer server.Close()
+
+	stream, err := New("test-key", "test-model",
+		WithEndpoint(server.URL),
+		WithTimeout(time.Second),
+	).Stream(context.Background(), model.Request{})
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	event, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("Recv returned error: %v", err)
+	}
+	if event.Kind != model.StreamText || event.Text != "hello" {
+		t.Fatalf("event = %#v, want text hello", event)
 	}
 }
 
