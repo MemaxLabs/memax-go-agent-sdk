@@ -139,11 +139,14 @@ captures the complete event stream, final answer, usage, session IDs, tool uses,
 and tool results, then applies caller-provided assertions. `ScriptedModel`
 implements `model.Client` with predefined stream events so evals can cover
 planning, tool recovery, structured-output repair, context retry, and session
-resume behavior without a live provider. This keeps autonomy quality executable
-while preserving the same provider-neutral core loop used in production.
+resume behavior without a live provider. Provider scenarios use local HTTP
+servers to exercise OpenAI and Anthropic adapters end to end without live API
+credentials. This keeps autonomy quality executable while preserving the same
+provider-neutral core loop used in production.
 `agenteval/scenarios` contains reusable baseline cases for core behaviors such
 as tool validation recovery, structured-output repair, memory search/save,
-session resume, context retry, and subagent delegation workflows.
+session resume, context retry, subagent delegation, provider usage mapping, and
+provider tool-use round trips.
 
 ## Permissions
 

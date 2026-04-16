@@ -31,6 +31,10 @@ func All() []agenteval.Case {
 		SessionResume(),
 		ContextRetry(),
 		SubagentDelegation(),
+		OpenAIProviderTextAndUsage(),
+		AnthropicProviderTextAndUsage(),
+		OpenAIProviderToolUseRoundTrip(),
+		AnthropicProviderToolUseRoundTrip(),
 	}
 }
 

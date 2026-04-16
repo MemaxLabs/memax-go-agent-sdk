@@ -26,6 +26,9 @@ type Case struct {
 	Options    memaxagent.Options
 	Assertions []Assertion
 	Timeout    time.Duration
+	// Cleanup releases resources created for the case. It is called once after
+	// the event stream is drained or Query fails.
+	Cleanup func()
 }
 
 // Result is the complete outcome of one Case.
@@ -131,6 +134,9 @@ func (r Runner) runCase(ctx context.Context, c Case) (result Result) {
 	started := time.Now()
 	defer func() {
 		result.Duration = time.Since(started)
+		if c.Cleanup != nil {
+			c.Cleanup()
+		}
 	}()
 
 	timeout := c.Timeout

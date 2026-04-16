@@ -12,8 +12,8 @@ func TestScenariosPass(t *testing.T) {
 	if err := report.Error(); err != nil {
 		t.Fatalf("scenario report error = %v", err)
 	}
-	if !report.Passed() || len(report.Results) != 6 {
-		t.Fatalf("report = %#v, want six passing scenarios", report)
+	if !report.Passed() || len(report.Results) != 10 {
+		t.Fatalf("report = %#v, want ten passing scenarios", report)
 	}
 }
 
@@ -30,6 +30,10 @@ func TestScenarioNamesAreStable(t *testing.T) {
 		"session_resume",
 		"context_retry",
 		"subagent_delegation",
+		"openai_provider_text_and_usage",
+		"anthropic_provider_text_and_usage",
+		"openai_provider_tool_use_round_trip",
+		"anthropic_provider_tool_use_round_trip",
 	}
 	if len(got) != len(want) {
 		t.Fatalf("scenario names = %#v, want %#v", got, want)
