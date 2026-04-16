@@ -23,6 +23,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/telemetry"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/skilltools"
+	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/verifytools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/workspacetools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/workspace"
 )
@@ -657,6 +658,57 @@ func TestQueryEmitsWorkspaceEventsAndMetrics(t *testing.T) {
 		if !meter.hasCounter(counter) {
 			t.Fatalf("meter counters = %#v, missing %s", meter.counterNames(), counter)
 		}
+	}
+}
+
+func TestQueryEmitsVerificationEventsAndMetrics(t *testing.T) {
+	verifyTool := verifytools.NewTool(verifytools.Config{
+		Verifier: verifytools.VerifierFunc(func(_ context.Context, req verifytools.Request) (verifytools.Result, error) {
+			return verifytools.Result{
+				Name:   req.Name,
+				Passed: false,
+				Output: "unit test failed",
+				Diagnostics: []verifytools.Diagnostic{{
+					Path:     "README.md",
+					Severity: "error",
+					Message:  "expected fixed content",
+				}},
+			}, nil
+		}),
+	})
+	fake := &fakeModel{turns: [][]model.StreamEvent{
+		{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "verify-1",
+				Name:  verifytools.ToolName,
+				Input: json.RawMessage(`{"name":"test","target":"README.md"}`),
+			},
+		}},
+		{{Kind: model.StreamText, Text: "verification failed as expected"}},
+	}}
+	meter := &recordingMeter{}
+	stream, err := Query(context.Background(), "verify README", Options{
+		Model: fake,
+		Tools: tool.NewRegistry(verifyTool),
+		Meter: meter,
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+	var events []Event
+	for event := range stream {
+		if event.Kind == EventError {
+			t.Fatalf("unexpected error event: %v", event.Err)
+		}
+		events = append(events, event)
+	}
+	verification := findVerificationEvent(events)
+	if verification == nil || verification.Name != "test" || verification.Passed || verification.Diagnostics != 1 || !sameStrings(verification.Paths, []string{"README.md"}) {
+		t.Fatalf("verification event = %#v", verification)
+	}
+	if !meter.hasCounter("memax.verification.run") {
+		t.Fatalf("meter counters = %#v, missing verification counter", meter.counterNames())
 	}
 }
 
@@ -2361,6 +2413,15 @@ func findWorkspaceEvent(events []Event, kind EventKind) *WorkspaceEvent {
 	for _, event := range events {
 		if event.Kind == kind && event.Workspace != nil {
 			return event.Workspace
+		}
+	}
+	return nil
+}
+
+func findVerificationEvent(events []Event) *VerificationEvent {
+	for _, event := range events {
+		if event.Kind == EventVerification && event.Verification != nil {
+			return event.Verification
 		}
 	}
 	return nil

@@ -12,6 +12,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/agenteval"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
+	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/verifytools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/workspacetools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/workspace"
 )
@@ -359,4 +360,211 @@ func WorkspaceOSStorePatchRollback() agenteval.Case {
 			},
 		},
 	}
+}
+
+// WorkspaceVerificationRepair returns a single-use scenario where verification
+// fails after an edit, the model repairs the workspace, and verification passes.
+func WorkspaceVerificationRepair() agenteval.Case {
+	store := workspace.NewMemoryStore(map[string]string{
+		"README.md": "status: broken",
+	})
+	workspaceTools, toolsErr := workspacetools.NewTools(store)
+	verifyTool := verifytools.NewTool(verifytools.Config{
+		Verifier: verifierForReadmeStatus(store, "status: fixed"),
+	})
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "patch-1",
+				Name: workspacetools.ApplyPatchToolName,
+				Input: json.RawMessage(`{"operations":[
+					{"path":"README.md","old_content":"status: broken","new_content":"status: almost"}
+				]}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "verify-1",
+				Name:  verifytools.ToolName,
+				Input: json.RawMessage(`{"name":"test","target":"README.md"}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "patch-2",
+				Name: workspacetools.ApplyPatchToolName,
+				Input: json.RawMessage(`{"operations":[
+					{"path":"README.md","old_content":"status: almost","new_content":"status: fixed"}
+				]}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "verify-2",
+				Name:  verifytools.ToolName,
+				Input: json.RawMessage(`{"name":"test","target":"README.md"}`),
+			},
+		}},
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "Workspace repaired and verified."}},
+	)
+
+	return agenteval.Case{
+		Name:   "workspace_verification_repair",
+		Prompt: "Patch README.md and verify the result. Repair if verification fails.",
+		Options: memaxagent.Options{
+			Model: modelClient,
+			Tools: tool.NewRegistry(append(workspaceTools, verifyTool)...),
+		},
+		Assertions: []agenteval.Assertion{
+			toolConstructionSucceeded(toolsErr),
+			agenteval.ToolUsed(workspacetools.ApplyPatchToolName),
+			agenteval.ToolUsed(verifytools.ToolName),
+			agenteval.FinalEquals("Workspace repaired and verified."),
+			requestCountEquals(modelClient, 5),
+			{
+				Name: "verification failure drives repair",
+				Check: func(result agenteval.Result) error {
+					results := result.ToolResults()
+					if len(results) < 4 {
+						return fmt.Errorf("tool results = %#v, want patch verify patch verify", results)
+					}
+					if !results[1].IsError || !strings.Contains(results[1].Content, "expected status: fixed") {
+						return fmt.Errorf("first verification = %#v, want actionable failure", results[1])
+					}
+					if results[3].IsError || !strings.Contains(results[3].Content, "verification test passed") {
+						return fmt.Errorf("second verification = %#v, want pass", results[3])
+					}
+					content, err := store.ReadFile(context.Background(), "README.md")
+					if err != nil {
+						return err
+					}
+					if content != "status: fixed" {
+						return fmt.Errorf("README.md = %q, want repaired content", content)
+					}
+					return nil
+				},
+			},
+		},
+	}
+}
+
+// WorkspaceVerificationRollback returns a single-use scenario where a failed
+// verification leads the model to restore the checkpoint instead of finalizing a
+// broken edit.
+func WorkspaceVerificationRollback() agenteval.Case {
+	store := workspace.NewMemoryStore(map[string]string{
+		"README.md": "status: good",
+	})
+	workspaceTools, toolsErr := workspacetools.NewTools(store)
+	verifyTool := verifytools.NewTool(verifytools.Config{
+		Verifier: verifierForReadmeStatus(store, "status: good"),
+	})
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "checkpoint-1",
+				Name:  workspacetools.CheckpointToolName,
+				Input: json.RawMessage(`{"label":"before risky edit"}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "patch-1",
+				Name: workspacetools.ApplyPatchToolName,
+				Input: json.RawMessage(`{"operations":[
+					{"path":"README.md","old_content":"status: good","new_content":"status: bad"}
+				]}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "verify-1",
+				Name:  verifytools.ToolName,
+				Input: json.RawMessage(`{"name":"test","target":"README.md"}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "restore-1",
+				Name:  workspacetools.RestoreToolName,
+				Input: json.RawMessage(`{"id":"checkpoint-1"}`),
+			},
+		}},
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "Restored after failed verification."}},
+	)
+
+	return agenteval.Case{
+		Name:   "workspace_verification_rollback",
+		Prompt: "Checkpoint, patch README.md, verify the result, and roll back if verification fails.",
+		Options: memaxagent.Options{
+			Model: modelClient,
+			Tools: tool.NewRegistry(append(workspaceTools, verifyTool)...),
+		},
+		Assertions: []agenteval.Assertion{
+			toolConstructionSucceeded(toolsErr),
+			agenteval.ToolUsed(workspacetools.CheckpointToolName),
+			agenteval.ToolUsed(workspacetools.ApplyPatchToolName),
+			agenteval.ToolUsed(verifytools.ToolName),
+			agenteval.ToolUsed(workspacetools.RestoreToolName),
+			agenteval.FinalEquals("Restored after failed verification."),
+			requestCountEquals(modelClient, 5),
+			{
+				Name: "failed verification rolls back checkpoint",
+				Check: func(result agenteval.Result) error {
+					results := result.ToolResults()
+					if len(results) < 4 {
+						return fmt.Errorf("tool results = %#v, want checkpoint patch verify restore", results)
+					}
+					if !results[2].IsError || !strings.Contains(results[2].Content, "expected status: good") {
+						return fmt.Errorf("verification result = %#v, want failure", results[2])
+					}
+					if results[3].IsError || !strings.Contains(results[3].Content, "restored workspace checkpoint checkpoint-1") {
+						return fmt.Errorf("restore result = %#v, want checkpoint restore", results[3])
+					}
+					content, err := store.ReadFile(context.Background(), "README.md")
+					if err != nil {
+						return err
+					}
+					if content != "status: good" {
+						return fmt.Errorf("README.md = %q, want rollback to good status", content)
+					}
+					return nil
+				},
+			},
+		},
+	}
+}
+
+func verifierForReadmeStatus(store *workspace.MemoryStore, want string) verifytools.Verifier {
+	return verifytools.VerifierFunc(func(ctx context.Context, req verifytools.Request) (verifytools.Result, error) {
+		content, err := store.ReadFile(ctx, "README.md")
+		if err != nil {
+			return verifytools.Result{}, err
+		}
+		if content == want {
+			return verifytools.Result{
+				Name:   req.Name,
+				Passed: true,
+				Output: "README.md matched expected status.",
+			}, nil
+		}
+		return verifytools.Result{
+			Name:   req.Name,
+			Passed: false,
+			Output: fmt.Sprintf("got %q; expected %s", content, want),
+			Diagnostics: []verifytools.Diagnostic{{
+				Path:     "README.md",
+				Severity: "error",
+				Message:  "expected " + want,
+			}},
+		}, nil
+	})
 }

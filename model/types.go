@@ -118,6 +118,19 @@ const (
 	MetadataWorkspaceCheckpointID = "workspace_checkpoint_id"
 	// MetadataWorkspaceBaseID carries the checkpoint ID used as a diff base.
 	MetadataWorkspaceBaseID = "workspace_base_id"
+	// MetadataVerificationOperation identifies verification tool results that
+	// should produce verification lifecycle events.
+	MetadataVerificationOperation = "verification_operation"
+	// MetadataVerificationName carries the host-defined verification check name.
+	MetadataVerificationName = "verification_name"
+	// MetadataVerificationPassed records whether a verification check passed.
+	MetadataVerificationPassed = "verification_passed"
+	// MetadataVerificationDiagnostics carries the number of diagnostics reported
+	// by a verification check.
+	MetadataVerificationDiagnostics = "verification_diagnostics"
+	// MetadataVerificationPaths carries workspace-relative paths mentioned by
+	// verification diagnostics.
+	MetadataVerificationPaths = "verification_paths"
 )
 
 // CloneMessages returns a deep copy of messages.

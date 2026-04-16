@@ -158,6 +158,14 @@ for events, telemetry, dry-run previews, and host approval prompts. Workspace
 tools mark results with provider-neutral metadata so the agent loop can emit
 first-class workspace events without importing the workspace package into core.
 
+The optional `toolkit/verifytools` package provides `workspace_verify` over a
+small host-owned `Verifier` interface. This follows the same capability-boundary
+rule as workspace tools: tests, typechecks, lint, policy checks, or remote CI
+validators are explicit tools, not hidden SDK side effects or built-in shell
+authority. Failed verification is returned as a model-visible tool error with
+diagnostics, allowing the agent to repair and retry or restore a checkpoint
+through normal transcript-visible tool calls.
+
 The optional `toolkit/checkpointtools` package provides `create_checkpoint`, `list_checkpoints`, `restore_checkpoint`, and `delete_checkpoint` over the `checkpoint.Manager` interface. The SDK's in-memory manager stores checkpoint metadata and is useful for tests; production managers should connect these operations to a virtual workspace, filesystem snapshot service, database branch, or remote sandbox. Checkpoints are not stored inside session transcripts, but checkpoint records carry session and parent-session IDs for correlation.
 
 Before-tool hooks run after validation and before permission checks. They can deny execution with a model-visible reason. After-tool hooks observe completed results; observer failures are attached to result metadata and do not convert successful tool output into a model-visible failure.

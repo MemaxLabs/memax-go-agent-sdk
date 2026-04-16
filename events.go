@@ -59,8 +59,11 @@ const (
 	EventWorkspaceCheckpoint EventKind = "workspace_checkpoint"
 	// EventWorkspaceRestore is emitted when a workspace checkpoint is restored.
 	EventWorkspaceRestore EventKind = "workspace_restore"
-	EventError            EventKind = "error"
-	EventResult           EventKind = "result"
+	// EventVerification is emitted when a verification tool reports pass/fail
+	// status for a host-owned check.
+	EventVerification EventKind = "verification"
+	EventError        EventKind = "error"
+	EventResult       EventKind = "result"
 )
 
 // Event is emitted by Query as the orchestration loop progresses.
@@ -81,6 +84,7 @@ type Event struct {
 	Memory       *MemoryCandidatesEvent
 	Skill        *SkillEvent
 	Workspace    *WorkspaceEvent
+	Verification *VerificationEvent
 	Result       string
 	Err          error
 }
@@ -126,6 +130,17 @@ type WorkspaceEvent struct {
 	ByteDelta    int
 	CheckpointID string
 	BaseID       string
+}
+
+// VerificationEvent describes one host-owned verification check, such as a
+// test, typecheck, lint, or custom policy validator. Failed checks are expected
+// to arrive as tool error results so the model can repair and retry.
+type VerificationEvent struct {
+	Operation   string
+	Name        string
+	Passed      bool
+	Diagnostics int
+	Paths       []string
 }
 
 func newEvent(kind EventKind, sessionID string, turn int) Event {

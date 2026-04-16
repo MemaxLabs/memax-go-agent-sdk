@@ -83,6 +83,12 @@ checkpoint, and restore operations. Patch and diff events include compact
 summary fields for total changes, added files, modified files, deleted files,
 byte delta, and affected paths.
 
+Verification events are also metadata-derived. `workspace_verify` and custom
+verification tools can report a host-owned check name, pass/fail status,
+diagnostic count, and affected paths. Failed verification should be a tool error
+result, not a terminal agent error, so the model can repair and retry or restore
+a checkpoint.
+
 ## Metrics And Spans
 
 The core loop records stable counters and histograms for query lifecycle, turn
@@ -105,6 +111,7 @@ Important metric names include:
   `memax.skill.resource_loaded`
 - `memax.workspace.patch`, `memax.workspace.diff`,
   `memax.workspace.checkpoint`, `memax.workspace.restore`
+- `memax.verification.run`
 
 Telemetry complements events; it should not be the only source of application
 state. Use events for ordered behavior and spans/metrics for aggregate
@@ -123,6 +130,8 @@ The public event contract is protected by golden tests:
   ordering and error emission.
 - `testdata/golden/workspace_event_stream.json` covers workspace checkpoint,
   patch, diff, and restore event ordering.
+- `testdata/golden/verification_event_stream.json` covers failed verification
+  as a tool error plus verification event ordering.
 
 When adding a new event kind or changing event order, update the docs and golden
 files in the same change.

@@ -14,6 +14,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/skill"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/skilltools"
+	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/verifytools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/workspacetools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/workspace"
 )
@@ -309,6 +310,62 @@ func TestQueryWorkspaceEventStreamGolden(t *testing.T) {
 	}
 }
 
+func TestQueryVerificationEventStreamGolden(t *testing.T) {
+	verifyTool := verifytools.NewTool(verifytools.Config{
+		Verifier: verifytools.VerifierFunc(func(_ context.Context, req verifytools.Request) (verifytools.Result, error) {
+			return verifytools.Result{
+				Name:   req.Name,
+				Passed: false,
+				Output: "README.md is not fixed",
+				Diagnostics: []verifytools.Diagnostic{{
+					Path:     "README.md",
+					Severity: "error",
+					Message:  "expected fixed content",
+				}},
+			}, nil
+		}),
+	})
+	events, err := Query(context.Background(), "verify the workspace", Options{
+		Model: &fakeModel{turns: [][]model.StreamEvent{
+			{{
+				Kind: model.StreamToolUse,
+				ToolUse: model.ToolUse{
+					ID:    "verify-1",
+					Name:  verifytools.ToolName,
+					Input: json.RawMessage(`{"name":"test","target":"README.md"}`),
+				},
+			}},
+			{{Kind: model.StreamText, Text: "verification failed"}},
+		}},
+		Tools: tool.NewRegistry(verifyTool),
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+
+	var got []goldenEvent
+	for event := range events {
+		if event.Kind == EventError {
+			t.Fatalf("query error: %v", event.Err)
+		}
+		got = append(got, normalizeGoldenEvent(event))
+	}
+
+	data, err := json.MarshalIndent(got, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal golden events: %v", err)
+	}
+	data = append(data, '\n')
+
+	want, err := os.ReadFile("testdata/golden/verification_event_stream.json")
+	if err != nil {
+		t.Fatalf("read golden file: %v", err)
+	}
+	if strings.TrimSpace(string(data)) != strings.TrimSpace(string(want)) {
+		t.Fatalf("verification event stream golden mismatch\n got:\n%s\nwant:\n%s", data, want)
+	}
+}
+
 type goldenEvent struct {
 	Kind                EventKind `json:"kind"`
 	Turn                int       `json:"turn,omitempty"`
@@ -347,6 +404,10 @@ type goldenEvent struct {
 	WorkspaceByteDelta  int       `json:"workspace_byte_delta,omitempty"`
 	WorkspaceCheckpoint string    `json:"workspace_checkpoint,omitempty"`
 	WorkspaceBase       string    `json:"workspace_base,omitempty"`
+	VerificationName    string    `json:"verification_name,omitempty"`
+	VerificationPassed  bool      `json:"verification_passed,omitempty"`
+	VerificationDiag    int       `json:"verification_diagnostics,omitempty"`
+	VerificationPaths   []string  `json:"verification_paths,omitempty"`
 	Result              string    `json:"result,omitempty"`
 	Error               string    `json:"error,omitempty"`
 }
@@ -416,6 +477,13 @@ func normalizeGoldenEvent(event Event) goldenEvent {
 			out.WorkspaceByteDelta = event.Workspace.ByteDelta
 			out.WorkspaceCheckpoint = event.Workspace.CheckpointID
 			out.WorkspaceBase = event.Workspace.BaseID
+		}
+	case EventVerification:
+		if event.Verification != nil {
+			out.VerificationName = event.Verification.Name
+			out.VerificationPassed = event.Verification.Passed
+			out.VerificationDiag = event.Verification.Diagnostics
+			out.VerificationPaths = append([]string(nil), event.Verification.Paths...)
 		}
 	case EventResult:
 		out.Result = event.Result

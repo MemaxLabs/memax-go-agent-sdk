@@ -676,6 +676,10 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 					shouldStop = true
 					return false
 				}
+				if !emitVerificationToolEvent(turnCtx, emit, opts, sessionID, turn, result) {
+					shouldStop = true
+					return false
+				}
 				if err := opts.Sessions.Append(turnCtx, sessionID, model.Message{
 					Role: model.RoleTool,
 					ToolResult: &model.ToolResult{
@@ -1675,6 +1679,38 @@ func emitWorkspaceToolEvent(ctx context.Context, emit func(Event) bool, opts Opt
 		telemetry.Int("memax.workspace.deleted", workspaceEvent.Deleted),
 		telemetry.Int("memax.workspace.byte_delta", workspaceEvent.ByteDelta),
 		telemetry.String("memax.workspace.checkpoint_id", workspaceEvent.CheckpointID),
+	)
+	return true
+}
+
+func emitVerificationToolEvent(ctx context.Context, emit func(Event) bool, opts Options, sessionID string, turn int, result model.ToolResult) bool {
+	operation := metadatavalues.String(result.Metadata, model.MetadataVerificationOperation)
+	if operation == "" {
+		return true
+	}
+	verificationEvent := &VerificationEvent{
+		Operation:   operation,
+		Name:        metadatavalues.String(result.Metadata, model.MetadataVerificationName),
+		Passed:      metadatavalues.Bool(result.Metadata, model.MetadataVerificationPassed),
+		Diagnostics: metadatavalues.Int(result.Metadata, model.MetadataVerificationDiagnostics),
+		Paths:       metadataStrings(result.Metadata, model.MetadataVerificationPaths),
+	}
+	switch operation {
+	case "verify":
+	default:
+		return true
+	}
+	event := newEvent(EventVerification, sessionID, turn)
+	event.Verification = verificationEvent
+	if !emit(event) {
+		return false
+	}
+	opts.Meter.Add(ctx, "memax.verification.run", 1,
+		telemetry.String("memax.session_id", sessionID),
+		telemetry.Int("memax.turn", turn),
+		telemetry.String("memax.verification.name", verificationEvent.Name),
+		telemetry.Bool("memax.verification.passed", verificationEvent.Passed),
+		telemetry.Int("memax.verification.diagnostics", verificationEvent.Diagnostics),
 	)
 	return true
 }

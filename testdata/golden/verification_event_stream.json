@@ -1,0 +1,45 @@
+[
+  {
+    "kind": "session_started"
+  },
+  {
+    "kind": "model_request",
+    "turn": 1
+  },
+  {
+    "kind": "tool_use",
+    "turn": 1,
+    "tool_id": "verify-1",
+    "tool_name": "workspace_verify"
+  },
+  {
+    "kind": "tool_result",
+    "turn": 1,
+    "tool_id": "verify-1",
+    "tool_name": "workspace_verify",
+    "tool_result": "verification test failed\nDiagnostics:\n- README.md: error: expected fixed content\nOutput:\nREADME.md is not fixed"
+  },
+  {
+    "kind": "verification",
+    "turn": 1,
+    "verification_name": "test",
+    "verification_diagnostics": 1,
+    "verification_paths": [
+      "README.md"
+    ]
+  },
+  {
+    "kind": "model_request",
+    "turn": 2
+  },
+  {
+    "kind": "assistant",
+    "turn": 2,
+    "text": "verification failed"
+  },
+  {
+    "kind": "result",
+    "turn": 2,
+    "result": "verification failed"
+  }
+]

@@ -227,6 +227,13 @@ OS-backed adapters should translate and contain paths at the adapter boundary.
 Patch, diff, checkpoint, and restore tools emit dedicated workspace lifecycle
 events derived from result metadata.
 
+For verification loops, use the optional `toolkit/verifytools` package. It
+defines a small host-owned `Verifier` interface so applications can expose
+tests, typechecks, lint, policy checks, or remote CI validators without giving
+the core SDK shell access. Failed verification returns a model-visible tool
+error with diagnostics, so the agent can repair, re-run verification, or restore
+a checkpoint through normal tools.
+
 To require a machine-readable final answer, configure `Options.Output` with a
 JSON Schema. The default prompt builder includes the contract, and `Query`
 validates the final answer. If validation fails, the SDK appends a repair prompt
