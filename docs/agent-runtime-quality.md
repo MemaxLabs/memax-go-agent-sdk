@@ -161,7 +161,8 @@ compaction provenance.
 
 - Long transcript compacts while preserving active task, recent tool errors, and
   loaded skill instructions. Initial loaded-skill preservation coverage exists.
-- Summaries are not duplicated across retries.
+- Summaries are not duplicated across retries. Initial compaction provenance and
+  summary-replacement coverage exists.
 - Result handles survive compaction. Initial policy-level coverage exists.
 - Orphan tool results are never sent to providers.
 

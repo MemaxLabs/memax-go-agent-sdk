@@ -326,6 +326,19 @@ Context-window policies transform session messages before each model request wit
 
 `SummarizingBudget` adds model-backed compaction behind the same `Policy` interface. It checks whether the full transcript fits, reserves part of the configured budget for a synthetic summary, asks a pluggable `Summarizer` to compact the older prefix, and prepends that summary to the newest structurally valid suffix. `ModelSummarizer` is the default model-client adapter; applications can provide their own summarizer for deterministic summaries, hosted summarization, cached summaries, or domain-specific compression.
 
+Policies can optionally implement `contextwindow.PolicyWithResult` to return
+structured provenance with the transformed messages. `SummarizingBudget` emits a
+`CompactionRecord` with before/after message counts, summarized-message count,
+replaced-summary count, and a summary hash. The agent surfaces that record as
+`EventContextCompacted` and records context compaction metrics. Summary messages
+carry SDK-only metadata and provider adapters intentionally omit that metadata
+from wire requests.
+
+`SummarizingBudget` marks its synthetic summary messages and replaces prior
+active SDK summaries on subsequent compactions. This keeps the model-visible
+history to one active summary instead of stacking summary messages across long
+sessions.
+
 `PreserveImportant` wraps any context policy and prepends explicit retention
 groups that the wrapped policy would otherwise drop. Current retention signals
 include loaded skill instructions, stored large-result handles, and tool errors.

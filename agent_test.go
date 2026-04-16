@@ -1350,6 +1350,59 @@ func TestQueryResumesExistingSession(t *testing.T) {
 	}
 }
 
+func TestQueryEmitsContextCompactedEvent(t *testing.T) {
+	store := session.NewMemoryStore()
+	sess, err := store.Create(context.Background())
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	if err := store.Append(context.Background(), sess.ID, model.Message{
+		Role:    model.RoleUser,
+		Content: []model.ContentBlock{{Type: model.ContentText, Text: "old-old-old-old"}},
+	}); err != nil {
+		t.Fatalf("Append returned error: %v", err)
+	}
+	fake := &fakeModel{turns: [][]model.StreamEvent{{{Kind: model.StreamText, Text: "done"}}}}
+
+	events, err := Query(context.Background(), "recent", Options{
+		Model:     fake,
+		Sessions:  store,
+		SessionID: sess.ID,
+		Context: contextwindow.SummarizingBudget{
+			MaxTokens:        16,
+			MaxSummaryTokens: 10,
+			SummaryPrefix:    "S:",
+			Summarizer: contextwindow.SummarizerFunc(func(context.Context, []model.Message) (string, error) {
+				return "summary", nil
+			}),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+	var compacted *contextwindow.CompactionRecord
+	for event := range events {
+		if event.Kind == EventContextCompacted {
+			compacted = event.Compaction
+		}
+		if event.Kind == EventError {
+			t.Fatalf("query error: %v", event.Err)
+		}
+	}
+	if compacted == nil {
+		t.Fatal("missing context compacted event")
+	}
+	if compacted.OriginalMessages != 2 || compacted.SentMessages != 2 || compacted.SummaryHash == "" {
+		t.Fatalf("compaction = %#v, want 2 -> 2 with summary hash", compacted)
+	}
+	if len(fake.requests) != 1 || len(fake.requests[0].Messages) != 2 {
+		t.Fatalf("model request = %#v, want summary plus recent", fake.requests)
+	}
+	if !contextwindow.IsSummaryMessage(fake.requests[0].Messages[0]) {
+		t.Fatalf("first model message metadata = %#v, want context summary", fake.requests[0].Messages[0].Metadata)
+	}
+}
+
 func TestQueryRunsContextAppliedHook(t *testing.T) {
 	var got hook.ContextAppliedInput
 	hooks := hook.NewRunner(hook.WithContextApplied(func(_ context.Context, input hook.ContextAppliedInput) error {

@@ -40,6 +40,7 @@ func All() []agenteval.Case {
 		PlannerTaskStateUpdates(),
 		ProgressiveSkillDisclosure(),
 		ContextPreservesLoadedSkill(),
+		ContextCompactionProvenance(),
 		OpenAIProviderTextAndUsage(),
 		AnthropicProviderTextAndUsage(),
 		OpenAIProviderToolUseRoundTrip(),
@@ -51,6 +52,85 @@ func All() []agenteval.Case {
 		BudgetStopsBeforeToolBatch(),
 		BudgetStopsAfterTokenUsage(),
 		DeferredToolDiscoveryRecovery(),
+	}
+}
+
+// ContextCompactionProvenance returns a single-use scenario where a summarizing
+// context policy emits compaction provenance and replaces a prior active
+// summary instead of stacking summaries.
+func ContextCompactionProvenance() agenteval.Case {
+	store := session.NewMemoryStore()
+	sess, createErr := store.Create(context.Background())
+	appendErr := error(nil)
+	if createErr == nil {
+		appendErr = store.Append(context.Background(), sess.ID, model.Message{
+			Role: model.RoleUser,
+			Content: []model.ContentBlock{{
+				Type: model.ContentText,
+				Text: "S:old context",
+			}},
+			Metadata: map[string]any{contextwindow.MetadataContextSummary: true},
+		})
+		if appendErr == nil {
+			appendErr = store.Append(context.Background(), sess.ID, textMessage(model.RoleUser, "old implementation notes"))
+		}
+	}
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "continued after compacted context"}},
+	)
+
+	return agenteval.Case{
+		Name:   "context_compaction_provenance",
+		Prompt: "continue with the latest work",
+		Options: memaxagent.Options{
+			Model:     modelClient,
+			Sessions:  store,
+			SessionID: sess.ID,
+			Context: contextwindow.SummarizingBudget{
+				MaxTokens:        24,
+				MaxSummaryTokens: 18,
+				SummaryPrefix:    "S:",
+				Summarizer: contextwindow.SummarizerFunc(func(context.Context, []model.Message) (string, error) {
+					return "new compacted context", nil
+				}),
+			},
+		},
+		Assertions: []agenteval.Assertion{
+			setupSucceeded(createErr, appendErr),
+			agenteval.FinalEquals("continued after compacted context"),
+			agenteval.EventKindEmitted(memaxagent.EventContextCompacted),
+			{
+				Name: "compaction provenance and replacement",
+				Check: func(result agenteval.Result) error {
+					var record *contextwindow.CompactionRecord
+					for _, event := range result.Events {
+						if event.Kind == memaxagent.EventContextCompacted {
+							record = event.Compaction
+						}
+					}
+					if record == nil || record.SummaryHash == "" || record.ReplacedSummaries != 1 {
+						return fmt.Errorf("compaction record = %#v, want summary hash and one replaced summary", record)
+					}
+					requests := modelClient.Requests()
+					if len(requests) != 1 {
+						return fmt.Errorf("model requests = %d, want 1", len(requests))
+					}
+					summaryCount := 0
+					for _, msg := range requests[0].Messages {
+						if contextwindow.IsSummaryMessage(msg) {
+							summaryCount++
+						}
+						if strings.Contains(msg.PlainText(), "old context") {
+							return fmt.Errorf("old summary remained active: %#v", requests[0].Messages)
+						}
+					}
+					if summaryCount != 1 {
+						return fmt.Errorf("summary count = %d, want one active summary: %#v", summaryCount, requests[0].Messages)
+					}
+					return nil
+				},
+			},
+		},
 	}
 }
 

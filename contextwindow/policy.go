@@ -2,6 +2,8 @@ package contextwindow
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"slices"
 	"strings"
@@ -12,6 +14,46 @@ import (
 
 type Policy interface {
 	Apply(context.Context, []model.Message) ([]model.Message, error)
+}
+
+// PolicyResult is the rich result returned by policies that can report
+// context-management provenance in addition to transformed messages.
+type PolicyResult struct {
+	Messages   []model.Message
+	Compaction *CompactionRecord
+}
+
+// PolicyWithResult is implemented by policies that expose provenance for the
+// transformation they applied. Callers should fall back to Policy.Apply for
+// policies that do not implement it.
+type PolicyWithResult interface {
+	ApplyWithResult(context.Context, []model.Message) (PolicyResult, error)
+}
+
+type CompactionReason string
+
+const (
+	CompactionReasonBudget CompactionReason = "budget"
+)
+
+const (
+	MetadataContextSummary     = "context_summary"
+	MetadataContextSummaryHash = "context_summary_hash"
+	MetadataContextPolicy      = "context_policy"
+)
+
+// CompactionRecord describes a model-visible context compaction. It is emitted
+// on EventContextCompacted and can be persisted by hosts for debugging or
+// resume inspection.
+type CompactionRecord struct {
+	Policy             string
+	Reason             CompactionReason
+	OriginalMessages   int
+	SentMessages       int
+	SummarizedMessages int
+	RetainedMessages   int
+	ReplacedSummaries  int
+	SummaryHash        string
 }
 
 type RecentMessages struct {
@@ -70,15 +112,38 @@ type PreserveImportant struct {
 }
 
 func (p PreserveImportant) Apply(ctx context.Context, messages []model.Message) ([]model.Message, error) {
+	result, err := p.ApplyWithResult(ctx, messages)
+	if err != nil {
+		return nil, err
+	}
+	return result.Messages, nil
+}
+
+func (p PreserveImportant) ApplyWithResult(ctx context.Context, messages []model.Message) (PolicyResult, error) {
 	selected := cloneMessages(messages)
+	var record *CompactionRecord
 	var err error
 	if p.Policy != nil {
-		selected, err = p.Policy.Apply(ctx, messages)
-		if err != nil {
-			return nil, err
+		if richer, ok := p.Policy.(PolicyWithResult); ok {
+			result, err := richer.ApplyWithResult(ctx, messages)
+			if err != nil {
+				return PolicyResult{}, err
+			}
+			selected = result.Messages
+			record = result.Compaction
+		} else {
+			selected, err = p.Policy.Apply(ctx, messages)
+			if err != nil {
+				return PolicyResult{}, err
+			}
 		}
 	}
-	return PreserveImportantMessages(messages, selected, p.MaxMessages), nil
+	out := PreserveImportantMessages(messages, selected, p.MaxMessages)
+	if record != nil {
+		record.SentMessages = len(out)
+		record.RetainedMessages = len(out) - len(selected)
+	}
+	return PolicyResult{Messages: out, Compaction: record}, nil
 }
 
 // PreserveImportantMessages prepends important messages from original that are
@@ -134,8 +199,16 @@ type SummarizingBudget struct {
 }
 
 func (p SummarizingBudget) Apply(ctx context.Context, messages []model.Message) ([]model.Message, error) {
+	result, err := p.ApplyWithResult(ctx, messages)
+	if err != nil {
+		return nil, err
+	}
+	return result.Messages, nil
+}
+
+func (p SummarizingBudget) ApplyWithResult(ctx context.Context, messages []model.Message) (PolicyResult, error) {
 	if p.MaxTokens <= 0 {
-		return nil, fmt.Errorf("contextwindow: MaxTokens must be positive")
+		return PolicyResult{}, fmt.Errorf("contextwindow: MaxTokens must be positive")
 	}
 	estimate := p.Estimate
 	if estimate == nil {
@@ -143,13 +216,13 @@ func (p SummarizingBudget) Apply(ctx context.Context, messages []model.Message) 
 	}
 	total, err := estimateMessages(messages, estimate)
 	if err != nil {
-		return nil, err
+		return PolicyResult{}, err
 	}
 	if total <= p.MaxTokens {
-		return cloneMessages(messages), nil
+		return PolicyResult{Messages: cloneMessages(messages)}, nil
 	}
 	if p.Summarizer == nil {
-		return nil, fmt.Errorf("contextwindow: Summarizer is required")
+		return PolicyResult{}, fmt.Errorf("contextwindow: Summarizer is required")
 	}
 
 	summaryBudget := p.summaryBudget()
@@ -159,23 +232,33 @@ func (p SummarizingBudget) Apply(ctx context.Context, messages []model.Message) 
 	}
 	start, err := newestSuffixStart(messages, recentBudget, estimate)
 	if err != nil {
-		return nil, err
+		return PolicyResult{}, err
 	}
 	prefix := cloneMessages(messages[:start])
-	recent := cloneMessages(messages[start:])
+	replacedSummaries := countSummaryMessages(messages)
+	recent := removeSummaryMessages(cloneMessages(messages[start:]))
 	summary, err := p.Summarizer.Summarize(ctx, prefix)
 	if err != nil {
-		return nil, fmt.Errorf("contextwindow: summarize compacted messages: %w", err)
+		return PolicyResult{}, fmt.Errorf("contextwindow: summarize compacted messages: %w", err)
 	}
 	summaryMessage, err := p.summaryMessage(summary, summaryBudget, estimate)
 	if err != nil {
-		return nil, err
+		return PolicyResult{}, err
 	}
 
 	out := make([]model.Message, 0, 1+len(recent))
 	out = append(out, summaryMessage)
 	out = append(out, recent...)
-	return out, nil
+	record := &CompactionRecord{
+		Policy:             "SummarizingBudget",
+		Reason:             CompactionReasonBudget,
+		OriginalMessages:   len(messages),
+		SentMessages:       len(out),
+		SummarizedMessages: len(prefix),
+		ReplacedSummaries:  replacedSummaries,
+		SummaryHash:        metadataString(summaryMessage.Metadata, MetadataContextSummaryHash),
+	}
+	return PolicyResult{Messages: out, Compaction: record}, nil
 }
 
 func (p SummarizingBudget) summaryBudget() int {
@@ -210,6 +293,11 @@ func (p SummarizingBudget) summaryMessage(summary string, maxTokens int, estimat
 		Content: []model.ContentBlock{
 			{Type: model.ContentText, Text: text},
 		},
+		Metadata: map[string]any{
+			MetadataContextSummary:     true,
+			MetadataContextSummaryHash: hashText(text),
+			MetadataContextPolicy:      "SummarizingBudget",
+		},
 	}
 	count := estimate(msg)
 	if count < 0 {
@@ -218,7 +306,13 @@ func (p SummarizingBudget) summaryMessage(summary string, maxTokens int, estimat
 	if maxTokens <= 0 || count <= maxTokens {
 		return msg, nil
 	}
-	return truncateTextMessage(msg, maxTokens, estimate)
+	msg, err := truncateTextMessage(msg, maxTokens, estimate)
+	if err != nil {
+		return model.Message{}, err
+	}
+	msg.Metadata = cloneMetadata(msg.Metadata)
+	msg.Metadata[MetadataContextSummaryHash] = hashText(msg.PlainText())
+	return msg, nil
 }
 
 func (p SummarizingBudget) summaryRole() model.Role {
@@ -242,6 +336,10 @@ func EstimateByRunes(msg model.Message) int {
 		total += utf8.RuneCountInString(msg.ToolResult.Content)
 	}
 	return total
+}
+
+func IsSummaryMessage(msg model.Message) bool {
+	return metadataBool(msg.Metadata, MetadataContextSummary)
 }
 
 func newestSuffixStart(messages []model.Message, maxTokens int, estimate Estimator) (int, error) {
@@ -281,6 +379,30 @@ func dropLeadingToolResults(messages []model.Message, start int) int {
 		start++
 	}
 	return start
+}
+
+func countSummaryMessages(messages []model.Message) int {
+	count := 0
+	for _, msg := range messages {
+		if IsSummaryMessage(msg) {
+			count++
+		}
+	}
+	return count
+}
+
+func removeSummaryMessages(messages []model.Message) []model.Message {
+	if len(messages) == 0 {
+		return nil
+	}
+	out := messages[:0]
+	for _, msg := range messages {
+		if IsSummaryMessage(msg) {
+			continue
+		}
+		out = append(out, msg)
+	}
+	return out
 }
 
 func importantGroups(messages []model.Message, maxMessages int) [][]model.Message {
@@ -439,6 +561,7 @@ func cloneMessages(messages []model.Message) []model.Message {
 
 func cloneMessage(msg model.Message) model.Message {
 	msg.Content = cloneBlocks(msg.Content)
+	msg.Metadata = cloneMetadata(msg.Metadata)
 	if msg.ToolResult != nil {
 		result := *msg.ToolResult
 		result.Metadata = cloneMetadata(result.Metadata)
@@ -504,4 +627,9 @@ func cloneMetadata(metadata map[string]any) map[string]any {
 		out[key] = value
 	}
 	return out
+}
+
+func hashText(text string) string {
+	sum := sha256.Sum256([]byte(text))
+	return hex.EncodeToString(sum[:])
 }

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/budget"
+	"github.com/MemaxLabs/memax-go-agent-sdk/contextwindow"
 	"github.com/MemaxLabs/memax-go-agent-sdk/hook"
 	"github.com/MemaxLabs/memax-go-agent-sdk/memory"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
@@ -301,7 +302,7 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 					telemetry.Int("memax.turn", turn),
 					telemetry.Int("memax.context.original_messages", originalCount),
 				)
-				messages, err = opts.Context.Apply(contextCtx, messages)
+				contextResult, err := applyContextPolicy(contextCtx, opts.Context, messages)
 				if err != nil {
 					err = fmt.Errorf("apply context policy: %w", err)
 					contextSpan.RecordError(err)
@@ -312,6 +313,7 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 					shouldStop = true
 					return
 				}
+				messages = contextResult.Messages
 				contextSpan.Set(telemetry.Int("memax.context.sent_messages", len(messages)))
 				contextSpan.End()
 				if !reflect.DeepEqual(messages, originalMessages) {
@@ -323,6 +325,12 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 						shouldStop = true
 						return
 					} else if !ok {
+						shouldStop = true
+						return
+					}
+				}
+				if contextResult.Compaction != nil {
+					if !emitContextCompacted(turnCtx, emit, opts, sessionID, turn, contextResult.Compaction) {
 						shouldStop = true
 						return
 					}
@@ -394,7 +402,7 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 			})
 			if err != nil {
 				if opts.ContextRetry != nil && model.IsContextWindowExceeded(err) {
-					retryMessages, retryTools, retryPrompt, retryErr := retryContextWindow(modelCtx, opts, &memories, &skills, sessionID, messages)
+					retryMessages, retryTools, retryPrompt, retryCompaction, retryErr := retryContextWindow(modelCtx, opts, &memories, &skills, sessionID, messages)
 					if retryErr == nil {
 						if !reflect.DeepEqual(retryMessages, messages) {
 							if ok, applyErr := emitContextApplied(turnCtx, emit, opts, sessionID, turn, len(messages), len(retryMessages)); applyErr != nil {
@@ -415,6 +423,13 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 						messages = retryMessages
 						toolSpecs = retryTools
 						promptResult = retryPrompt
+						if retryCompaction != nil {
+							if !emitContextCompacted(turnCtx, emit, opts, sessionID, turn, retryCompaction) {
+								modelSpan.End()
+								shouldStop = true
+								return
+							}
+						}
 						modelSpan.Set(telemetry.Int("memax.model.retry_tools", len(toolSpecs)))
 						if budgetErr := checkBudget(modelCtx, opts, sessionID, turn, budgetState.withModelCalls(1)); budgetErr != nil {
 							err = budgetErr
@@ -911,20 +926,35 @@ func (l *memoryLoader) Load(ctx context.Context, messages []model.Message) ([]me
 	return memory.StaticSource(l.memories).Memories(ctx, memory.Request{})
 }
 
-func retryContextWindow(ctx context.Context, opts Options, memories *memoryLoader, skills *skillLoader, sessionID string, messages []model.Message) ([]model.Message, []model.ToolSpec, builtPrompt, error) {
-	retryMessages, err := opts.ContextRetry.Apply(ctx, messages)
+func retryContextWindow(ctx context.Context, opts Options, memories *memoryLoader, skills *skillLoader, sessionID string, messages []model.Message) ([]model.Message, []model.ToolSpec, builtPrompt, *contextwindow.CompactionRecord, error) {
+	result, err := applyContextPolicy(ctx, opts.ContextRetry, messages)
 	if err != nil {
-		return nil, nil, builtPrompt{}, err
+		return nil, nil, builtPrompt{}, nil, err
 	}
+	retryMessages := result.Messages
 	retryTools, err := selectedToolSpecs(ctx, opts, retryMessages)
 	if err != nil {
-		return nil, nil, builtPrompt{}, err
+		return nil, nil, builtPrompt{}, nil, err
 	}
 	retryPrompt, err := buildPrompt(ctx, opts, memories, skills, sessionID, retryMessages, retryTools)
 	if err != nil {
-		return nil, nil, builtPrompt{}, err
+		return nil, nil, builtPrompt{}, nil, err
 	}
-	return retryMessages, retryTools, retryPrompt, nil
+	return retryMessages, retryTools, retryPrompt, result.Compaction, nil
+}
+
+func applyContextPolicy(ctx context.Context, policy contextwindow.Policy, messages []model.Message) (contextwindow.PolicyResult, error) {
+	if policy == nil {
+		return contextwindow.PolicyResult{Messages: cloneMessages(messages)}, nil
+	}
+	if richer, ok := policy.(contextwindow.PolicyWithResult); ok {
+		return richer.ApplyWithResult(ctx, messages)
+	}
+	out, err := policy.Apply(ctx, messages)
+	if err != nil {
+		return contextwindow.PolicyResult{}, err
+	}
+	return contextwindow.PolicyResult{Messages: out}, nil
 }
 
 func loadPlan(ctx context.Context, opts Options, sessionID string, messages []model.Message) (planner.Plan, error) {
@@ -986,6 +1016,13 @@ func cloneMessages(messages []model.Message) []model.Message {
 
 func cloneMessage(message model.Message) model.Message {
 	message.Content = cloneContentBlocks(message.Content)
+	if len(message.Metadata) > 0 {
+		metadata := make(map[string]any, len(message.Metadata))
+		for key, value := range message.Metadata {
+			metadata[key] = value
+		}
+		message.Metadata = metadata
+	}
 	if message.ToolResult != nil {
 		result := *message.ToolResult
 		if len(result.Metadata) > 0 {
@@ -1144,6 +1181,36 @@ func emitContextApplied(
 		telemetry.Int("memax.context.sent_messages", sentCount),
 	)
 	return true, nil
+}
+
+func emitContextCompacted(
+	ctx context.Context,
+	emit func(Event) bool,
+	opts Options,
+	sessionID string,
+	turn int,
+	record *contextwindow.CompactionRecord,
+) bool {
+	if record == nil {
+		return true
+	}
+	event := newEvent(EventContextCompacted, sessionID, turn)
+	copied := *record
+	event.Compaction = &copied
+	if !emit(event) {
+		return false
+	}
+	opts.Meter.Add(ctx, "memax.context.compacted", 1,
+		telemetry.String("memax.session_id", sessionID),
+		telemetry.Int("memax.turn", turn),
+		telemetry.String("memax.context.policy", record.Policy),
+		telemetry.String("memax.context.reason", string(record.Reason)),
+		telemetry.Int("memax.context.original_messages", record.OriginalMessages),
+		telemetry.Int("memax.context.sent_messages", record.SentMessages),
+		telemetry.Int("memax.context.summarized_messages", record.SummarizedMessages),
+		telemetry.Int("memax.context.retained_messages", record.RetainedMessages),
+	)
+	return true
 }
 
 func collectAssistant(

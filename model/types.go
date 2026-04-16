@@ -26,6 +26,10 @@ type Message struct {
 	Role       Role           `json:"role"`
 	Content    []ContentBlock `json:"content,omitempty"`
 	ToolResult *ToolResult    `json:"tool_result,omitempty"`
+	// Metadata carries SDK-owned message annotations such as context
+	// compaction provenance. Provider adapters must not serialize it unless a
+	// provider has an explicit compatible field.
+	Metadata map[string]any `json:"metadata,omitempty"`
 }
 
 func (m Message) PlainText() string {

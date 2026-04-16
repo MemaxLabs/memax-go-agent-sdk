@@ -95,6 +95,52 @@ func TestMemoryStoreAssignsMessageID(t *testing.T) {
 	}
 }
 
+func TestMemoryStoreReturnsDefensiveMessageCopies(t *testing.T) {
+	store := NewMemoryStore()
+	sess, err := store.Create(context.Background())
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	if err := store.Append(context.Background(), sess.ID, model.Message{
+		Role: model.RoleAssistant,
+		Content: []model.ContentBlock{{
+			Type:    model.ContentToolUse,
+			ToolUse: &model.ToolUse{ID: "tool-1", Name: "read", Input: []byte(`{"path":"README.md"}`)},
+		}},
+		Metadata: map[string]any{"summary": true},
+		ToolResult: &model.ToolResult{
+			ToolUseID: "tool-1",
+			Name:      "read",
+			Content:   "result",
+			Metadata:  map[string]any{"stored_result_id": "result-1"},
+		},
+	}); err != nil {
+		t.Fatalf("Append returned error: %v", err)
+	}
+
+	first, err := store.Messages(context.Background(), sess.ID)
+	if err != nil {
+		t.Fatalf("Messages returned error: %v", err)
+	}
+	first[0].Content[0].ToolUse.Name = "mutated"
+	first[0].Metadata["summary"] = false
+	first[0].ToolResult.Metadata["stored_result_id"] = "mutated"
+
+	second, err := store.Messages(context.Background(), sess.ID)
+	if err != nil {
+		t.Fatalf("Messages returned error: %v", err)
+	}
+	if second[0].Content[0].ToolUse.Name != "read" {
+		t.Fatalf("tool use = %#v, want defensive copy", second[0].Content[0].ToolUse)
+	}
+	if second[0].Metadata["summary"] != true {
+		t.Fatalf("metadata = %#v, want defensive copy", second[0].Metadata)
+	}
+	if second[0].ToolResult.Metadata["stored_result_id"] != "result-1" {
+		t.Fatalf("tool result metadata = %#v, want defensive copy", second[0].ToolResult.Metadata)
+	}
+}
+
 func TestMemoryStoreForkRejectsMissingMessageID(t *testing.T) {
 	store := NewMemoryStore()
 	sess, err := store.Create(context.Background())

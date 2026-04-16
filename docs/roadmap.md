@@ -68,6 +68,9 @@ system prompt.
 - Add context retention hardening. Initial `contextwindow.PreserveImportant`
   support keeps loaded skills, stored result handles, and tool errors with
   structurally valid tool-use groups under aggressive trimming.
+- Add context compaction provenance. Initial `contextwindow.PolicyWithResult`,
+  `contextwindow.CompactionRecord`, summary metadata, summary replacement, and
+  `EventContextCompacted` support exist for inspectable compaction behavior.
 
 ## Phase 6: Ecosystem and Hardening
 

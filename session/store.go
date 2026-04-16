@@ -93,7 +93,7 @@ func (s *MemoryStore) Append(_ context.Context, id string, msg model.Message) er
 	if !ok {
 		return fmt.Errorf("unknown session: %s", id)
 	}
-	record.messages = append(record.messages, msg)
+	record.messages = append(record.messages, cloneMessage(msg))
 	s.sessions[id] = record
 	return nil
 }
@@ -105,9 +105,7 @@ func (s *MemoryStore) Messages(_ context.Context, id string) ([]model.Message, e
 	if !ok {
 		return nil, fmt.Errorf("unknown session: %s", id)
 	}
-	out := make([]model.Message, len(record.messages))
-	copy(out, record.messages)
-	return out, nil
+	return cloneMessages(record.messages), nil
 }
 
 func (s *MemoryStore) Get(_ context.Context, id string) (Session, error) {
@@ -153,7 +151,7 @@ func (s *MemoryStore) Fork(_ context.Context, id string, opts ForkOptions) (Sess
 	session := Session{ID: newID, ParentID: parentID, CreatedAt: time.Now().UTC()}
 	s.sessions[newID] = memorySession{
 		session:  session,
-		messages: messages,
+		messages: cloneMessages(messages),
 	}
 	return session, nil
 }
@@ -215,9 +213,57 @@ func forkMessages(messages []model.Message, throughMessageID string) ([]model.Me
 			return nil, fmt.Errorf("message not found: %s", throughMessageID)
 		}
 	}
-	out := make([]model.Message, limit)
-	copy(out, messages[:limit])
-	return out, nil
+	return cloneMessages(messages[:limit]), nil
+}
+
+func cloneMessages(messages []model.Message) []model.Message {
+	if len(messages) == 0 {
+		return nil
+	}
+	out := make([]model.Message, len(messages))
+	for i, msg := range messages {
+		out[i] = cloneMessage(msg)
+	}
+	return out
+}
+
+func cloneMessage(msg model.Message) model.Message {
+	if len(msg.Content) > 0 {
+		msg.Content = cloneBlocks(msg.Content)
+	}
+	if len(msg.Metadata) > 0 {
+		msg.Metadata = cloneMetadata(msg.Metadata)
+	}
+	if msg.ToolResult != nil {
+		result := *msg.ToolResult
+		result.Metadata = cloneMetadata(result.Metadata)
+		msg.ToolResult = &result
+	}
+	return msg
+}
+
+func cloneBlocks(blocks []model.ContentBlock) []model.ContentBlock {
+	out := make([]model.ContentBlock, len(blocks))
+	for i, block := range blocks {
+		out[i] = block
+		if block.ToolUse != nil {
+			use := *block.ToolUse
+			use.Input = append([]byte(nil), block.ToolUse.Input...)
+			out[i].ToolUse = &use
+		}
+	}
+	return out
+}
+
+func cloneMetadata(metadata map[string]any) map[string]any {
+	if metadata == nil {
+		return nil
+	}
+	out := make(map[string]any, len(metadata))
+	for key, value := range metadata {
+		out[key] = value
+	}
+	return out
 }
 
 func sortSessions(sessions []Session) {

@@ -3,6 +3,7 @@ package memaxagent
 import (
 	"time"
 
+	"github.com/MemaxLabs/memax-go-agent-sdk/contextwindow"
 	"github.com/MemaxLabs/memax-go-agent-sdk/memory"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 )
@@ -17,6 +18,10 @@ const (
 	EventToolResult     EventKind = "tool_result"
 	EventUsage          EventKind = "usage"
 	EventContextApplied EventKind = "context_applied"
+	// EventContextCompacted is emitted when a context policy produces a
+	// compaction record, such as replacing older transcript messages with a
+	// summary.
+	EventContextCompacted EventKind = "context_compacted"
 	// EventMemoryCandidates is emitted after a valid final answer has been
 	// distilled and before EventResult. Candidates are proposals only; the SDK
 	// does not persist them unless Options.MemoryCandidateHandler is configured.
@@ -41,6 +46,7 @@ type Event struct {
 	ToolResult *model.ToolResult
 	Usage      *model.Usage
 	Context    *ContextEvent
+	Compaction *contextwindow.CompactionRecord
 	Memory     *MemoryCandidatesEvent
 	Result     string
 	Err        error

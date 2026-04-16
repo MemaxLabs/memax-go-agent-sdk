@@ -122,7 +122,7 @@ func TestEstimateByRunesIncludesToolPayloads(t *testing.T) {
 
 func TestSummarizingBudgetPrependsSummaryForCompactedPrefix(t *testing.T) {
 	var summarized []model.Message
-	got, err := (SummarizingBudget{
+	result, err := (SummarizingBudget{
 		MaxTokens:        16,
 		MaxSummaryTokens: 10,
 		SummaryPrefix:    "S:",
@@ -130,7 +130,7 @@ func TestSummarizingBudgetPrependsSummaryForCompactedPrefix(t *testing.T) {
 			summarized = cloneMessages(messages)
 			return "summary", nil
 		}),
-	}).Apply(context.Background(), []model.Message{
+	}).ApplyWithResult(context.Background(), []model.Message{
 		textMessage(model.RoleUser, "old-old"),
 		textMessage(model.RoleAssistant, "middle!"),
 		textMessage(model.RoleUser, "recent"),
@@ -141,6 +141,7 @@ func TestSummarizingBudgetPrependsSummaryForCompactedPrefix(t *testing.T) {
 	if len(summarized) != 2 {
 		t.Fatalf("summarized len = %d, want 2", len(summarized))
 	}
+	got := result.Messages
 	if len(got) != 2 {
 		t.Fatalf("messages len = %d, want 2", len(got))
 	}
@@ -149,6 +150,18 @@ func TestSummarizingBudgetPrependsSummaryForCompactedPrefix(t *testing.T) {
 	}
 	if got[1].PlainText() != "recent" {
 		t.Fatalf("recent message = %#v", got[1])
+	}
+	if !IsSummaryMessage(got[0]) {
+		t.Fatalf("summary metadata = %#v, want context summary marker", got[0].Metadata)
+	}
+	if result.Compaction == nil {
+		t.Fatal("compaction record is nil")
+	}
+	if result.Compaction.OriginalMessages != 3 || result.Compaction.SentMessages != 2 || result.Compaction.SummarizedMessages != 2 {
+		t.Fatalf("compaction record = %#v, want 3 -> 2 with 2 summarized", result.Compaction)
+	}
+	if result.Compaction.SummaryHash == "" {
+		t.Fatalf("summary hash is empty: %#v", result.Compaction)
 	}
 }
 
@@ -224,6 +237,52 @@ func TestSummarizingBudgetTruncatesSummaryToBudget(t *testing.T) {
 	}
 	if got[0].PlainText() != "S:ab" {
 		t.Fatalf("summary = %q, want truncated text", got[0].PlainText())
+	}
+	if got[0].Metadata[MetadataContextSummaryHash] != hashText("S:ab") {
+		t.Fatalf("summary metadata = %#v, want hash of truncated text", got[0].Metadata)
+	}
+}
+
+func TestSummarizingBudgetReplacesPriorSummaries(t *testing.T) {
+	prior := model.Message{
+		Role:     model.RoleUser,
+		Content:  []model.ContentBlock{{Type: model.ContentText, Text: "S:old summary"}},
+		Metadata: map[string]any{MetadataContextSummary: true},
+	}
+	var summarized []model.Message
+	result, err := (SummarizingBudget{
+		MaxTokens:        18,
+		MaxSummaryTokens: 12,
+		SummaryPrefix:    "S:",
+		Summarizer: SummarizerFunc(func(_ context.Context, messages []model.Message) (string, error) {
+			summarized = cloneMessages(messages)
+			return "new summary", nil
+		}),
+	}).ApplyWithResult(context.Background(), []model.Message{
+		prior,
+		textMessage(model.RoleUser, "old work"),
+		textMessage(model.RoleUser, "recent"),
+	})
+	if err != nil {
+		t.Fatalf("ApplyWithResult returned error: %v", err)
+	}
+	if len(summarized) != 2 || !IsSummaryMessage(summarized[0]) {
+		t.Fatalf("summarized messages = %#v, want prior summary plus old work", summarized)
+	}
+	summaryCount := 0
+	for _, msg := range result.Messages {
+		if IsSummaryMessage(msg) {
+			summaryCount++
+		}
+		if msg.PlainText() == "S:old summary" {
+			t.Fatalf("old summary remained active in messages: %#v", result.Messages)
+		}
+	}
+	if summaryCount != 1 {
+		t.Fatalf("summary count = %d, want one active summary: %#v", summaryCount, result.Messages)
+	}
+	if result.Compaction == nil || result.Compaction.ReplacedSummaries != 1 {
+		t.Fatalf("compaction record = %#v, want one replaced summary", result.Compaction)
 	}
 }
 
