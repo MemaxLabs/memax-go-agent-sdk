@@ -469,6 +469,62 @@ func TestQueryProgressiveSkillResourceLoadsThroughTool(t *testing.T) {
 	if secondLast.ToolResult.Metadata[model.MetadataLoadedSkillResource] != true {
 		t.Fatalf("resource metadata = %#v, want loaded resource marker", secondLast.ToolResult.Metadata)
 	}
+	if secondLast.ToolResult.Metadata["skill_loaded"] != true {
+		t.Fatalf("resource metadata = %#v, want skill_loaded true", secondLast.ToolResult.Metadata)
+	}
+}
+
+func TestQueryProgressiveSkillResourceCanLoadBeforeSkillWithMetadata(t *testing.T) {
+	fake := &fakeModel{turns: [][]model.StreamEvent{
+		{
+			{
+				Kind: model.StreamToolUse,
+				ToolUse: model.ToolUse{
+					ID:    "resource-1",
+					Name:  skill.ResourceToolName,
+					Input: json.RawMessage(`{"skill_name":"database-review","resource":"migration-checklist"}`),
+				},
+			},
+		},
+		{{Kind: model.StreamText, Text: "reviewed with direct resource"}},
+	}}
+	source := skill.StaticSource{{
+		Name:     "database-review",
+		AlwaysOn: true,
+		Resources: []skill.ResourceRef{{
+			Name: "migration-checklist",
+			Path: "resources/migration-checklist.md",
+		}},
+	}}
+	resources := skill.StaticResourceSource{{
+		SkillName: "database-review",
+		Name:      "migration-checklist",
+		Content:   "Direct resource content.",
+	}}
+
+	events, err := Query(context.Background(), "review SQL migration", Options{
+		Model:               fake,
+		SkillSource:         source,
+		SkillResourceSource: resources,
+		SkillDisclosure:     skill.DisclosureProgressive,
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+	result, err := Drain(events)
+	if err != nil {
+		t.Fatalf("Drain returned error: %v", err)
+	}
+	if result != "reviewed with direct resource" {
+		t.Fatalf("result = %q, want reviewed with direct resource", result)
+	}
+	last := fake.requests[1].Messages[len(fake.requests[1].Messages)-1]
+	if last.ToolResult == nil || last.ToolResult.Name != skill.ResourceToolName {
+		t.Fatalf("last message = %#v, want resource result", last)
+	}
+	if last.ToolResult.Metadata["skill_loaded"] != false {
+		t.Fatalf("resource metadata = %#v, want skill_loaded false", last.ToolResult.Metadata)
+	}
 }
 
 func TestQueryFeedsHookDenialBackToModel(t *testing.T) {

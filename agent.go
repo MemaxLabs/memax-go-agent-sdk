@@ -752,6 +752,7 @@ type skillLoader struct {
 	skills  []skillpkg.Skill
 	byName  map[string]skillpkg.Skill
 	aliases map[string]skillpkg.Skill
+	used    map[string]struct{}
 }
 
 func (l *skillLoader) Load(ctx context.Context) ([]skillpkg.Skill, error) {
@@ -777,6 +778,9 @@ func (l *skillLoader) Load(ctx context.Context) ([]skillpkg.Skill, error) {
 	}
 	l.skills = loaded
 	l.byName, l.aliases = indexSkills(loaded)
+	if l.used == nil {
+		l.used = map[string]struct{}{}
+	}
 	l.loaded = true
 	return skillpkg.StaticSource(l.skills).Skills(ctx)
 }
@@ -794,6 +798,22 @@ func (l *skillLoader) Lookup(ctx context.Context, name string) (skillpkg.Skill, 
 		return item, true, nil
 	}
 	return skillpkg.Skill{}, false, nil
+}
+
+func (l *skillLoader) MarkLoaded(name string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.used == nil {
+		l.used = map[string]struct{}{}
+	}
+	l.used[name] = struct{}{}
+}
+
+func (l *skillLoader) Loaded(name string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	_, ok := l.used[name]
+	return ok
 }
 
 func indexSkills(skills []skillpkg.Skill) (map[string]skillpkg.Skill, map[string]skillpkg.Skill) {
@@ -860,6 +880,7 @@ func loadSkillTool(loader *skillLoader, resourcesAvailable bool) tool.Tool {
 			if !ok {
 				return model.ToolResult{}, fmt.Errorf("unknown skill: %s", name)
 			}
+			loader.MarkLoaded(item.Name)
 			return model.ToolResult{
 				Content: formatLoadedSkill(item, resourcesAvailable),
 				Metadata: map[string]any{
@@ -926,6 +947,7 @@ func readSkillResourceTool(loader *skillLoader, source skillpkg.ResourceSource) 
 			if !ok {
 				return model.ToolResult{}, fmt.Errorf("unknown skill: %s", skillName)
 			}
+			skillLoaded := loader.Loaded(item.Name)
 			ref, ok := findSkillResource(item, resourceName)
 			if !ok {
 				return model.ToolResult{}, fmt.Errorf("unknown resource %q for skill %s", resourceName, item.Name)
@@ -949,6 +971,7 @@ func readSkillResourceTool(loader *skillLoader, source skillpkg.ResourceSource) 
 			metadata["resource"] = resource.Name
 			metadata["path"] = resource.Path
 			metadata["mime_type"] = resource.MIMEType
+			metadata["skill_loaded"] = skillLoaded
 			return model.ToolResult{
 				Content:  formatLoadedSkillResource(resource),
 				Metadata: metadata,
@@ -1030,21 +1053,7 @@ func formatLoadedSkill(item skillpkg.Skill, resourcesAvailable bool) string {
 	}
 	if resourcesAvailable && len(item.Resources) > 0 {
 		fmt.Fprintf(&b, "\nResources: use `%s` with skill_name %q and the resource name or path when supporting material is needed.", skillpkg.ResourceToolName, item.Name)
-		for _, ref := range item.Resources {
-			fmt.Fprintf(&b, "\n- %s", firstNonEmptyString(ref.Name, ref.Path))
-			if ref.Description != "" {
-				fmt.Fprintf(&b, ": %s", ref.Description)
-			}
-			if ref.Path != "" && ref.Path != ref.Name {
-				fmt.Fprintf(&b, " (path: %s)", ref.Path)
-			}
-			if ref.MIMEType != "" {
-				fmt.Fprintf(&b, " [%s]", ref.MIMEType)
-			}
-			if ref.Bytes > 0 {
-				fmt.Fprintf(&b, " [%d bytes]", ref.Bytes)
-			}
-		}
+		formatSkillResourceRefs(&b, item.Resources, "")
 	}
 	if item.Content != "" {
 		fmt.Fprintf(&b, "\n\nInstructions:\n%s", item.Content)
@@ -1059,6 +1068,27 @@ func firstNonEmptyString(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func formatSkillResourceRefs(b *strings.Builder, refs []skillpkg.ResourceRef, prefix string) {
+	for _, ref := range refs {
+		fmt.Fprintf(b, "\n%s- %s", prefix, firstNonEmptyString(ref.Name, ref.Path))
+		if ref.Description != "" {
+			fmt.Fprintf(b, ": %s", ref.Description)
+		}
+		if ref.Path != "" && ref.Path != ref.Name {
+			fmt.Fprintf(b, " (path: %s)", ref.Path)
+		}
+		if ref.MIMEType != "" {
+			fmt.Fprintf(b, " [%s]", ref.MIMEType)
+		}
+		if ref.Bytes > 0 {
+			fmt.Fprintf(b, " [%d bytes]", ref.Bytes)
+		}
+		if len(ref.Tags) > 0 {
+			fmt.Fprintf(b, "\n%s  Tags: %s", prefix, strings.Join(ref.Tags, ", "))
+		}
+	}
 }
 
 func formatLoadedSkillResource(resource skillpkg.Resource) string {

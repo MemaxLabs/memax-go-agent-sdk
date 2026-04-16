@@ -278,36 +278,40 @@ func formatSkillDiscovery(skills []skill.Skill, resourcesAvailable bool) string 
 		}
 		if resourcesAvailable && len(item.Resources) > 0 {
 			fmt.Fprintf(&b, "\n  Resources: call `%s` with skill_name %q and the resource name or path when supporting material is needed.", skill.ResourceToolName, item.Name)
-			for _, ref := range item.Resources {
-				fmt.Fprintf(&b, "\n  - %s", firstNonEmpty(ref.Name, ref.Path))
-				if ref.Description != "" {
-					fmt.Fprintf(&b, ": %s", ref.Description)
-				}
-				if ref.Path != "" && ref.Path != ref.Name {
-					fmt.Fprintf(&b, " (path: %s)", ref.Path)
-				}
-				if ref.MIMEType != "" {
-					fmt.Fprintf(&b, " [%s]", ref.MIMEType)
-				}
-				if ref.Bytes > 0 {
-					fmt.Fprintf(&b, " [%d bytes]", ref.Bytes)
-				}
-				if len(ref.Tags) > 0 {
-					fmt.Fprintf(&b, "\n    Tags: %s", strings.Join(ref.Tags, ", "))
-				}
-			}
+			formatResourceRefs(&b, item.Resources, "  ")
 		}
 	}
 	return b.String()
 }
 
-func firstNonEmpty(values ...string) string {
+func firstNonEmptyString(values ...string) string {
 	for _, value := range values {
 		if value != "" {
 			return value
 		}
 	}
 	return ""
+}
+
+func formatResourceRefs(b *strings.Builder, refs []skill.ResourceRef, prefix string) {
+	for _, ref := range refs {
+		fmt.Fprintf(b, "\n%s- %s", prefix, firstNonEmptyString(ref.Name, ref.Path))
+		if ref.Description != "" {
+			fmt.Fprintf(b, ": %s", ref.Description)
+		}
+		if ref.Path != "" && ref.Path != ref.Name {
+			fmt.Fprintf(b, " (path: %s)", ref.Path)
+		}
+		if ref.MIMEType != "" {
+			fmt.Fprintf(b, " [%s]", ref.MIMEType)
+		}
+		if ref.Bytes > 0 {
+			fmt.Fprintf(b, " [%d bytes]", ref.Bytes)
+		}
+		if len(ref.Tags) > 0 {
+			fmt.Fprintf(b, "\n%s  Tags: %s", prefix, strings.Join(ref.Tags, ", "))
+		}
+	}
 }
 
 func formatMemories(memories []memory.Memory) string {

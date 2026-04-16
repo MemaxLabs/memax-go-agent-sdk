@@ -44,7 +44,9 @@ type Skill struct {
 
 // ResourceRef is lightweight metadata for a skill supporting resource. Resource
 // content is intentionally not stored here so progressive disclosure can expose
-// metadata first and load content through a tool only when needed.
+// metadata first and load content through a tool only when needed. The resource
+// can be identified by Name or Path; if both are provided, resource loaders
+// receive both so they can resolve a canonical backing object.
 type ResourceRef struct {
 	Name        string   `json:"name"`
 	Description string   `json:"description,omitempty"`
