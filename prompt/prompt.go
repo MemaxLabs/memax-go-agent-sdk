@@ -18,6 +18,8 @@ import (
 const (
 	maxSelectorQueryMessages = 3
 	maxSelectorQueryBytes    = 4096
+
+	defaultProgressiveSkillLimit = 8
 )
 
 // Builder builds the provider-facing system prompt for a model request.
@@ -62,7 +64,11 @@ type Result struct {
 	Hash         string
 }
 
-// DefaultBuilder is the SDK's default Memax-native prompt assembler.
+// DefaultBuilder is the SDK's default Memax-native prompt assembler. In
+// progressive skill disclosure mode, a zero SkillSelector.MaxSkills uses a
+// bounded discovery default. Direct skill injection keeps the selector's normal
+// zero-value behavior and remains unbounded for compatibility with small,
+// trusted skill sets.
 type DefaultBuilder struct {
 	SkillSelector  skill.Selector
 	MemorySelector memory.Selector
@@ -94,7 +100,7 @@ func (b DefaultBuilder) Build(ctx context.Context, req Request) (Result, error) 
 	if selected := b.MemorySelector.Select(req.Memories, requestQuery(req)); len(selected) > 0 {
 		parts = append(parts, Part{Name: "memax.memories", Content: formatMemories(selected)})
 	}
-	if selected := b.SkillSelector.Select(req.Skills, requestQuery(req)); len(selected) > 0 {
+	if selected := b.skillSelector(req.SkillDisclosure).Select(req.Skills, requestQuery(req)); len(selected) > 0 {
 		if req.SkillDisclosure == skill.DisclosureProgressive {
 			if content := formatSkillDiscovery(selected, req.SkillResources); content != "" {
 				parts = append(parts, Part{Name: "memax.skill_discovery", Content: content})
@@ -114,6 +120,14 @@ func (b DefaultBuilder) Build(ctx context.Context, req Request) (Result, error) 
 	result.SystemPrompt = joinParts(parts)
 	result.Hash = hashParts(parts)
 	return result, nil
+}
+
+func (b DefaultBuilder) skillSelector(disclosure skill.DisclosureMode) skill.Selector {
+	selector := b.SkillSelector
+	if disclosure == skill.DisclosureProgressive && selector.MaxSkills <= 0 {
+		selector.MaxSkills = defaultProgressiveSkillLimit
+	}
+	return selector
 }
 
 // Profile tunes prompt guidance for a provider family without leaking provider

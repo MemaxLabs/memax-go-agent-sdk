@@ -95,7 +95,8 @@ environment.
 **Current state:** `skill.Selector` ranks skills. The SDK supports the original
 direct-injection mode and an opt-in progressive mode where selected metadata is
 shown in the prompt, full instructions are loaded through `load_skill`, and
-supporting resources can be loaded through `read_skill_resource`.
+supporting resources can be loaded through `read_skill_resource`. Progressive
+metadata discovery has a bounded default with eval coverage for large catalogs.
 
 **Gap:** Leading agents use skill metadata for discovery, then load full
 instructions and resources on demand. The reference does this through a Skill
@@ -104,6 +105,7 @@ tool and filesystem-backed progressive disclosure.
 **Target behavior:**
 
 - Prompt includes skill metadata only: name, description, when-to-use, tags.
+  Initial support exists, including default-bounded discovery for large catalogs.
 - The model explicitly invokes `load_skill` to load full instructions. Initial
   support exists.
 - Optional `read_skill_resource` loads host-owned supporting resources. Initial

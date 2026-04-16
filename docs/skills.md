@@ -138,6 +138,13 @@ transcript. This keeps context smaller, makes skill use auditable, and matches
 the same tool-mediated capability boundary used for files, memories, and other
 host-owned resources.
 
+Progressive discovery is bounded by default. A zero-value `prompt.DefaultBuilder`
+selects up to eight skills for the metadata prompt in progressive mode, while
+direct injection remains unbounded for backward compatibility with small trusted
+skill sets. Hosts that want a different catalog budget can provide a custom
+prompt builder with `prompt.DefaultBuilder{SkillSelector:
+skill.Selector{MaxSkills: n}}`.
+
 Skills can also advertise lightweight supporting resource metadata through
 `skill.ResourceRef`. When `Options.SkillResourceSource` is configured,
 progressive mode exposes a read-only, concurrency-safe `read_skill_resource`

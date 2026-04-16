@@ -40,6 +40,7 @@ func All() []agenteval.Case {
 		PlannerTaskStateUpdates(),
 		ProgressiveSkillDisclosure(),
 		ProgressiveSkillResourceLoading(),
+		ProgressiveLargeSkillCatalog(),
 		ContextPreservesLoadedSkill(),
 		ContextCompactionProvenance(),
 		OpenAIProviderTextAndUsage(),
@@ -58,6 +59,92 @@ func All() []agenteval.Case {
 		StreamingPermissionDenialRecovery(),
 		StreamingFailureCancelsEarlyTool(),
 		StreamingCancellation(),
+	}
+}
+
+// ProgressiveLargeSkillCatalog returns a single-use scenario where progressive
+// disclosure keeps a large relevant catalog bounded while the model can still
+// load the exact skill and supporting resource it needs.
+func ProgressiveLargeSkillCatalog() agenteval.Case {
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "skill-1",
+				Name:  skill.LoadToolName,
+				Input: json.RawMessage(`{"name":"database-review"}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "resource-1",
+				Name:  skill.ResourceToolName,
+				Input: json.RawMessage(`{"skill_name":"database-review","resource":"migration-checklist"}`),
+			},
+		}},
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "Large catalog skill loaded with checklist."}},
+	)
+	skills, resources := largeProgressiveCatalog()
+
+	return agenteval.Case{
+		Name:   "progressive_large_skill_catalog",
+		Prompt: "Review the database migration checklist with the right specialist skill.",
+		Options: memaxagent.Options{
+			Model:               modelClient,
+			SkillSource:         skill.StaticSource(skills),
+			SkillResourceSource: skill.StaticResourceSource(resources),
+			SkillDisclosure:     skill.DisclosureProgressive,
+		},
+		Assertions: []agenteval.Assertion{
+			agenteval.ToolUsed(skill.LoadToolName),
+			agenteval.ToolUsed(skill.ResourceToolName),
+			agenteval.NoToolErrors(),
+			agenteval.FinalEquals("Large catalog skill loaded with checklist."),
+			{
+				Name: "large catalog discovery is bounded metadata",
+				Check: func(agenteval.Result) error {
+					requests := modelClient.Requests()
+					if len(requests) < 1 {
+						return fmt.Errorf("model requests = %d, want at least 1", len(requests))
+					}
+					prompt := requests[0].SystemPrompt
+					for _, want := range []string{"database-review", "migration-checklist", skill.LoadToolName, skill.ResourceToolName} {
+						if !strings.Contains(prompt, want) {
+							return fmt.Errorf("prompt missing %q:\n%s", want, prompt)
+						}
+					}
+					for _, unexpected := range []string{"migration-helper-020", "Full database migration instructions", "Checklist body: verify rollback"} {
+						if strings.Contains(prompt, unexpected) {
+							return fmt.Errorf("prompt leaked or over-selected %q:\n%s", unexpected, prompt)
+						}
+					}
+					if got := strings.Count(prompt, "\n\n- "); got != 8 {
+						return fmt.Errorf("discovered skill count = %d, want 8:\n%s", got, prompt)
+					}
+					return nil
+				},
+			},
+			{
+				Name: "large catalog resources load on demand",
+				Check: func(result agenteval.Result) error {
+					loadedSkill := false
+					loadedResource := false
+					for _, toolResult := range result.ToolResults() {
+						if toolResult.Name == skill.LoadToolName && strings.Contains(toolResult.Content, "Full database migration instructions") {
+							loadedSkill = true
+						}
+						if toolResult.Name == skill.ResourceToolName && strings.Contains(toolResult.Content, "Checklist body: verify rollback") {
+							loadedResource = true
+						}
+					}
+					if !loadedSkill || !loadedResource {
+						return fmt.Errorf("tool results missing loaded skill/resource: %#v", result.ToolResults())
+					}
+					return nil
+				},
+			},
+		},
 	}
 }
 
@@ -482,6 +569,40 @@ func ProgressiveSkillResourceLoading() agenteval.Case {
 			},
 		},
 	}
+}
+
+func largeProgressiveCatalog() ([]skill.Skill, []skill.Resource) {
+	skills := []skill.Skill{{
+		Name:        "database-review",
+		Description: "Review database migrations.",
+		WhenToUse:   "Use for database migration checklist, rollback, lock, and backfill reviews.",
+		Tags:        []string{"database", "migration", "rollback"},
+		Content:     "Full database migration instructions: check locks, rollback safety, and backfill windows.",
+		Resources: []skill.ResourceRef{{
+			Name:        "migration-checklist",
+			Description: "Database migration rollout checklist.",
+			Path:        "resources/migration-checklist.md",
+			MIMEType:    "text/markdown",
+			Bytes:       512,
+		}},
+	}}
+	for i := 0; i < 32; i++ {
+		skills = append(skills, skill.Skill{
+			Name:        fmt.Sprintf("migration-helper-%03d", i),
+			Description: fmt.Sprintf("Database migration helper %03d.", i),
+			WhenToUse:   "Use for database migration review subtasks.",
+			Tags:        []string{"database", "migration"},
+			Content:     fmt.Sprintf("Full helper instructions %03d.", i),
+		})
+	}
+	resources := []skill.Resource{{
+		SkillName: "database-review",
+		Name:      "migration-checklist",
+		Path:      "resources/migration-checklist.md",
+		MIMEType:  "text/markdown",
+		Content:   "Checklist body: verify rollback, locks, backups, and monitoring.",
+	}}
+	return skills, resources
 }
 
 // ContextPreservesLoadedSkill returns a single-use scenario where aggressive

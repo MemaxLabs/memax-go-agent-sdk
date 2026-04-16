@@ -2,6 +2,7 @@ package prompt
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -99,6 +100,49 @@ func TestDefaultBuilderProgressiveSkillsExposeMetadataOnly(t *testing.T) {
 	}
 }
 
+func TestDefaultBuilderProgressiveSkillsAreBoundedByDefault(t *testing.T) {
+	skills := makeLargeSkillCatalog()
+	result, err := (DefaultBuilder{}).Build(context.Background(), Request{
+		Messages: []model.Message{{
+			Role:    model.RoleUser,
+			Content: []model.ContentBlock{{Type: model.ContentText, Text: "review the database migration checklist"}},
+		}},
+		SkillDisclosure: skill.DisclosureProgressive,
+		SkillResources:  true,
+		Skills:          skills,
+	})
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+	if !strings.Contains(result.SystemPrompt, "database-review") || !strings.Contains(result.SystemPrompt, "migration-checklist") {
+		t.Fatalf("system prompt missing relevant skill metadata:\n%s", result.SystemPrompt)
+	}
+	if strings.Contains(result.SystemPrompt, "migration-helper-020") || strings.Contains(result.SystemPrompt, "frontend-020") {
+		t.Fatalf("system prompt included irrelevant skill past default limit:\n%s", result.SystemPrompt)
+	}
+	for _, leaked := range []string{"Full database migration instructions", "Full frontend instructions", "resource body"} {
+		if strings.Contains(result.SystemPrompt, leaked) {
+			t.Fatalf("progressive prompt leaked %q:\n%s", leaked, result.SystemPrompt)
+		}
+	}
+	if got := strings.Count(result.SystemPrompt, "\n\n- "); got != defaultProgressiveSkillLimit {
+		t.Fatalf("selected skill count = %d, want %d:\n%s", got, defaultProgressiveSkillLimit, result.SystemPrompt)
+	}
+}
+
+func TestDefaultBuilderDirectSkillInjectionKeepsUnboundedDefault(t *testing.T) {
+	skills := makeLargeSkillCatalog()
+	result, err := (DefaultBuilder{}).Build(context.Background(), Request{
+		Skills: skills,
+	})
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+	if !strings.Contains(result.SystemPrompt, "frontend-020") || !strings.Contains(result.SystemPrompt, "Full frontend instructions 020") {
+		t.Fatalf("direct skill injection should keep unbounded zero-value selector:\n%s", result.SystemPrompt)
+	}
+}
+
 func TestDefaultBuilderIncludesPlan(t *testing.T) {
 	result, err := (DefaultBuilder{}).Build(context.Background(), Request{
 		Plan: planner.Plan{
@@ -122,6 +166,42 @@ func TestDefaultBuilderIncludesPlan(t *testing.T) {
 			t.Fatalf("system prompt missing %q:\n%s", want, result.SystemPrompt)
 		}
 	}
+}
+
+func makeLargeSkillCatalog() []skill.Skill {
+	skills := []skill.Skill{{
+		Name:        "database-review",
+		Description: "Review database migrations.",
+		WhenToUse:   "Database migrations and rollback plans.",
+		Tags:        []string{"database", "migration"},
+		Content:     "Full database migration instructions.",
+		Resources: []skill.ResourceRef{{
+			Name:        "migration-checklist",
+			Description: "Migration rollout checklist.",
+			Path:        "resources/migration-checklist.md",
+			MIMEType:    "text/markdown",
+			Bytes:       128,
+		}},
+	}}
+	for i := 0; i < 24; i++ {
+		skills = append(skills, skill.Skill{
+			Name:        fmt.Sprintf("migration-helper-%03d", i),
+			Description: fmt.Sprintf("Database migration helper %03d.", i),
+			WhenToUse:   "Database migration review subtasks.",
+			Tags:        []string{"database", "migration"},
+			Content:     fmt.Sprintf("Full migration helper instructions %03d with resource body.", i),
+		})
+	}
+	for i := 0; i < 24; i++ {
+		skills = append(skills, skill.Skill{
+			Name:        fmt.Sprintf("frontend-%03d", i),
+			Description: fmt.Sprintf("Frontend pattern guide %03d.", i),
+			WhenToUse:   "React component styling tasks.",
+			Tags:        []string{"frontend"},
+			Content:     fmt.Sprintf("Full frontend instructions %03d with resource body.", i),
+		})
+	}
+	return skills
 }
 
 func TestDefaultBuilderSelectorQueryUsesRecentUserMessages(t *testing.T) {
