@@ -283,7 +283,8 @@ retrieval, usage, and review infrastructure.
 
 **Current state:** planner policies, task-derived plans, plan-visible
 verification hints, scoped subagent plan handoff, and opt-in progress updates
-from verification or subagent results exist.
+from verification or subagent results exist. Initial hook-based agent policy
+presets exist for checkpoint-before-patch recovery.
 
 **Gap:** The SDK lacks explicit policies for when to plan, update, delegate,
 verify, ask the user, or stop.
@@ -305,6 +306,8 @@ verify, ask the user, or stop.
 - Verification hints guide the model to run host verification, verification
   outcomes update task progress when explicitly configured, and verification
   failure triggers repair.
+- Checkpoint-before-patch policy denial drives checkpoint creation and retry
+  through normal tool results.
 
 ### 7. Provider Fidelity and Compatibility
 

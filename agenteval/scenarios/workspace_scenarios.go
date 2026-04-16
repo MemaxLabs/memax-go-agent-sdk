@@ -10,9 +10,11 @@ import (
 
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
 	"github.com/MemaxLabs/memax-go-agent-sdk/agenteval"
+	"github.com/MemaxLabs/memax-go-agent-sdk/hook"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/planner"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
+	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/agentpolicy"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/tasktools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/verifytools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/workspacetools"
@@ -356,6 +358,91 @@ func WorkspaceOSStorePatchRollback() agenteval.Case {
 					}
 					if string(content) != "version one" {
 						return fmt.Errorf("README.md = %q, want restored version one", content)
+					}
+					return nil
+				},
+			},
+		},
+	}
+}
+
+// WorkspaceCheckpointPolicyRecovery returns a single-use scenario where a
+// preset hook policy denies patching until the model creates a checkpoint, then
+// the model recovers and applies the patch.
+func WorkspaceCheckpointPolicyRecovery() agenteval.Case {
+	store := workspace.NewMemoryStore(map[string]string{
+		"README.md": "status: old",
+	})
+	workspaceTools, toolsErr := workspacetools.NewTools(store)
+	policy := agentpolicy.RequireCheckpointBeforePatch()
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "patch-1",
+				Name: workspacetools.ApplyPatchToolName,
+				Input: json.RawMessage(`{"operations":[
+					{"path":"README.md","old_content":"status: old","new_content":"status: new"}
+				]}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "checkpoint-1",
+				Name:  workspacetools.CheckpointToolName,
+				Input: json.RawMessage(`{"label":"before README patch"}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "patch-2",
+				Name: workspacetools.ApplyPatchToolName,
+				Input: json.RawMessage(`{"operations":[
+					{"path":"README.md","old_content":"status: old","new_content":"status: new"}
+				]}`),
+			},
+		}},
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "Patched after checkpoint."}},
+	)
+
+	return agenteval.Case{
+		Name:   "workspace_checkpoint_policy_recovery",
+		Prompt: "Patch README.md safely.",
+		Options: memaxagent.Options{
+			Model: modelClient,
+			Tools: tool.NewRegistry(workspaceTools...),
+			Hooks: hook.NewRunner(policy.Options()...),
+		},
+		Assertions: []agenteval.Assertion{
+			toolConstructionSucceeded(toolsErr),
+			agenteval.ToolUsed(workspacetools.ApplyPatchToolName),
+			agenteval.ToolUsed(workspacetools.CheckpointToolName),
+			agenteval.FinalEquals("Patched after checkpoint."),
+			requestCountEquals(modelClient, 4),
+			{
+				Name: "checkpoint policy denial drives recovery",
+				Check: func(result agenteval.Result) error {
+					results := result.ToolResults()
+					if len(results) < 3 {
+						return fmt.Errorf("tool results = %#v, want denied patch checkpoint patch", results)
+					}
+					if !results[0].IsError || !strings.Contains(results[0].Content, agentpolicy.CheckpointBeforePatchReason()) {
+						return fmt.Errorf("first patch result = %#v, want checkpoint denial", results[0])
+					}
+					if results[1].IsError || !strings.Contains(results[1].Content, "created workspace checkpoint") {
+						return fmt.Errorf("checkpoint result = %#v, want checkpoint success", results[1])
+					}
+					if results[2].IsError || !strings.Contains(results[2].Content, "modified README.md") {
+						return fmt.Errorf("second patch result = %#v, want patch success", results[2])
+					}
+					content, err := store.ReadFile(context.Background(), "README.md")
+					if err != nil {
+						return err
+					}
+					if content != "status: new" {
+						return fmt.Errorf("README.md = %q, want patched content", content)
 					}
 					return nil
 				},

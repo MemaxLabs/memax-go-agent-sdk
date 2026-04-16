@@ -429,6 +429,23 @@ Configure `ResultHandler: tasktools.NewSubagentProgressHandler(tasks)` to
 record successful child results as task progress. Both hooks are opt-in; child
 runs remain normal bounded `Query` calls through the `run_subagent` tool.
 
+To install common safety policies without hard-coding them into the runtime,
+use `toolkit/agentpolicy`. For example, require a checkpoint before mutating
+workspace patches:
+
+```go
+policy := agentpolicy.RequireCheckpointBeforePatch()
+events, err := memaxagent.Query(ctx, "Patch README.md safely.", memaxagent.Options{
+    Model: client,
+    Tools: registry,
+    Hooks: hook.NewRunner(policy.Options()...),
+})
+```
+
+The first patch attempt is denied as a recoverable tool result until
+`workspace_checkpoint` succeeds in the same session. Dry-run patch previews are
+allowed.
+
 To bound an agent run across model calls, tool calls, tokens, turns, and wall
 time, set `Options.Budget`:
 

@@ -62,6 +62,8 @@ gateway needs a nonstandard route.
 - `toolkit/tasktools`: optional task-state tools for planning, progress tracking, and resumable work summaries.
 - `toolkit/skilltools`: optional skill discovery tools over `skill.Source`.
 - `toolkit/workspacetools`: optional workspace read/list/patch/diff/checkpoint/restore tools over `workspace.Store`.
+- `toolkit/agentpolicy`: optional hook-based policy presets for common agent
+  safety workflows.
 
 Expected near-term packages:
 
@@ -422,6 +424,16 @@ child run finishes. The `toolkit/tasktools` package provides
 delegated task can appear as a scoped child plan and then return completion
 evidence to the parent task store. Handler errors are surfaced as tool result
 metadata, not hidden runtime side effects.
+
+## Policy Presets
+
+Policy presets live in `toolkit/agentpolicy` and install through the existing
+hook runner. They do not mutate the core agent loop or bypass tool permissions.
+`RequireCheckpointBeforePatch` is the first preset: it denies
+`workspace_apply_patch` until a successful `workspace_checkpoint` has been
+observed in the same session, while allowing dry-run patch previews. The denial
+is returned as a normal tool error so the model can recover by creating a
+checkpoint and retrying the patch.
 
 ## Context Window
 
