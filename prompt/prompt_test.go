@@ -130,6 +130,77 @@ func TestDefaultBuilderProgressiveSkillsAreBoundedByDefault(t *testing.T) {
 	}
 }
 
+func TestDefaultBuilderProgressiveSkillDiscoveryRespectsByteBudget(t *testing.T) {
+	const budget = 2300
+	skills := make([]skill.Skill, 0, 12)
+	for i := 0; i < 12; i++ {
+		skills = append(skills, skill.Skill{
+			Name:        fmt.Sprintf("migration-helper-%03d", i),
+			Description: fmt.Sprintf("Database migration helper %03d. %s", i, strings.Repeat("detailed metadata ", 36)),
+			WhenToUse:   "Use for database migration checklist and rollback review.",
+			Tags:        []string{"database", "migration"},
+			Content:     fmt.Sprintf("Full migration helper instructions %03d.", i),
+		})
+	}
+
+	result, err := (DefaultBuilder{
+		SkillSelector:          skill.Selector{MaxSkills: 12},
+		SkillDiscoveryMaxBytes: budget,
+	}).Build(context.Background(), Request{
+		Messages: []model.Message{{
+			Role:    model.RoleUser,
+			Content: []model.ContentBlock{{Type: model.ContentText, Text: "review database migration checklist"}},
+		}},
+		SkillDisclosure: skill.DisclosureProgressive,
+		Skills:          skills,
+	})
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+	if discovery := promptPartContent(result, "memax.skill_discovery"); len(discovery) > budget {
+		t.Fatalf("skill discovery bytes = %d, want <= %d:\n%s", len(discovery), budget, discovery)
+	}
+	discovery := promptPartContent(result, "memax.skill_discovery")
+	if got := strings.Count(discovery, "\n\n- "); got == 0 || got >= 8 {
+		t.Fatalf("discovered skill count = %d, want bounded non-zero count:\n%s", got, discovery)
+	}
+	if !strings.Contains(discovery, "omitted because the discovery prompt budget was reached") {
+		t.Fatalf("discovery prompt missing omission note:\n%s", discovery)
+	}
+	if strings.Contains(discovery, "migration-helper-011") || strings.Contains(discovery, "Full migration helper instructions") {
+		t.Fatalf("discovery prompt over-selected or leaked content:\n%s", discovery)
+	}
+}
+
+func TestDefaultBuilderProgressiveSkillDiscoveryBudgetCanBeDisabled(t *testing.T) {
+	skills := make([]skill.Skill, 0, 10)
+	for i := 0; i < 10; i++ {
+		skills = append(skills, skill.Skill{
+			Name:        fmt.Sprintf("database-skill-%03d", i),
+			Description: strings.Repeat("database migration metadata ", 64),
+			WhenToUse:   "Database migration reviews.",
+		})
+	}
+	result, err := (DefaultBuilder{
+		SkillSelector:          skill.Selector{MaxSkills: 10},
+		SkillDiscoveryMaxBytes: -1,
+	}).Build(context.Background(), Request{
+		Messages: []model.Message{{
+			Role:    model.RoleUser,
+			Content: []model.ContentBlock{{Type: model.ContentText, Text: "database migration"}},
+		}},
+		SkillDisclosure: skill.DisclosureProgressive,
+		Skills:          skills,
+	})
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+	discovery := promptPartContent(result, "memax.skill_discovery")
+	if got := strings.Count(discovery, "\n\n- "); got != 10 {
+		t.Fatalf("discovered skill count = %d, want 10:\n%s", got, discovery)
+	}
+}
+
 func TestDefaultBuilderDirectSkillInjectionKeepsUnboundedDefault(t *testing.T) {
 	skills := makeLargeSkillCatalog()
 	result, err := (DefaultBuilder{}).Build(context.Background(), Request{
@@ -141,6 +212,15 @@ func TestDefaultBuilderDirectSkillInjectionKeepsUnboundedDefault(t *testing.T) {
 	if !strings.Contains(result.SystemPrompt, "frontend-020") || !strings.Contains(result.SystemPrompt, "Full frontend instructions 020") {
 		t.Fatalf("direct skill injection should keep unbounded zero-value selector:\n%s", result.SystemPrompt)
 	}
+}
+
+func promptPartContent(result Result, name string) string {
+	for _, part := range result.Parts {
+		if part.Name == name {
+			return part.Content
+		}
+	}
+	return ""
 }
 
 func TestDefaultBuilderIncludesPlan(t *testing.T) {

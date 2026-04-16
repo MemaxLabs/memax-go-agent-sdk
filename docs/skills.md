@@ -139,11 +139,13 @@ the same tool-mediated capability boundary used for files, memories, and other
 host-owned resources.
 
 Progressive discovery is bounded by default. A zero-value `prompt.DefaultBuilder`
-selects up to eight skills for the metadata prompt in progressive mode, while
-direct injection remains unbounded for backward compatibility with small trusted
-skill sets. Hosts that want a different catalog budget can provide a custom
-prompt builder with `prompt.DefaultBuilder{SkillSelector:
-skill.Selector{MaxSkills: n}}`.
+selects up to eight skills and caps the `memax.skill_discovery` prompt part at
+12 KiB in progressive mode, while direct injection remains unbounded for
+backward compatibility with small trusted skill sets. Hosts that want a
+different catalog budget can provide a custom prompt builder with
+`prompt.DefaultBuilder{SkillSelector: skill.Selector{MaxSkills: n},
+SkillDiscoveryMaxBytes: bytes}`. Set `SkillDiscoveryMaxBytes` negative only when
+the host has its own prompt budgeting layer.
 
 Skills can also advertise lightweight supporting resource metadata through
 `skill.ResourceRef`. When `Options.SkillResourceSource` is configured,

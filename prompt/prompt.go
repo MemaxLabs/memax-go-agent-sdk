@@ -19,7 +19,8 @@ const (
 	maxSelectorQueryMessages = 3
 	maxSelectorQueryBytes    = 4096
 
-	defaultProgressiveSkillLimit = 8
+	defaultProgressiveSkillLimit          = 8
+	defaultProgressiveSkillDiscoveryBytes = 12 * 1024
 )
 
 // Builder builds the provider-facing system prompt for a model request.
@@ -70,9 +71,13 @@ type Result struct {
 // zero-value behavior and remains unbounded for compatibility with small,
 // trusted skill sets.
 type DefaultBuilder struct {
-	SkillSelector  skill.Selector
-	MemorySelector memory.Selector
-	Profile        Profile
+	SkillSelector skill.Selector
+	// SkillDiscoveryMaxBytes bounds the memax.skill_discovery prompt part in
+	// progressive skill disclosure mode. Zero uses the SDK default; negative
+	// disables the byte budget. Direct skill injection is unaffected.
+	SkillDiscoveryMaxBytes int
+	MemorySelector         memory.Selector
+	Profile                Profile
 }
 
 // Build assembles ordered prompt parts from identity, tools, skills, and host
@@ -102,7 +107,7 @@ func (b DefaultBuilder) Build(ctx context.Context, req Request) (Result, error) 
 	}
 	if selected := b.skillSelector(req.SkillDisclosure).Select(req.Skills, requestQuery(req)); len(selected) > 0 {
 		if req.SkillDisclosure == skill.DisclosureProgressive {
-			if content := formatSkillDiscovery(selected, req.SkillResources); content != "" {
+			if content := formatSkillDiscovery(selected, req.SkillResources, b.skillDiscoveryMaxBytes(req.SkillDisclosure)); content != "" {
 				parts = append(parts, Part{Name: "memax.skill_discovery", Content: content})
 			}
 		} else {
@@ -128,6 +133,16 @@ func (b DefaultBuilder) skillSelector(disclosure skill.DisclosureMode) skill.Sel
 		selector.MaxSkills = defaultProgressiveSkillLimit
 	}
 	return selector
+}
+
+func (b DefaultBuilder) skillDiscoveryMaxBytes(disclosure skill.DisclosureMode) int {
+	if disclosure != skill.DisclosureProgressive {
+		return -1
+	}
+	if b.SkillDiscoveryMaxBytes == 0 {
+		return defaultProgressiveSkillDiscoveryBytes
+	}
+	return b.SkillDiscoveryMaxBytes
 }
 
 // Profile tunes prompt guidance for a provider family without leaking provider
@@ -269,31 +284,62 @@ func formatSkills(skills []skill.Skill) string {
 	return b.String()
 }
 
-func formatSkillDiscovery(skills []skill.Skill, resourcesAvailable bool) string {
-	var b strings.Builder
-	count := 0
+func formatSkillDiscovery(skills []skill.Skill, resourcesAvailable bool, maxBytes int) string {
+	header := fmt.Sprintf("Available skill metadata for this run. Skill bodies are not in this prompt. If a skill is relevant, call the `%s` tool with its exact name before relying on its instructions. Load only the skills needed for the current task.", skill.LoadToolName)
+	var entries []string
 	for _, item := range skills {
 		if strings.TrimSpace(item.Name) == "" {
 			continue
 		}
-		if count == 0 {
-			fmt.Fprintf(&b, "Available skill metadata for this run. Skill bodies are not in this prompt. If a skill is relevant, call the `%s` tool with its exact name before relying on its instructions. Load only the skills needed for the current task.", skill.LoadToolName)
+		entries = append(entries, formatSkillDiscoveryEntry(item, resourcesAvailable))
+	}
+	return joinSkillDiscoveryEntries(header, entries, maxBytes)
+}
+
+func formatSkillDiscoveryEntry(item skill.Skill, resourcesAvailable bool) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "\n\n- %s", item.Name)
+	if item.Description != "" {
+		fmt.Fprintf(&b, ": %s", item.Description)
+	}
+	if item.WhenToUse != "" {
+		fmt.Fprintf(&b, "\n  Use when: %s", item.WhenToUse)
+	}
+	if len(item.Tags) > 0 {
+		fmt.Fprintf(&b, "\n  Tags: %s", strings.Join(item.Tags, ", "))
+	}
+	if resourcesAvailable && len(item.Resources) > 0 {
+		fmt.Fprintf(&b, "\n  Resources: call `%s` with skill_name %q and the resource name or path when supporting material is needed.", skill.ResourceToolName, item.Name)
+		formatResourceRefs(&b, item.Resources, "  ")
+	}
+	return b.String()
+}
+
+func joinSkillDiscoveryEntries(header string, entries []string, maxBytes int) string {
+	if len(entries) == 0 {
+		return ""
+	}
+	if maxBytes < 0 {
+		return header + strings.Join(entries, "")
+	}
+	var b strings.Builder
+	omitted := 0
+	b.WriteString(header)
+	for i, entry := range entries {
+		if b.Len()+len(entry) > maxBytes {
+			omitted = len(entries) - i
+			break
 		}
-		count++
-		fmt.Fprintf(&b, "\n\n- %s", item.Name)
-		if item.Description != "" {
-			fmt.Fprintf(&b, ": %s", item.Description)
+		b.WriteString(entry)
+	}
+	if omitted > 0 {
+		note := fmt.Sprintf("\n\n%d additional skill metadata entries were omitted because the discovery prompt budget was reached. Narrow the request or use host-provided skill search when more catalog coverage is needed.", omitted)
+		if b.Len()+len(note) <= maxBytes {
+			b.WriteString(note)
 		}
-		if item.WhenToUse != "" {
-			fmt.Fprintf(&b, "\n  Use when: %s", item.WhenToUse)
-		}
-		if len(item.Tags) > 0 {
-			fmt.Fprintf(&b, "\n  Tags: %s", strings.Join(item.Tags, ", "))
-		}
-		if resourcesAvailable && len(item.Resources) > 0 {
-			fmt.Fprintf(&b, "\n  Resources: call `%s` with skill_name %q and the resource name or path when supporting material is needed.", skill.ResourceToolName, item.Name)
-			formatResourceRefs(&b, item.Resources, "  ")
-		}
+	}
+	if b.String() == header {
+		return ""
 	}
 	return b.String()
 }

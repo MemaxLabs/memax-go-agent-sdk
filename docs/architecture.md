@@ -302,11 +302,12 @@ skills are injected directly as named prompt parts for compatibility with small
 trusted skill sets. With `Options.SkillDisclosure` set to
 `skill.DisclosureProgressive`, the prompt contains only selected skill metadata
 and the agent receives an SDK-provided read-only `load_skill` tool. Progressive
-metadata discovery is bounded by default so large catalogs do not turn into
-prompt stuffing; hosts can override the selector budget through a custom prompt
-builder. Loading a skill returns the full instructions as a normal tool result,
-making skill use visible in events and durable session history. Skills may
-advertise lightweight supporting `skill.ResourceRef` metadata. If
+metadata discovery is bounded by default by both selected item count and prompt
+bytes so large catalogs do not turn into prompt stuffing; hosts can override the
+selector and byte budgets through a custom prompt builder. Loading a skill
+returns the full instructions as a normal tool result, making skill use visible
+in events and durable session history. Skills may advertise lightweight
+supporting `skill.ResourceRef` metadata. If
 `Options.SkillResourceSource` is configured, progressive mode also exposes
 `read_skill_resource`, which loads host-owned resource content through the tool
 layer instead of prompt-stuffing examples, checklists, templates, or schemas.
