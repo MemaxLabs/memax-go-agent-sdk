@@ -933,6 +933,82 @@ func TestQueryPlannerErrorStopsRun(t *testing.T) {
 	}
 }
 
+func TestQueryEmitsMemoryCandidatesAfterValidResult(t *testing.T) {
+	fake := &fakeModel{turns: [][]model.StreamEvent{{{Kind: model.StreamText, Text: "rollback notes added"}}}}
+	store := &countingMessageStore{inner: session.NewMemoryStore()}
+	var got memory.DistillRequest
+	events, err := Query(context.Background(), "review migration", Options{
+		Model:    fake,
+		Sessions: store,
+		Planner: planner.Static(planner.Plan{
+			Goal: "review migration",
+			Steps: []planner.Step{{
+				ID:     "task-1",
+				Title:  "check rollback",
+				Status: planner.StatusCompleted,
+			}},
+		}),
+		MemoryDistiller: memory.DistillerFunc(func(_ context.Context, req memory.DistillRequest) ([]memory.Candidate, error) {
+			got = req
+			return []memory.Candidate{{
+				Memory: memory.Memory{
+					Name:    "migration-rollback",
+					Scope:   memory.ScopeProject,
+					Content: "Migration reviews require rollback notes.",
+				},
+				Reason:     "final answer confirmed rollback notes",
+				Confidence: 0.9,
+			}}, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+	var candidates []memory.Candidate
+	var result string
+	for event := range events {
+		switch event.Kind {
+		case EventError:
+			t.Fatalf("query error: %v", event.Err)
+		case EventMemoryCandidates:
+			candidates = event.Memory.Candidates
+		case EventResult:
+			result = event.Result
+		}
+	}
+	if result != "rollback notes added" {
+		t.Fatalf("result = %q, want final result", result)
+	}
+	if len(candidates) != 1 || candidates[0].Memory.Name != "migration-rollback" {
+		t.Fatalf("candidates = %#v, want distilled memory", candidates)
+	}
+	if got.SessionID == "" || got.Result != "rollback notes added" || got.Plan.Goal != "review migration" {
+		t.Fatalf("distill request = %#v, want session, result, and plan", got)
+	}
+	if len(got.Messages) < 2 || got.Messages[len(got.Messages)-1].PlainText() != "rollback notes added" {
+		t.Fatalf("distill messages = %#v, want final assistant in transcript", got.Messages)
+	}
+	if calls := store.messageCalls(); calls != 1 {
+		t.Fatalf("session Messages calls = %d, want one load before distillation", calls)
+	}
+}
+
+func TestQueryMemoryDistillerErrorStopsRun(t *testing.T) {
+	distillErr := errors.New("distiller unavailable")
+	events, err := Query(context.Background(), "start", Options{
+		Model: &fakeModel{turns: [][]model.StreamEvent{{{Kind: model.StreamText, Text: "done"}}}},
+		MemoryDistiller: memory.DistillerFunc(func(context.Context, memory.DistillRequest) ([]memory.Candidate, error) {
+			return nil, distillErr
+		}),
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+	if _, err := Drain(events); err == nil || !strings.Contains(err.Error(), "distill memories") || !errors.Is(err, distillErr) {
+		t.Fatalf("Drain error = %v, want distiller error", err)
+	}
+}
+
 func TestMemoryQueryUsesRecentUserMessagesOnly(t *testing.T) {
 	messages := []model.Message{
 		{Role: model.RoleUser, Content: []model.ContentBlock{{Type: model.ContentText, Text: "old billing context"}}},
@@ -1256,6 +1332,33 @@ type blockingCreateStore struct {
 	started chan struct{}
 	release chan struct{}
 	once    sync.Once
+}
+
+type countingMessageStore struct {
+	inner *session.MemoryStore
+	mu    sync.Mutex
+	calls int
+}
+
+func (s *countingMessageStore) Create(ctx context.Context) (session.Session, error) {
+	return s.inner.Create(ctx)
+}
+
+func (s *countingMessageStore) Append(ctx context.Context, id string, msg model.Message) error {
+	return s.inner.Append(ctx, id, msg)
+}
+
+func (s *countingMessageStore) Messages(ctx context.Context, id string) ([]model.Message, error) {
+	s.mu.Lock()
+	s.calls++
+	s.mu.Unlock()
+	return s.inner.Messages(ctx, id)
+}
+
+func (s *countingMessageStore) messageCalls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.calls
 }
 
 func (s *blockingCreateStore) Create(ctx context.Context) (session.Session, error) {

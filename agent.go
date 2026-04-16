@@ -275,6 +275,7 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 				shouldStop = true
 				return
 			}
+			durableMessages := cloneMessages(messages)
 			if opts.Context != nil {
 				originalMessages := messages
 				originalCount := len(messages)
@@ -492,6 +493,7 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 					shouldStop = true
 					return
 				}
+				durableMessages = append(durableMessages, cloneMessage(assistant))
 			}
 			if len(uses) == 0 {
 				result := assistant.PlainText()
@@ -518,6 +520,23 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 					_ = finish(turn, hook.StopReasonError, err)
 					shouldStop = true
 					return
+				}
+				candidates, err := distillMemories(turnCtx, opts, sessionID, durableMessages, promptResult.Plan, result)
+				if err != nil {
+					err = fmt.Errorf("distill memories: %w", err)
+					turnSpan.RecordError(err)
+					emitError(turnCtx, emit, sessionID, turn, err)
+					_ = finish(turn, hook.StopReasonError, err)
+					shouldStop = true
+					return
+				}
+				if len(candidates) > 0 {
+					event := newEvent(EventMemoryCandidates, sessionID, turn)
+					event.Memory = &MemoryCandidatesEvent{Candidates: candidates}
+					if !emit(event) {
+						shouldStop = true
+						return
+					}
 				}
 				if err := finish(turn, hook.StopReasonResult, nil); err != nil {
 					turnSpan.RecordError(err)
@@ -609,6 +628,7 @@ type builtPrompt struct {
 	AppendSystemPrompt string
 	Hash               string
 	Parts              []promptpkg.Part
+	Plan               planner.Plan
 }
 
 func buildPrompt(ctx context.Context, opts Options, memories *memoryLoader, sessionID string, messages []model.Message, tools []model.ToolSpec) (builtPrompt, error) {
@@ -656,6 +676,7 @@ func buildPrompt(ctx context.Context, opts Options, memories *memoryLoader, sess
 		SystemPrompt: result.SystemPrompt,
 		Hash:         result.Hash,
 		Parts:        result.Parts,
+		Plan:         plan,
 	}, nil
 }
 
@@ -723,6 +744,66 @@ func loadPlan(ctx context.Context, opts Options, sessionID string, messages []mo
 		Messages:        messages,
 		Query:           memoryQuery(messages),
 	})
+}
+
+func distillMemories(ctx context.Context, opts Options, sessionID string, messages []model.Message, plan planner.Plan, result string) ([]memory.Candidate, error) {
+	if opts.MemoryDistiller == nil {
+		return nil, nil
+	}
+	candidates, err := opts.MemoryDistiller.Distill(ctx, memory.DistillRequest{
+		SessionID:       sessionID,
+		ParentSessionID: opts.ParentSessionID,
+		Identity:        opts.Identity,
+		Messages:        messages,
+		Plan:            plan,
+		Result:          result,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return memory.CloneCandidates(candidates), nil
+}
+
+func cloneMessages(messages []model.Message) []model.Message {
+	if len(messages) == 0 {
+		return nil
+	}
+	out := make([]model.Message, len(messages))
+	for i, message := range messages {
+		out[i] = cloneMessage(message)
+	}
+	return out
+}
+
+func cloneMessage(message model.Message) model.Message {
+	message.Content = cloneContentBlocks(message.Content)
+	if message.ToolResult != nil {
+		result := *message.ToolResult
+		if len(result.Metadata) > 0 {
+			result.Metadata = make(map[string]any, len(message.ToolResult.Metadata))
+			for key, value := range message.ToolResult.Metadata {
+				result.Metadata[key] = value
+			}
+		}
+		message.ToolResult = &result
+	}
+	return message
+}
+
+func cloneContentBlocks(blocks []model.ContentBlock) []model.ContentBlock {
+	if len(blocks) == 0 {
+		return nil
+	}
+	out := make([]model.ContentBlock, len(blocks))
+	for i, block := range blocks {
+		out[i] = block
+		if block.ToolUse != nil {
+			toolUse := *block.ToolUse
+			toolUse.Input = append([]byte(nil), block.ToolUse.Input...)
+			out[i].ToolUse = &toolUse
+		}
+	}
+	return out
 }
 
 func memoryQuery(messages []model.Message) string {

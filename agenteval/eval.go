@@ -10,6 +10,7 @@ import (
 	"time"
 
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
+	"github.com/MemaxLabs/memax-go-agent-sdk/memory"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 )
 
@@ -76,6 +77,17 @@ func (r Result) ToolResults() []model.ToolResult {
 		}
 	}
 	return results
+}
+
+// MemoryCandidates returns memory candidates emitted during the case.
+func (r Result) MemoryCandidates() []memory.Candidate {
+	var candidates []memory.Candidate
+	for _, event := range r.Events {
+		if event.Kind == memaxagent.EventMemoryCandidates && event.Memory != nil {
+			candidates = append(candidates, event.Memory.Candidates...)
+		}
+	}
+	return candidates
 }
 
 // Report is the outcome of running a set of cases.

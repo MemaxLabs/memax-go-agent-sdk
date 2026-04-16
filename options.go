@@ -26,26 +26,27 @@ const defaultMaxTurns = 50
 type Options struct {
 	Model model.Client
 
-	Tools         *tool.Registry
-	Permissions   permission.Checker
-	Sessions      session.Store
-	Hooks         *hook.Runner
-	Context       contextwindow.Policy
-	ContextRetry  contextwindow.Policy
-	ToolSelector  tool.Selector
-	Budget        budget.Governor
-	ResultStore   resultstore.Store
-	Output        output.Contract
-	Tracer        telemetry.Tracer
-	Meter         telemetry.Meter
-	PromptBuilder prompt.Builder
-	PromptProfile prompt.Profile
-	Identity      identity.Identity
-	Planner       planner.Policy
-	MemorySource  memory.Source
-	Memories      []memory.Memory
-	SkillSource   skill.Source
-	Skills        []skill.Skill
+	Tools           *tool.Registry
+	Permissions     permission.Checker
+	Sessions        session.Store
+	Hooks           *hook.Runner
+	Context         contextwindow.Policy
+	ContextRetry    contextwindow.Policy
+	ToolSelector    tool.Selector
+	Budget          budget.Governor
+	ResultStore     resultstore.Store
+	Output          output.Contract
+	Tracer          telemetry.Tracer
+	Meter           telemetry.Meter
+	PromptBuilder   prompt.Builder
+	PromptProfile   prompt.Profile
+	Identity        identity.Identity
+	Planner         planner.Policy
+	MemorySource    memory.Source
+	MemoryDistiller memory.Distiller
+	Memories        []memory.Memory
+	SkillSource     skill.Source
+	Skills          []skill.Skill
 
 	SystemPrompt       string
 	AppendSystemPrompt string
@@ -114,6 +115,9 @@ func (o Options) Merge(override Options) Options {
 	}
 	if override.MemorySource != nil {
 		o.MemorySource = override.MemorySource
+	}
+	if override.MemoryDistiller != nil {
+		o.MemoryDistiller = override.MemoryDistiller
 	}
 	if override.Memories != nil {
 		o.Memories = append([]memory.Memory(nil), override.Memories...)

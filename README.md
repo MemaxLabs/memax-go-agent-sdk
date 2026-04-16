@@ -28,6 +28,7 @@ Implemented foundation:
 - agent identity profiles, deterministic prompt assembly, and local skill manifests
 - project, user, and session memory injection through source-neutral prompt memory sources
 - opt-in memory search/save/delete tools for host-owned durable memory backends
+- final-result memory distillation candidates for host review
 - structured final-output contracts with JSON Schema validation and retry
 - provider-neutral model usage events and token telemetry
 - opt-in run budget governors for turns, model calls, tool calls, tokens, and duration
@@ -305,6 +306,27 @@ Cloud memory systems can implement `memory.Source`, `memory.Writer`, and
 hosts can expose search-only memory, save-with-approval memory, or full
 read/write/delete memory through normal tool permissions.
 
+To propose durable memories from completed work without automatically writing
+anything, configure a `memory.Distiller`. Distillation runs only after a valid
+final answer and emits `EventMemoryCandidates` before `EventResult`:
+
+```go
+events, err := memaxagent.Query(ctx, "Finish the migration review.", memaxagent.Options{
+    Model: client,
+    MemoryDistiller: memory.RuleDistiller{{
+        WhenResultContains: "rollback",
+        WhenPlanContains:   "migration",
+        Memory: memory.Memory{
+            Name:    "migration-rollback",
+            Scope:   memory.ScopeProject,
+            Content: "Migration reviews require rollback notes.",
+        },
+        Reason:     "completed review established rollback requirement",
+        Confidence: 0.9,
+    }},
+})
+```
+
 To expose bounded worker agents as a tool, import `github.com/MemaxLabs/memax-go-agent-sdk/toolkit/subagents` and register the returned tool:
 
 ```go
@@ -411,10 +433,10 @@ if err := report.Error(); err != nil {
 ```
 
 The `agenteval/scenarios` package includes reusable deterministic cases for
-tool recovery, structured output repair, memory search/save, session resume,
-context retry, subagent delegation, planner-guided tool use, planner/task-state
-updates, provider usage mapping, and provider tool-use round trips. It also
-covers governance recovery for permission
+tool recovery, structured output repair, memory search/save, memory
+distillation candidates, session resume, context retry, subagent delegation,
+planner-guided tool use, planner/task-state updates, provider usage mapping,
+and provider tool-use round trips. It also covers governance recovery for permission
 denials, hook denials, oversized tool results, budget stops, and deferred tool
 discovery:
 

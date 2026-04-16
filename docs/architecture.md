@@ -145,9 +145,9 @@ credentials. This keeps autonomy quality executable while preserving the same
 provider-neutral core loop used in production.
 `agenteval/scenarios` contains reusable baseline cases for core behaviors such
 as tool validation recovery, structured-output repair, memory search/save,
-session resume, context retry, subagent delegation, planner-guided tool use,
-planner/task-state updates, provider usage mapping, and provider tool-use round
-trips. Governance scenarios cover permission denial,
+memory distillation candidates, session resume, context retry, subagent
+delegation, planner-guided tool use, planner/task-state updates, provider usage
+mapping, and provider tool-use round trips. Governance scenarios cover permission denial,
 before-hook denial, oversized result storage, budget stops, and deferred tool
 discovery recovery.
 
@@ -251,6 +251,20 @@ memory behavior through the normal registry, permission, hook, and telemetry
 layers. This is the intended integration point for cloud memory systems such as
 Memax: implement the small memory interfaces, then register the tools and/or
 configure `Options.MemorySource`.
+
+Memory distillation is a separate post-result proposal path. Hosts can set
+`Options.MemoryDistiller` to inspect the completed transcript, final answer,
+identity, and current plan. The distiller returns `memory.Candidate` values,
+which are emitted as `EventMemoryCandidates` before `EventResult`. The SDK does
+not write those candidates automatically; hosts can review, approve, discard,
+or persist them through their own `memory.Writer` policy. This keeps learning
+observable and avoids silently polluting durable memory.
+
+Distillers receive the durable message snapshot already available to the turn,
+including the final assistant message. That avoids a second session-store read
+on successful completion, but the snapshot can still be large for long
+transcripts. Model-backed distillers should apply their own context budgeting or
+summarization before sending transcript content to another model.
 
 `skill.Source` is the source-neutral loading contract for instruction bundles.
 Built-in helpers cover static slices, function-backed sources, merged sources,

@@ -25,6 +25,7 @@ func TestOptionsMergeAppliesOverridesAndCopiesSlices(t *testing.T) {
 		Budget:             budget.Policy{MaxTurns: 1},
 		Identity:           identity.Identity{Name: "base"},
 		Planner:            planner.Static(planner.Plan{Goal: "base"}),
+		MemoryDistiller:    memory.StaticDistiller{{Memory: memory.Memory{Name: "base-distilled", Content: "base"}}},
 		Memories:           []memory.Memory{{Name: "base"}},
 		Skills:             []skill.Skill{{Name: "base"}},
 		SystemPrompt:       "base system",
@@ -41,6 +42,7 @@ func TestOptionsMergeAppliesOverridesAndCopiesSlices(t *testing.T) {
 		Budget:             budget.Policy{MaxModelCalls: 1},
 		Identity:           identity.Identity{Name: "override"},
 		Planner:            planner.Static(planner.Plan{Goal: "override"}),
+		MemoryDistiller:    memory.StaticDistiller{{Memory: memory.Memory{Name: "override-distilled", Content: "override"}}},
 		Memories:           overrideMemories,
 		Skills:             overrideSkills,
 		SystemPrompt:       "override system",
@@ -72,6 +74,13 @@ func TestOptionsMergeAppliesOverridesAndCopiesSlices(t *testing.T) {
 	}
 	if plan.Goal != "override" {
 		t.Fatalf("Plan = %#v, want override", plan)
+	}
+	candidates, err := got.MemoryDistiller.Distill(context.Background(), memory.DistillRequest{})
+	if err != nil {
+		t.Fatalf("MemoryDistiller returned error: %v", err)
+	}
+	if len(candidates) != 1 || candidates[0].Memory.Name != "override-distilled" {
+		t.Fatalf("MemoryDistiller = %#v, want override", candidates)
 	}
 	if got.Memories[0].Name != "override" {
 		t.Fatalf("Memories = %#v, want copied override", got.Memories)

@@ -30,6 +30,7 @@ func All() []agenteval.Case {
 		ToolRecovery(),
 		StructuredOutputRepair(),
 		MemorySearchAndSave(),
+		MemoryDistillationCandidates(),
 		SessionResume(),
 		ContextRetry(),
 		SubagentDelegation(),
@@ -46,6 +47,65 @@ func All() []agenteval.Case {
 		BudgetStopsBeforeToolBatch(),
 		BudgetStopsAfterTokenUsage(),
 		DeferredToolDiscoveryRecovery(),
+	}
+}
+
+// MemoryDistillationCandidates returns a single-use scenario where successful
+// completion produces host-reviewable memory candidates without writing them.
+func MemoryDistillationCandidates() agenteval.Case {
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "Rollback notes were added before merge."}},
+	)
+	store := memory.NewMemoryStore(nil)
+
+	return agenteval.Case{
+		Name:   "memory_distillation_candidates",
+		Prompt: "Finish the migration review.",
+		Options: memaxagent.Options{
+			Model: modelClient,
+			Planner: planner.Static(planner.Plan{
+				Goal: "review migration",
+				Steps: []planner.Step{{
+					ID:     "task-1",
+					Title:  "check rollback",
+					Status: planner.StatusCompleted,
+				}},
+			}),
+			MemoryDistiller: memory.RuleDistiller{{
+				WhenResultContains: "rollback",
+				WhenPlanContains:   "migration",
+				Memory: memory.Memory{
+					Name:    "migration-rollback",
+					Scope:   memory.ScopeProject,
+					Content: "Migration reviews require rollback notes.",
+				},
+				Reason:     "completed review established rollback requirement",
+				Confidence: 0.9,
+			}},
+			MemorySource: store,
+		},
+		Assertions: []agenteval.Assertion{
+			agenteval.FinalEquals("Rollback notes were added before merge."),
+			agenteval.EventKindEmitted(memaxagent.EventMemoryCandidates),
+			requestCountEquals(modelClient, 1),
+			{
+				Name: "memory candidate emitted without write",
+				Check: func(result agenteval.Result) error {
+					candidates := result.MemoryCandidates()
+					if len(candidates) != 1 || candidates[0].Memory.Name != "migration-rollback" {
+						return fmt.Errorf("candidates = %#v, want migration rollback candidate", candidates)
+					}
+					items, err := store.Memories(context.Background(), memory.Request{})
+					if err != nil {
+						return err
+					}
+					if len(items) != 0 {
+						return fmt.Errorf("stored memories = %#v, want no automatic writes", items)
+					}
+					return nil
+				},
+			},
+		},
 	}
 }
 
