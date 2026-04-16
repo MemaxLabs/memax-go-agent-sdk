@@ -22,6 +22,10 @@ const (
 )
 
 // Change is one file-level difference between a checkpoint and current state.
+// Before and After contain full file content. That is convenient for in-memory
+// tests and host-side review, but production stores over large files may choose
+// to cap content, store handles in Metadata, or expose model-facing summaries
+// through tools.
 type Change struct {
 	Path   string
 	Kind   ChangeKind
@@ -35,9 +39,10 @@ type Diff struct {
 	Changes []Change
 }
 
-// PatchOperation is one guarded file mutation. OldContent is optional; when it
-// is non-nil the current file content must match before the mutation is
-// applied. NewContent nil deletes the file.
+// PatchOperation is one guarded file mutation. Paths are workspace-relative
+// forward-slash paths regardless of host operating system. OldContent is
+// optional; when it is non-nil the current file content must match before the
+// mutation is applied. NewContent nil deletes the file.
 type PatchOperation struct {
 	Path       string
 	OldContent *string
@@ -64,9 +69,14 @@ type CheckpointOptions struct {
 	Metadata map[string]any
 }
 
-// Store is the full source-neutral workspace capability contract. Hosts can
-// expose narrower capability subsets by wrapping this store with only the tools
-// they want the model to use.
+// Store is a convenience interface for implementations that support the full
+// workspace surface. Hosts that expose narrower capability subsets do not need
+// to implement Store; toolkit/workspacetools constructors accept smaller
+// Reader, Lister, Patcher, Differ, Checkpointer, and Restorer interfaces.
+//
+// All paths use workspace-relative forward-slash syntax, not host OS path
+// syntax. Implementations backed by OS filesystems should translate and contain
+// paths at the adapter boundary.
 type Store interface {
 	ReadFile(context.Context, string) (string, error)
 	WriteFile(context.Context, string, string) error

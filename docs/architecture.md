@@ -137,7 +137,13 @@ implementation is for tests and examples; production embedders can implement
 the same interface over git worktrees, databases, object snapshots, or remote
 sandboxes. The core agent loop does not import `workspace`; hosts expose
 workspace capabilities only by registering tools such as
-`toolkit/workspacetools`.
+`toolkit/workspacetools`. `workspace.Store` is the convenience full-surface
+interface; individual workspace tools accept smaller capability interfaces so
+hosts can expose read/list, patch, diff, checkpoint, or restore independently.
+Workspace paths use forward-slash, workspace-relative syntax at the SDK
+boundary. `workspace.Change` carries full before/after content for precise
+host-side review; large production backends should cap content, return handles,
+or provide summarized model-facing diffs when appropriate.
 
 The optional `toolkit/checkpointtools` package provides `create_checkpoint`, `list_checkpoints`, `restore_checkpoint`, and `delete_checkpoint` over the `checkpoint.Manager` interface. The SDK's in-memory manager stores checkpoint metadata and is useful for tests; production managers should connect these operations to a virtual workspace, filesystem snapshot service, database branch, or remote sandbox. Checkpoints are not stored inside session transcripts, but checkpoint records carry session and parent-session IDs for correlation.
 

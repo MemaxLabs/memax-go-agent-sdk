@@ -50,7 +50,9 @@ type Restorer interface {
 	Restore(context.Context, string) (workspace.Checkpoint, error)
 }
 
-// NewTools returns the standard workspace tool set over store.
+// NewTools returns the standard workspace tool set over store. Use the
+// individual constructors when a host wants to expose only a subset of
+// workspace capabilities, such as read/list without patch or restore.
 func NewTools(store workspace.Store) ([]tool.Tool, error) {
 	if store == nil {
 		return nil, fmt.Errorf("workspacetools: store is required")
