@@ -531,22 +531,40 @@ func approvalSummaryFromPatch(input patchInput) (approvaltools.Summary, error) {
 func pathsFromUnifiedDiff(diff string) []string {
 	var paths []string
 	seen := map[string]struct{}{}
+	var oldPath string
 	for _, line := range strings.Split(diff, "\n") {
-		if !strings.HasPrefix(line, "+++ ") {
+		switch {
+		case strings.HasPrefix(line, "--- "):
+			oldPath = cleanDiffPath(strings.TrimSpace(strings.TrimPrefix(line, "--- ")), "a/")
+		case strings.HasPrefix(line, "+++ "):
+			newPath := cleanDiffPath(strings.TrimSpace(strings.TrimPrefix(line, "+++ ")), "b/")
+			path := newPath
+			if path == "" {
+				path = oldPath
+			}
+			if path == "" {
+				oldPath = ""
+				continue
+			}
+			if _, ok := seen[path]; ok {
+				oldPath = ""
+				continue
+			}
+			seen[path] = struct{}{}
+			paths = append(paths, path)
+			oldPath = ""
+		default:
 			continue
 		}
-		path := strings.TrimSpace(strings.TrimPrefix(line, "+++ "))
-		if path == "" || path == "/dev/null" {
-			continue
-		}
-		path = strings.TrimPrefix(path, "b/")
-		if _, ok := seen[path]; ok {
-			continue
-		}
-		seen[path] = struct{}{}
-		paths = append(paths, path)
 	}
 	return paths
+}
+
+func cleanDiffPath(path, prefix string) string {
+	if path == "" || path == "/dev/null" {
+		return ""
+	}
+	return strings.TrimPrefix(path, prefix)
 }
 
 func maxInt(a, b int) int {

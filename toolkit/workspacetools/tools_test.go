@@ -263,6 +263,14 @@ func TestApprovalSummaryFromPatchInput(t *testing.T) {
 	if diffSummary.Changes != 1 || !sameStringSlice(diffSummary.Paths, []string{"README.md"}) {
 		t.Fatalf("diff summary = %#v, want README path", diffSummary)
 	}
+
+	deleteSummary, err := ApprovalSummaryFromPatchInput([]byte(`{"unified_diff":"--- a/docs/old.md\n+++ /dev/null\n@@ -1 +0,0 @@\n-old"}`))
+	if err != nil {
+		t.Fatalf("ApprovalSummaryFromPatchInput delete diff returned error: %v", err)
+	}
+	if deleteSummary.Changes != 1 || !sameStringSlice(deleteSummary.Paths, []string{"docs/old.md"}) {
+		t.Fatalf("delete diff summary = %#v, want deleted path", deleteSummary)
+	}
 }
 
 func sameStringSlice(a, b []string) bool {
