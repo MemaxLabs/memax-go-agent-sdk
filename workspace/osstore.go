@@ -70,6 +70,10 @@ func WithOSStoreModes(dirMode fs.FileMode, fileMode fs.FileMode) OSStoreOption {
 // NewOSStore returns a root-confined workspace store backed by a host
 // directory. The root must already exist when symlink containment is enabled.
 func NewOSStore(root string, opts ...OSStoreOption) (*OSStore, error) {
+	return newOSStore(root, true, opts...)
+}
+
+func newOSStore(root string, withInitialCheckpoint bool, opts ...OSStoreOption) (*OSStore, error) {
 	root = strings.TrimSpace(root)
 	if root == "" {
 		return nil, fmt.Errorf("workspace: OSStore root is required")
@@ -97,6 +101,9 @@ func NewOSStore(root string, opts ...OSStoreOption) (*OSStore, error) {
 			return nil, fmt.Errorf("workspace: resolve OSStore root symlinks: %w", err)
 		}
 		store.root = filepath.Clean(resolved)
+	}
+	if !withInitialCheckpoint {
+		return store, nil
 	}
 	files, err := store.readAllFiles(context.Background())
 	if err != nil {

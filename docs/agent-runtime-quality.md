@@ -214,8 +214,9 @@ use blocks arrive while keeping mutating tools serialized.
 
 **Current state:** file tools, source-neutral workspace contracts, workspace
 tools, in-memory workspace state, root-confined OS-backed workspace state,
-guarded structured patches, unified diffs, dry-run previews, patch review,
-diffs, checkpoints, restore, host-owned verification tools, host-owned command
+an initial git-backed checkpoint adapter for real repositories, guarded
+structured patches, unified diffs, dry-run previews, patch review, diffs,
+checkpoints, restore, host-owned verification tools, host-owned command
 execution tools, initial managed command-session tools over host-owned session
 interfaces, lifecycle events, model-visible rollback guidance after failed
 verification, and eval coverage exist as optional packages.
@@ -230,7 +231,10 @@ patches, snapshots, restore, reviewable mutations, and sandbox boundaries.
   guarded structured operations, unified diff application, dry-run previews,
   actionable conflict diagnostics, compact patch summaries, and optional
   host review before mutation.
-- Checkpoints can snapshot and restore host-owned workspace state.
+- Checkpoints can snapshot and restore host-owned workspace state. Initial
+  git-backed checkpoint persistence now exists for real repositories through
+  `workspace.GitStore`, while keeping git isolated to the adapter layer and
+  preserving the same best-effort filesystem semantics as `workspace.OSStore`.
 - Root-confined OS adapters contain symlinks by default while keeping the core
   workspace contract source-neutral.
 - Verification is an explicit host-owned tool capability, not hidden shell

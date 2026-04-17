@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -1046,6 +1047,126 @@ func WorkspaceOSStorePatchRollback() agenteval.Case {
 					}
 					if string(content) != "version one" {
 						return fmt.Errorf("README.md = %q, want restored version one", content)
+					}
+					return nil
+				},
+			},
+		},
+	}
+}
+
+// WorkspaceGitStorePatchRollback returns a single-use scenario that exercises
+// the standard workspace tools against a git-backed workspace adapter.
+func WorkspaceGitStorePatchRollback() agenteval.Case {
+	root, setupErr := os.MkdirTemp("", "memax-workspace-git-*")
+	if setupErr == nil {
+		setupErr = os.WriteFile(filepath.Join(root, "README.md"), []byte("version one"), 0o644)
+	}
+	if setupErr == nil {
+		if _, err := exec.LookPath("git"); err != nil {
+			setupErr = fmt.Errorf("git not available: %w", err)
+		}
+	}
+	if setupErr == nil {
+		cmd := exec.Command("git", "-C", root, "init")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			setupErr = fmt.Errorf("git init: %v: %s", err, strings.TrimSpace(string(out)))
+		}
+	}
+	var store *workspace.GitStore
+	if setupErr == nil {
+		store, setupErr = workspace.NewGitStore(root)
+	}
+	var tools []tool.Tool
+	var toolsErr error
+	if setupErr == nil {
+		tools, toolsErr = workspacetools.NewTools(store)
+	}
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "checkpoint-1",
+				Name:  workspacetools.CheckpointToolName,
+				Input: json.RawMessage(`{"label":"before git patch"}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "patch-1",
+				Name: workspacetools.ApplyPatchToolName,
+				Input: json.RawMessage(`{"operations":[
+					{"path":"README.md","old_content":"version one","new_content":"version two"}
+				]}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "diff-1",
+				Name:  workspacetools.DiffToolName,
+				Input: json.RawMessage(`{"base_id":"checkpoint-1"}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "restore-1",
+				Name:  workspacetools.RestoreToolName,
+				Input: json.RawMessage(`{"id":"checkpoint-1"}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "read-1",
+				Name:  workspacetools.ReadToolName,
+				Input: json.RawMessage(`{"path":"README.md"}`),
+			},
+		}},
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "Git-backed workspace restored."}},
+	)
+
+	return agenteval.Case{
+		Name:   "workspace_git_store_patch_rollback",
+		Prompt: "Patch README.md in the git-backed workspace, inspect the diff, then restore the checkpoint.",
+		Options: memaxagent.Options{
+			Model: modelClient,
+			Tools: tool.NewRegistry(tools...),
+		},
+		Cleanup: func() {
+			if root != "" {
+				_ = os.RemoveAll(root)
+			}
+		},
+		Assertions: []agenteval.Assertion{
+			setupSucceeded(setupErr),
+			toolConstructionSucceeded(toolsErr),
+			agenteval.ToolUsed(workspacetools.CheckpointToolName),
+			agenteval.ToolUsed(workspacetools.ApplyPatchToolName),
+			agenteval.ToolUsed(workspacetools.DiffToolName),
+			agenteval.ToolUsed(workspacetools.RestoreToolName),
+			agenteval.ToolUsed(workspacetools.ReadToolName),
+			agenteval.NoToolErrors(),
+			agenteval.FinalEquals("Git-backed workspace restored."),
+			requestCountEquals(modelClient, 6),
+			{
+				Name: "git-backed content restored",
+				Check: func(result agenteval.Result) error {
+					content, err := os.ReadFile(filepath.Join(root, "README.md"))
+					if err != nil {
+						return err
+					}
+					if string(content) != "version one" {
+						return fmt.Errorf("README.md = %q, want restored version one", content)
+					}
+					checkpoints, err := store.ListCheckpoints(context.Background())
+					if err != nil {
+						return err
+					}
+					if len(checkpoints) < 2 || checkpoints[1].ID != "checkpoint-1" || checkpoints[1].Label != "before git patch" {
+						return fmt.Errorf("checkpoints = %#v, want persisted git checkpoint", checkpoints)
 					}
 					return nil
 				},

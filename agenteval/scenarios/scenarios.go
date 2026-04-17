@@ -50,6 +50,7 @@ func All() []agenteval.Case {
 		WorkspaceUnifiedDiffRecovery(),
 		WorkspacePatchReviewDenialRecovery(),
 		WorkspaceOSStorePatchRollback(),
+		WorkspaceGitStorePatchRollback(),
 		WorkspaceCheckpointPolicyRecovery(),
 		WorkspaceRollbackPolicyRecovery(),
 		WorkspaceVerifyBeforeFinalPolicyRecovery(),
