@@ -206,7 +206,9 @@ resolution, bounded buffered output with drop accounting, interactive stdin
 writes with optional short post-write waits, optional PTY-backed terminal
 sessions for shells and REPLs, explicit terminal geometry at start and resize
 time, natural-exit and stop tracking, and session-scoped cleanup over local
-`os/exec` processes.
+`os/exec` processes. Unix PTY sessions use native pseudo terminals; Windows
+TTY sessions use ConPTY when the operating system exposes the required console
+APIs.
 `OSSessionManager` is not a sandbox and does not constrain filesystem, network,
 or process access beyond cwd resolution; hosts that need stronger isolation
 must wrap or replace it. Graceful stop is best-effort and platform dependent:

@@ -113,6 +113,8 @@ the session is PTY-backed, terminal cols/rows, next output sequence, stdin byte
 count, returned chunk count, and dropped buffer accounting. Command
 stdout/stderr remain in the paired `EventToolResult`, preserving the normal
 transcript-visible tool contract while giving hosts structured process status.
+Terminal geometry metadata is emitted only for PTY-backed sessions; non-TTY
+command sessions omit cols/rows.
 
 Approval events are metadata-derived from `request_approval` results and from
 policy metadata attached to later tool results. Request events expose the action,

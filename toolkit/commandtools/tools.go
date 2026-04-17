@@ -603,6 +603,9 @@ func (r *OSRunner) resolveCWD(cwd string) (string, error) {
 
 func (r *OSRunner) env(overrides map[string]string) []string {
 	env := append([]string(nil), r.baseEnv...)
+	if !r.inheritEnv && env == nil {
+		env = []string{}
+	}
 	if r.inheritEnv {
 		env = append(env, os.Environ()...)
 	}

@@ -12,8 +12,8 @@ func TestScenariosPass(t *testing.T) {
 	if err := report.Error(); err != nil {
 		t.Fatalf("scenario report error = %v", err)
 	}
-	if !report.Passed() || len(report.Results) != 53 {
-		t.Fatalf("report = %#v, want fifty-three passing scenarios", report)
+	if !report.Passed() || len(report.Results) != 54 {
+		t.Fatalf("report = %#v, want fifty-four passing scenarios", report)
 	}
 }
 
@@ -52,6 +52,7 @@ func TestScenarioNamesAreStable(t *testing.T) {
 		"workspace_approval_denied_fallback",
 		"planner_verification_guides_repair",
 		"planner_task_progress_from_verification",
+		"planner_workspace_command_repair_loop",
 		"workspace_verification_repair",
 		"workspace_verification_rollback",
 		"command_test_repair_loop",

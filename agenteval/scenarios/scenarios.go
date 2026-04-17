@@ -57,6 +57,7 @@ func All() []agenteval.Case {
 		WorkspaceApprovalDeniedFallback(),
 		PlannerVerificationGuidesRepair(),
 		PlannerTaskProgressFromVerification(),
+		PlannerWorkspaceCommandRepairLoop(),
 		WorkspaceVerificationRepair(),
 		WorkspaceVerificationRollback(),
 		CommandTestRepairLoop(),

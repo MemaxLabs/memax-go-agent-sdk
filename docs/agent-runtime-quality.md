@@ -375,9 +375,13 @@ mapping.
 
 ### 8. Eval Suite Upgrade
 
-**Current state:** deterministic eval harness and baseline scenarios exist.
+**Current state:** deterministic eval harness and baseline scenarios exist,
+including an initial composed coding-loop scenario that ties planner context,
+workspace mutation, managed command-session output, verification, and
+finalization gating into one deterministic run.
 
-**Gap:** Most evals test feature plumbing, not long-horizon intelligence.
+**Gap:** Most evals still test feature plumbing; composed long-horizon
+intelligence coverage is only starting to land.
 
 **Target behavior:**
 
@@ -400,14 +404,15 @@ mapping.
 
 1. Add workspace adapters for git-backed and remote sandbox execution, reusing
    the same source-neutral `workspace` contracts.
-2. Add workspace-oriented planner verification scenarios: patch, test/verify,
-   repair, and checkpoint rollback.
+2. Add more workspace-oriented planner verification scenarios: patch,
+   test/verify, repair, and checkpoint rollback across multiple files and
+   longer horizons.
 3. Add memory lifecycle proposals for update/delete/merge, not only new memory
    candidates.
 4. Add provider-fidelity fixtures for error payloads, cancellation, and
    provider-specific tool edge cases.
-5. Add long-horizon eval scenarios that compose planner, workspace, skills,
-   memory, budgets, and context compaction in one deterministic run.
+5. Add more long-horizon eval scenarios that compose planner, workspace,
+   skills, memory, budgets, and context compaction in one deterministic run.
 
 ## Definition Of Done For New Intelligence Features
 

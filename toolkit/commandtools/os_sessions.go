@@ -20,11 +20,97 @@ const (
 	defaultSessionMaxBufferedBytes  = 256 * 1024
 	defaultSessionMaxBufferedChunks = 256
 	defaultSessionReadChunkBytes    = 4 * 1024
+	// Adapter-generated diagnostics are emitted on stderr so callers can treat
+	// them consistently with other non-stdout command output, even for PTY
+	// sessions whose process output uses the synthetic "pty" stream label.
+	commandToolsErrorStream = "stderr"
 	// After a write produces output, allow a short extra window for cmd.Wait to
 	// observe a nearly-immediate process exit so write_command_input can return a
 	// stable exited session instead of racing the final state handoff.
 	postWriteSettleWindow = 100 * time.Millisecond
 )
+
+type sessionWaitResult struct {
+	exitCode int
+	err      error
+}
+
+type commandProcess interface {
+	PID() int
+	Interrupt() error
+	Kill() error
+	Wait() sessionWaitResult
+	Close() error
+}
+
+type terminalHandle interface {
+	io.ReadWriteCloser
+	Resize(cols, rows int) error
+}
+
+type terminalDrainCloser interface {
+	CloseForDrain() error
+}
+
+type sessionRuntime struct {
+	process  commandProcess
+	stdin    io.WriteCloser
+	readers  []osSessionReader
+	terminal terminalHandle
+}
+
+func (r sessionRuntime) inputWriter() io.WriteCloser {
+	if r.stdin != nil {
+		return r.stdin
+	}
+	return r.terminal
+}
+
+type execCommandProcess struct {
+	cmd *exec.Cmd
+}
+
+func newExecCommandProcess(cmd *exec.Cmd) commandProcess {
+	if cmd == nil {
+		return nil
+	}
+	return &execCommandProcess{cmd: cmd}
+}
+
+func (p *execCommandProcess) PID() int {
+	if p == nil || p.cmd == nil || p.cmd.Process == nil {
+		return 0
+	}
+	return p.cmd.Process.Pid
+}
+
+func (p *execCommandProcess) Interrupt() error {
+	if p == nil || p.cmd == nil || p.cmd.Process == nil {
+		return os.ErrProcessDone
+	}
+	return p.cmd.Process.Signal(os.Interrupt)
+}
+
+func (p *execCommandProcess) Kill() error {
+	if p == nil || p.cmd == nil || p.cmd.Process == nil {
+		return os.ErrProcessDone
+	}
+	return p.cmd.Process.Kill()
+}
+
+func (p *execCommandProcess) Wait() sessionWaitResult {
+	if p == nil || p.cmd == nil {
+		return sessionWaitResult{exitCode: -1, err: os.ErrProcessDone}
+	}
+	err := p.cmd.Wait()
+	code := exitCode(err)
+	if p.cmd.ProcessState != nil {
+		code = p.cmd.ProcessState.ExitCode()
+	}
+	return sessionWaitResult{exitCode: code, err: err}
+}
+
+func (p *execCommandProcess) Close() error { return nil }
 
 // OSSessionManager runs managed command sessions on the local operating
 // system. Like OSRunner, it is a reference adapter for hosts that explicitly
@@ -166,16 +252,12 @@ func (m *OSSessionManager) StartCommand(ctx context.Context, req StartRequest) (
 	if m.maxTimeout > 0 && timeout > m.maxTimeout {
 		return CommandSession{}, fmt.Errorf("commandtools: timeout %s exceeds maximum %s", timeout, m.maxTimeout)
 	}
-	if req.TTY {
-		if req.Cols <= 0 {
-			req.Cols = defaultTTYCols
-		}
-		if req.Rows <= 0 {
-			req.Rows = defaultTTYRows
-		}
-	} else if req.Cols > 0 || req.Rows > 0 {
-		return CommandSession{}, fmt.Errorf("commandtools: cols and rows require tty=true")
+	cols, rows, err := normalizeStartTTYDimensions(req.TTY, req.Cols, req.Rows)
+	if err != nil {
+		return CommandSession{}, err
 	}
+	req.Cols = cols
+	req.Rows = rows
 	cwd, err := m.runner.resolveCWD(req.CWD)
 	if err != nil {
 		return CommandSession{}, err
@@ -183,17 +265,20 @@ func (m *OSSessionManager) StartCommand(ctx context.Context, req StartRequest) (
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = cwd
 	cmd.Env = m.runner.env(req.Env)
-	stdin, readers, ttyFile, err := startSessionIO(cmd, req)
+	runtime, err := startSessionIO(cmd, req)
 	if err != nil {
 		return CommandSession{}, err
+	}
+	if runtime.process == nil {
+		return CommandSession{}, fmt.Errorf("commandtools: start command: missing process handle")
 	}
 
 	now := time.Now().UTC()
 	state := &osSessionState{
-		manager: m,
-		cmd:     cmd,
-		stdin:   stdin,
-		ttyFile: ttyFile,
+		manager:  m,
+		process:  runtime.process,
+		stdin:    runtime.stdin,
+		terminal: runtime.terminal,
 		session: CommandSession{
 			SessionID:       req.SessionID,
 			ParentSessionID: req.ParentSessionID,
@@ -202,7 +287,7 @@ func (m *OSSessionManager) StartCommand(ctx context.Context, req StartRequest) (
 			CWD:             cwd,
 			Purpose:         strings.TrimSpace(req.Purpose),
 			Status:          SessionRunning,
-			PID:             cmd.Process.Pid,
+			PID:             runtime.process.PID(),
 			TTY:             req.TTY,
 			Cols:            req.Cols,
 			Rows:            req.Rows,
@@ -221,8 +306,7 @@ func (m *OSSessionManager) StartCommand(ctx context.Context, req StartRequest) (
 	if id != "" {
 		if _, exists := m.sessions[id]; exists {
 			m.mu.Unlock()
-			_ = cmd.Process.Kill()
-			_, _ = cmd.Process.Wait()
+			cleanupFailedSessionRuntime(runtime)
 			return CommandSession{}, fmt.Errorf("commandtools: command session %s already exists", id)
 		}
 	} else {
@@ -239,25 +323,29 @@ func (m *OSSessionManager) StartCommand(ctx context.Context, req StartRequest) (
 	m.mu.Unlock()
 
 	if req.Stdin != "" {
-		if _, err := io.WriteString(stdin, req.Stdin); err != nil {
-			_ = cmd.Process.Kill()
-			_, _ = cmd.Process.Wait()
+		input := runtime.inputWriter()
+		if input == nil {
+			m.mu.Lock()
+			delete(m.sessions, state.session.ID)
+			m.mu.Unlock()
+			cleanupFailedSessionRuntime(runtime)
+			return CommandSession{}, fmt.Errorf("commandtools: command session %s stdin is closed", state.session.ID)
+		}
+		if _, err := io.WriteString(input, req.Stdin); err != nil {
+			m.mu.Lock()
+			delete(m.sessions, state.session.ID)
+			m.mu.Unlock()
+			cleanupFailedSessionRuntime(runtime)
 			return CommandSession{}, fmt.Errorf("commandtools: write initial stdin: %w", err)
 		}
 	}
 
-	doneChans := make([]chan struct{}, len(readers))
-	for i, reader := range readers {
+	doneChans := make([]chan struct{}, len(runtime.readers))
+	for i, reader := range runtime.readers {
 		doneChans[i] = make(chan struct{})
 		go state.captureStream(reader.stream, reader.reader, reader.closer, doneChans[i])
 	}
-	go func() {
-		waitErr := cmd.Wait()
-		for _, done := range doneChans {
-			<-done
-		}
-		state.finish(waitErr)
-	}()
+	go state.waitAndFinish(doneChans)
 
 	return state.snapshot(), nil
 }
@@ -303,8 +391,8 @@ func (m *OSSessionManager) ResizeCommandTerminal(ctx context.Context, req Resize
 	if m == nil {
 		return CommandSession{}, fmt.Errorf("commandtools: nil OSSessionManager")
 	}
-	if req.Cols <= 0 || req.Rows <= 0 {
-		return CommandSession{}, fmt.Errorf("commandtools: cols and rows must be positive")
+	if err := validateTTYDimensions(req.Cols, req.Rows); err != nil {
+		return CommandSession{}, err
 	}
 	state, err := m.lookupSession(req.SessionID, req.ID)
 	if err != nil {
@@ -408,49 +496,76 @@ func (m *OSSessionManager) lookupSession(sessionID, id string) (*osSessionState,
 	return state, nil
 }
 
-func startSessionIO(cmd *exec.Cmd, req StartRequest) (io.WriteCloser, []osSessionReader, *os.File, error) {
+func cleanupFailedSessionRuntime(runtime sessionRuntime) {
+	if runtime.process != nil {
+		_ = runtime.process.Kill()
+		runtime.process.Wait()
+		_ = runtime.process.Close()
+	}
+	if runtime.stdin != nil {
+		_ = runtime.stdin.Close()
+	}
+	if runtime.terminal != nil {
+		_ = runtime.terminal.Close()
+	}
+}
+
+func startSessionIO(cmd *exec.Cmd, req StartRequest) (sessionRuntime, error) {
 	if req.TTY {
-		file, err := startPTYCommand(cmd, req.Cols, req.Rows)
+		terminal, process, err := startPTYCommand(cmd, req.Cols, req.Rows)
 		if err != nil {
-			return nil, nil, nil, err
+			return sessionRuntime{}, err
 		}
-		return file, []osSessionReader{{
-			stream: "pty",
-			reader: file,
-		}}, file, nil
+		return sessionRuntime{
+			process:  process,
+			terminal: terminal,
+			readers: []osSessionReader{{
+				stream: "pty",
+				reader: terminal,
+			}},
+		}, nil
 	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("commandtools: stdin pipe: %w", err)
+		return sessionRuntime{}, fmt.Errorf("commandtools: stdin pipe: %w", err)
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		_ = stdin.Close()
-		return nil, nil, nil, fmt.Errorf("commandtools: stdout pipe: %w", err)
+		return sessionRuntime{}, fmt.Errorf("commandtools: stdout pipe: %w", err)
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		_ = stdin.Close()
-		return nil, nil, nil, fmt.Errorf("commandtools: stderr pipe: %w", err)
+		return sessionRuntime{}, fmt.Errorf("commandtools: stderr pipe: %w", err)
 	}
 	if err := cmd.Start(); err != nil {
 		_ = stdin.Close()
 		_ = stdout.Close()
 		_ = stderr.Close()
-		return nil, nil, nil, fmt.Errorf("commandtools: start command: %w", err)
+		return sessionRuntime{}, fmt.Errorf("commandtools: start command: %w", err)
 	}
-	return stdin, []osSessionReader{
-		{stream: "stdout", reader: stdout, closer: stdout},
-		{stream: "stderr", reader: stderr, closer: stderr},
-	}, nil, nil
+	return sessionRuntime{
+		process: newExecCommandProcess(cmd),
+		stdin:   stdin,
+		readers: []osSessionReader{
+			{stream: "stdout", reader: stdout, closer: stdout},
+			{stream: "stderr", reader: stderr, closer: stderr},
+		},
+	}, nil
 }
 
 type osSessionState struct {
-	manager       *OSSessionManager
-	mu            sync.RWMutex
-	cmd           *exec.Cmd
-	stdin         io.WriteCloser
-	ttyFile       *os.File
+	manager  *OSSessionManager
+	mu       sync.RWMutex
+	process  commandProcess
+	stdin    io.WriteCloser
+	terminal terminalHandle
+	// draining becomes true once a PTY-backed session has closed its terminal to
+	// let blocked readers observe EOF after process exit. It stays true for the
+	// rest of the session so post-drain writes and resizes consistently report
+	// "not running" rather than transiently surfacing closed-descriptor errors.
+	draining      bool
 	session       CommandSession
 	output        []OutputChunk
 	bufferBytes   int
@@ -460,7 +575,9 @@ type osSessionState struct {
 	updates       chan struct{}
 	timer         *time.Timer
 	finishOnce    sync.Once
-	stdinMu       sync.Mutex
+	// stdinMu protects stdin/terminal and must be acquired before any work that
+	// touches the live PTY descriptor.
+	stdinMu sync.Mutex
 }
 
 type osSessionReader struct {
@@ -519,12 +636,18 @@ func (s *osSessionState) writeInput(ctx context.Context, req WriteRequest) (Writ
 	afterSeq := maxInt(0, session.NextSeq-1)
 	if req.Input != "" {
 		s.stdinMu.Lock()
-		stdin := s.stdin
-		if stdin == nil {
+		input := s.stdin
+		if input == nil {
+			input = s.terminal
+		}
+		if input == nil {
 			s.stdinMu.Unlock()
+			if s.isDraining() {
+				return WriteResult{}, fmt.Errorf("commandtools: command session %s is not running", session.ID)
+			}
 			return WriteResult{}, fmt.Errorf("commandtools: command session %s stdin is closed", session.ID)
 		}
-		_, err := io.WriteString(stdin, req.Input)
+		_, err := io.WriteString(input, req.Input)
 		s.stdinMu.Unlock()
 		if err != nil {
 			return WriteResult{}, fmt.Errorf("commandtools: write input to command session %s: %w", session.ID, err)
@@ -543,6 +666,8 @@ func (s *osSessionState) writeInput(ctx context.Context, req WriteRequest) (Writ
 }
 
 func (s *osSessionState) resizeTerminal(ctx context.Context, req ResizeRequest) (CommandSession, error) {
+	s.stdinMu.Lock()
+	defer s.stdinMu.Unlock()
 	session := s.snapshot()
 	if !session.TTY {
 		return CommandSession{}, fmt.Errorf("commandtools: command session %s is not PTY-backed", session.ID)
@@ -550,13 +675,14 @@ func (s *osSessionState) resizeTerminal(ctx context.Context, req ResizeRequest) 
 	if session.Status != SessionRunning {
 		return CommandSession{}, fmt.Errorf("commandtools: command session %s is not running", session.ID)
 	}
-	s.stdinMu.Lock()
-	file := s.ttyFile
-	s.stdinMu.Unlock()
-	if file == nil {
+	terminal := s.terminal
+	if terminal == nil {
+		if s.isDraining() {
+			return CommandSession{}, fmt.Errorf("commandtools: command session %s is not running", session.ID)
+		}
 		return CommandSession{}, fmt.Errorf("commandtools: command session %s terminal is closed", session.ID)
 	}
-	if err := resizePTY(file, req.Cols, req.Rows); err != nil {
+	if err := terminal.Resize(req.Cols, req.Rows); err != nil {
 		return CommandSession{}, fmt.Errorf("commandtools: resize command session %s: %w", session.ID, err)
 	}
 	s.mu.Lock()
@@ -638,6 +764,12 @@ func (s *osSessionState) isRunning() bool {
 	return s.session.Status == SessionRunning
 }
 
+func (s *osSessionState) isDraining() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.draining
+}
+
 func (s *osSessionState) stop(ctx context.Context, force bool) (CommandSession, error) {
 	session := s.snapshot()
 	if session.Status != SessionRunning {
@@ -648,7 +780,7 @@ func (s *osSessionState) stop(ctx context.Context, force bool) (CommandSession, 
 		s.timer.Stop()
 	}
 	s.stopRequested = true
-	process := s.cmd.Process
+	process := s.process
 	done := s.done
 	s.mu.Unlock()
 	if process == nil {
@@ -666,7 +798,7 @@ func (s *osSessionState) stop(ctx context.Context, force bool) (CommandSession, 
 	} else {
 		// Wait in two phases: first for graceful interrupt completion, then again
 		// after a forced kill so cmd.Wait and the capture goroutines can drain.
-		err := process.Signal(os.Interrupt)
+		err := process.Interrupt()
 		if err != nil && !errors.Is(err, os.ErrProcessDone) {
 			if err := process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
 				return CommandSession{}, fmt.Errorf("commandtools: stop command session %s: %w", session.ID, err)
@@ -701,13 +833,13 @@ func (s *osSessionState) timeout() {
 		return
 	}
 	s.timedOut = true
-	process := s.cmd.Process
+	process := s.process
 	done := s.done
 	s.mu.Unlock()
 	if process == nil {
 		return
 	}
-	_ = process.Signal(os.Interrupt)
+	_ = process.Interrupt()
 	timer := time.NewTimer(s.manager.stopGrace)
 	defer timer.Stop()
 	select {
@@ -716,6 +848,40 @@ func (s *osSessionState) timeout() {
 	case <-timer.C:
 	}
 	_ = process.Kill()
+}
+
+func (s *osSessionState) waitAndFinish(doneChans []chan struct{}) {
+	waitResult := sessionWaitResult{exitCode: -1, err: os.ErrProcessDone}
+	if s.process != nil {
+		waitResult = s.process.Wait()
+	}
+	// ConPTY keeps the output pipe readable until the pseudo console itself is
+	// closed. CloseForDrain is a PTY-specific hook that lets those readers
+	// observe EOF after process exit without changing Unix PTY behavior.
+	if err := s.closeTerminalForDrain(); err != nil {
+		s.appendOutput(commandToolsErrorStream, fmt.Sprintf("[commandtools] close terminal for drain error: %v\n", err))
+	}
+	for _, done := range doneChans {
+		<-done
+	}
+	s.finish(waitResult)
+}
+
+func (s *osSessionState) closeTerminalForDrain() error {
+	s.stdinMu.Lock()
+	defer s.stdinMu.Unlock()
+	closer, ok := s.terminal.(terminalDrainCloser)
+	if !ok || closer == nil {
+		return nil
+	}
+	// Publish terminal=nil before finish flips the session status so blocked PTY
+	// readers can observe EOF and complete the drain phase.
+	err := closer.CloseForDrain()
+	s.terminal = nil
+	s.mu.Lock()
+	s.draining = true
+	s.mu.Unlock()
+	return err
 }
 
 func (s *osSessionState) captureStream(stream string, reader io.Reader, closer io.Closer, done chan<- struct{}) {
@@ -733,7 +899,7 @@ func (s *osSessionState) captureStream(stream string, reader io.Reader, closer i
 			if errors.Is(err, io.EOF) || (stream == "pty" && isPTYEOFError(err)) {
 				return
 			}
-			s.appendOutput("stderr", fmt.Sprintf("[commandtools] read %s error: %v\n", stream, err))
+			s.appendOutput(commandToolsErrorStream, fmt.Sprintf("[commandtools] read %s error: %v\n", stream, err))
 			return
 		}
 	}
@@ -765,7 +931,7 @@ func (s *osSessionState) appendOutput(stream, text string) {
 	s.signalUpdate()
 }
 
-func (s *osSessionState) finish(waitErr error) {
+func (s *osSessionState) finish(result sessionWaitResult) {
 	s.finishOnce.Do(func() {
 		s.mu.Lock()
 		if s.timer != nil {
@@ -778,7 +944,7 @@ func (s *osSessionState) finish(waitErr error) {
 		}
 		s.session.Status = status
 		s.session.FinishedAt = &now
-		exit := exitCode(waitErr)
+		exit := result.exitCode
 		s.session.ExitCode = &exit
 		s.session.TimedOut = s.timedOut
 		s.mu.Unlock()
@@ -787,8 +953,14 @@ func (s *osSessionState) finish(waitErr error) {
 			_ = s.stdin.Close()
 			s.stdin = nil
 		}
-		s.ttyFile = nil
+		if s.terminal != nil {
+			_ = s.terminal.Close()
+			s.terminal = nil
+		}
 		s.stdinMu.Unlock()
+		if s.process != nil {
+			_ = s.process.Close()
+		}
 		s.signalUpdate()
 		close(s.done)
 	})

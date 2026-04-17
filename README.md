@@ -274,9 +274,11 @@ initial geometry, and `resize_command_terminal` updates it later for shells,
 REPLs, pagers, and TUIs that care about terminal width and height. Like
 `OSRunner`, it is not a
 sandbox and does not filter executables, arguments, or system access.
-Graceful stop is best-effort and platform dependent; on Unix it attempts an
-interrupt before forcing termination, while some Windows processes fall back to
-forced termination immediately.
+On Unix the PTY path uses native pseudo terminals; on Windows it uses ConPTY
+when the host OS exposes the required APIs. Graceful stop is best-effort and
+platform dependent; on Unix it attempts an interrupt before forcing
+termination, while some Windows processes fall back to forced termination
+immediately.
 `commandtools.ScriptedSessionManager` remains available for deterministic tests
 and evals. `commandtools.SessionCleanupOptions(...)` installs `SessionEnded`
 cleanup hooks so session-owned commands do not outlive the parent agent run;

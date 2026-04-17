@@ -42,6 +42,7 @@ const (
 	defaultSessionTimeout = time.Hour
 	defaultTTYCols        = 80
 	defaultTTYRows        = 24
+	maxTTYDimension       = 32767
 )
 
 // Metadata for managed command sessions.
@@ -429,7 +430,7 @@ func NewResizeTool(resizer Resizer) tool.Tool {
 			Name:           ResizeToolName,
 			Description:    "Resize the terminal geometry of a PTY-backed managed command session.",
 			SearchHint:     "resize terminal pty session cols rows width height",
-			Destructive:    true,
+			Destructive:    false,
 			MaxResultBytes: 8 * 1024,
 			InputSchema: map[string]any{
 				"type":                 "object",
@@ -445,11 +446,13 @@ func NewResizeTool(resizer Resizer) tool.Tool {
 						"type":        "integer",
 						"description": "Terminal width in character cells.",
 						"minimum":     1,
+						"maximum":     maxTTYDimension,
 					},
 					"rows": map[string]any{
 						"type":        "integer",
 						"description": "Terminal height in character cells.",
 						"minimum":     1,
+						"maximum":     maxTTYDimension,
 					},
 				},
 			},
@@ -470,8 +473,8 @@ func NewResizeTool(resizer Resizer) tool.Tool {
 			if req.ID == "" {
 				return model.ToolResult{}, fmt.Errorf("commandtools: id is required")
 			}
-			if req.Cols <= 0 || req.Rows <= 0 {
-				return model.ToolResult{}, fmt.Errorf("commandtools: cols and rows must be positive")
+			if err := validateTTYDimensions(req.Cols, req.Rows); err != nil {
+				return model.ToolResult{}, err
 			}
 			session, err := resizer.ResizeCommandTerminal(ctx, req)
 			if err != nil {
@@ -664,11 +667,13 @@ func startInputSchema() map[string]any {
 				"type":        "integer",
 				"description": "Optional PTY terminal width in character cells. Defaults to 80 when tty is true.",
 				"minimum":     1,
+				"maximum":     maxTTYDimension,
 			},
 			"rows": map[string]any{
 				"type":        "integer",
 				"description": "Optional PTY terminal height in character cells. Defaults to 24 when tty is true.",
 				"minimum":     1,
+				"maximum":     maxTTYDimension,
 			},
 			"timeout_ms": map[string]any{
 				"type":        "integer",
@@ -756,11 +761,9 @@ func startRequestFromInput(input startInput) (StartRequest, error) {
 	if len(argv) == 0 {
 		return StartRequest{}, fmt.Errorf("commandtools: command must contain at least one argv element")
 	}
-	if !input.TTY && (input.Cols > 0 || input.Rows > 0) {
-		return StartRequest{}, fmt.Errorf("commandtools: cols and rows require tty=true")
-	}
-	if (input.Cols > 0) != (input.Rows > 0) {
-		return StartRequest{}, fmt.Errorf("commandtools: cols and rows must be set together")
+	cols, rows, err := normalizeStartTTYDimensions(input.TTY, input.Cols, input.Rows)
+	if err != nil {
+		return StartRequest{}, err
 	}
 	timeout := defaultSessionTimeout
 	if input.TimeoutMS > 0 {
@@ -773,8 +776,8 @@ func startRequestFromInput(input startInput) (StartRequest, error) {
 		Env:      cloneStringMap(input.Env),
 		Stdin:    input.Stdin,
 		TTY:      input.TTY,
-		Cols:     input.Cols,
-		Rows:     input.Rows,
+		Cols:     cols,
+		Rows:     rows,
 		Timeout:  timeout,
 		Purpose:  strings.TrimSpace(input.Purpose),
 		Metadata: model.CloneMetadata(input.Metadata),
@@ -873,11 +876,13 @@ func sessionMetadata(session CommandSession) map[string]any {
 		MetadataCommandStatus:    string(session.Status),
 		MetadataCommandPID:       session.PID,
 		MetadataCommandTTY:       session.TTY,
-		MetadataCommandCols:      session.Cols,
-		MetadataCommandRows:      session.Rows,
 		MetadataCommandStartedAt: session.StartedAt.UTC().Format(time.RFC3339Nano),
 		MetadataCommandTimedOut:  session.TimedOut,
 		MetadataCommandNextSeq:   session.NextSeq,
+	}
+	if session.TTY {
+		metadata[MetadataCommandCols] = session.Cols
+		metadata[MetadataCommandRows] = session.Rows
 	}
 	if session.FinishedAt != nil {
 		metadata[MetadataCommandFinishedAt] = session.FinishedAt.UTC().Format(time.RFC3339Nano)
@@ -892,6 +897,35 @@ func sessionMetadata(session CommandSession) map[string]any {
 		metadata[MetadataCommandDroppedBytes] = session.DroppedBytes
 	}
 	return metadata
+}
+
+func normalizeStartTTYDimensions(tty bool, cols, rows int) (int, int, error) {
+	if !tty {
+		if cols > 0 || rows > 0 {
+			return 0, 0, fmt.Errorf("commandtools: cols and rows require tty=true")
+		}
+		return 0, 0, nil
+	}
+	if (cols > 0) != (rows > 0) {
+		return 0, 0, fmt.Errorf("commandtools: cols and rows must be set together")
+	}
+	if cols == 0 && rows == 0 {
+		return defaultTTYCols, defaultTTYRows, nil
+	}
+	if err := validateTTYDimensions(cols, rows); err != nil {
+		return 0, 0, err
+	}
+	return cols, rows, nil
+}
+
+func validateTTYDimensions(cols, rows int) error {
+	if cols <= 0 || rows <= 0 {
+		return fmt.Errorf("commandtools: cols and rows must be positive")
+	}
+	if cols > maxTTYDimension || rows > maxTTYDimension {
+		return fmt.Errorf("commandtools: cols and rows must be <= %d", maxTTYDimension)
+	}
+	return nil
 }
 
 func formatSessionStart(session CommandSession) string {
@@ -1081,6 +1115,17 @@ func (m *ScriptedSessionManager) StartCommand(ctx context.Context, req StartRequ
 	if id == "" {
 		id = fmt.Sprintf("cmd-%d", len(m.sessions)+1)
 	}
+	tty := cmd.TTY || req.TTY
+	cols := req.Cols
+	rows := req.Rows
+	if cols == 0 && rows == 0 {
+		cols = cmd.Cols
+		rows = cmd.Rows
+	}
+	cols, rows, err := normalizeStartTTYDimensions(tty, cols, rows)
+	if err != nil {
+		return CommandSession{}, err
+	}
 	now := time.Now().UTC()
 	state := &scriptedSessionState{
 		session: CommandSession{
@@ -1093,23 +1138,15 @@ func (m *ScriptedSessionManager) StartCommand(ctx context.Context, req StartRequ
 			Purpose:         req.Purpose,
 			Status:          SessionRunning,
 			PID:             cmd.PID,
-			TTY:             cmd.TTY || req.TTY,
-			Cols:            firstPositive(req.Cols, cmd.Cols),
-			Rows:            firstPositive(req.Rows, cmd.Rows),
+			TTY:             tty,
+			Cols:            cols,
+			Rows:            rows,
 			StartedAt:       now,
 		},
 		pages:    cloneOutputPages(cmd.Pages),
 		writes:   cloneWritePages(cmd.WritePages),
 		stopExit: cloneIntPtr(cmd.StopExitCode),
 		stopTime: cmd.StopTimedOut,
-	}
-	if state.session.TTY {
-		if state.session.Cols <= 0 {
-			state.session.Cols = defaultTTYCols
-		}
-		if state.session.Rows <= 0 {
-			state.session.Rows = defaultTTYRows
-		}
 	}
 	m.sessions[id] = state
 	return cloneSession(state.session), nil
@@ -1130,9 +1167,24 @@ func (m *ScriptedSessionManager) ReadCommandOutput(ctx context.Context, req Read
 		return ReadResult{}, err
 	}
 	page := ScriptedOutputPage{Running: state.session.Status == SessionRunning}
-	if state.page < len(state.pages) {
-		page = cloneOutputPage(state.pages[state.page])
-		state.page++
+	// Plain polling preserves one scripted page per read, including empty running
+	// pages. Resumed reads skip pages whose chunks are already covered by AfterSeq
+	// until new output appears or a terminal page updates session lifecycle state.
+	if req.AfterSeq <= 0 {
+		if state.page < len(state.pages) {
+			page = cloneOutputPage(state.pages[state.page])
+			state.page++
+		}
+	} else {
+		for state.page < len(state.pages) {
+			candidate := cloneOutputPage(state.pages[state.page])
+			filtered := filterOutputPageAfterSeq(candidate, req.AfterSeq)
+			state.page++
+			page = filtered
+			if len(filtered.Chunks) > 0 || !candidate.Running || state.page >= len(state.pages) {
+				break
+			}
+		}
 	}
 	limitChunks := req.MaxChunks
 	if limitChunks <= 0 {
@@ -1205,8 +1257,8 @@ func (m *ScriptedSessionManager) ResizeCommandTerminal(ctx context.Context, req 
 	if m == nil {
 		return CommandSession{}, fmt.Errorf("commandtools: nil ScriptedSessionManager")
 	}
-	if req.Cols <= 0 || req.Rows <= 0 {
-		return CommandSession{}, fmt.Errorf("commandtools: cols and rows must be positive")
+	if err := validateTTYDimensions(req.Cols, req.Rows); err != nil {
+		return CommandSession{}, err
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1392,6 +1444,23 @@ func updateSessionFromPage(session *CommandSession, page ScriptedOutputPage, chu
 	}
 }
 
+func filterOutputPageAfterSeq(page ScriptedOutputPage, afterSeq int) ScriptedOutputPage {
+	if afterSeq <= 0 || len(page.Chunks) == 0 {
+		return page
+	}
+	filtered := page
+	filtered.Chunks = make([]OutputChunk, 0, len(page.Chunks))
+	for _, chunk := range page.Chunks {
+		if chunk.Seq > afterSeq {
+			filtered.Chunks = append(filtered.Chunks, cloneOutputChunk(chunk))
+		}
+	}
+	if len(filtered.Chunks) == 0 {
+		filtered.Chunks = nil
+	}
+	return filtered
+}
+
 func limitOutputChunks(chunks []OutputChunk, maxChunks, maxBytes int) []OutputChunk {
 	if len(chunks) == 0 {
 		return nil
@@ -1530,12 +1599,3 @@ func cloneWriteRequest(req WriteRequest) WriteRequest { return req }
 func cloneResizeRequest(req ResizeRequest) ResizeRequest { return req }
 
 func cloneStopRequest(req StopRequest) StopRequest { return req }
-
-func firstPositive(values ...int) int {
-	for _, value := range values {
-		if value > 0 {
-			return value
-		}
-	}
-	return 0
-}

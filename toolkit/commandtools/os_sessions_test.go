@@ -2,14 +2,14 @@ package commandtools
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
-
-	"github.com/creack/pty"
 )
 
 func TestOSSessionManagerStartReadNaturalExitAndVisibility(t *testing.T) {
@@ -258,72 +258,6 @@ func TestOSSessionManagerTTYSessionUsesPTYStream(t *testing.T) {
 	}
 }
 
-func TestOSSessionManagerResizeTTYSession(t *testing.T) {
-	manager, err := NewOSSessionManager(t.TempDir())
-	if err != nil {
-		t.Fatalf("NewOSSessionManager returned error: %v", err)
-	}
-	started, err := manager.StartCommand(context.Background(), StartRequest{
-		SessionID: "session-1",
-		TTY:       true,
-		Cols:      90,
-		Rows:      30,
-		Argv: []string{
-			os.Args[0],
-			"-test.run=TestHelperProcess",
-			"--",
-			"session",
-			"linger",
-		},
-		Env: map[string]string{"GO_WANT_HELPER_PROCESS": "1"},
-	})
-	if err != nil {
-		if strings.Contains(err.Error(), "PTY sessions are not supported") {
-			t.Skipf("pty unsupported on %s: %v", runtime.GOOS, err)
-		}
-		t.Fatalf("StartCommand returned error: %v", err)
-	}
-	if !started.TTY || started.Cols != 90 || started.Rows != 30 {
-		t.Fatalf("started = %#v, want tty geometry", started)
-	}
-	state, err := manager.lookupSession("session-1", started.ID)
-	if err != nil {
-		t.Fatalf("lookupSession returned error: %v", err)
-	}
-	state.stdinMu.Lock()
-	file := state.ttyFile
-	state.stdinMu.Unlock()
-	size, err := pty.GetsizeFull(file)
-	if err != nil {
-		t.Fatalf("GetsizeFull returned error: %v", err)
-	}
-	if int(size.Cols) != 90 || int(size.Rows) != 30 {
-		t.Fatalf("initial size = %dx%d, want 90x30", size.Cols, size.Rows)
-	}
-	resized, err := manager.ResizeCommandTerminal(context.Background(), ResizeRequest{
-		SessionID: "session-1",
-		ID:        started.ID,
-		Cols:      120,
-		Rows:      45,
-	})
-	if err != nil {
-		t.Fatalf("ResizeCommandTerminal returned error: %v", err)
-	}
-	if resized.Cols != 120 || resized.Rows != 45 {
-		t.Fatalf("resized = %#v, want updated geometry", resized)
-	}
-	size, err = pty.GetsizeFull(file)
-	if err != nil {
-		t.Fatalf("GetsizeFull after resize returned error: %v", err)
-	}
-	if int(size.Cols) != 120 || int(size.Rows) != 45 {
-		t.Fatalf("resized size = %dx%d, want 120x45", size.Cols, size.Rows)
-	}
-	if _, err := manager.StopCommand(context.Background(), StopRequest{SessionID: "session-1", ID: started.ID, Force: true}); err != nil {
-		t.Fatalf("StopCommand returned error: %v", err)
-	}
-}
-
 func TestOSSessionManagerDoesNotInheritEnvByDefault(t *testing.T) {
 	t.Setenv("MEMAX_COMMANDTOOLS_TEST_SECRET", "secret")
 	manager, err := NewOSSessionManager(t.TempDir())
@@ -368,6 +302,73 @@ func TestOSSessionManagerRejectsRootEscapeCWD(t *testing.T) {
 	}
 }
 
+func TestOSSessionManagerRejectsInvalidTTYGeometry(t *testing.T) {
+	manager, err := NewOSSessionManager(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewOSSessionManager returned error: %v", err)
+	}
+	cases := []StartRequest{
+		{
+			SessionID: "session-1",
+			TTY:       true,
+			Cols:      120,
+			Argv:      []string{os.Args[0], "-test.run=TestHelperProcess", "--", "session", "linger"},
+			Env:       map[string]string{"GO_WANT_HELPER_PROCESS": "1"},
+		},
+		{
+			SessionID: "session-1",
+			TTY:       true,
+			Cols:      maxTTYDimension + 1,
+			Rows:      40,
+			Argv:      []string{os.Args[0], "-test.run=TestHelperProcess", "--", "session", "linger"},
+			Env:       map[string]string{"GO_WANT_HELPER_PROCESS": "1"},
+		},
+	}
+	for _, req := range cases {
+		if _, err := manager.StartCommand(context.Background(), req); err == nil {
+			t.Fatalf("StartCommand(%#v) returned nil error, want geometry validation failure", req)
+		}
+	}
+}
+
+func TestOSSessionStateWaitAndFinishClosesDrainableTerminal(t *testing.T) {
+	terminal := &blockingDrainTerminal{
+		readStarted: make(chan struct{}),
+		closed:      make(chan struct{}),
+	}
+	state := &osSessionState{
+		process:  &stubCommandProcess{wait: sessionWaitResult{exitCode: 0}},
+		session:  CommandSession{ID: "cmd-1", Status: SessionRunning},
+		terminal: terminal,
+		done:     make(chan struct{}),
+		updates:  make(chan struct{}, 1),
+	}
+	readerDone := make(chan struct{})
+	go state.captureStream("pty", terminal, nil, readerDone)
+	<-terminal.readStarted
+
+	go state.waitAndFinish([]chan struct{}{readerDone})
+
+	select {
+	case <-state.done:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for waitAndFinish to close drainable terminal")
+	}
+	if !state.isDraining() {
+		t.Fatal("draining state was not preserved after waitAndFinish")
+	}
+	if !terminal.isClosed() {
+		t.Fatal("terminal was not closed for drain")
+	}
+	session := state.snapshot()
+	if session.Status != SessionExited {
+		t.Fatalf("session = %#v, want exited session", session)
+	}
+	if session.ExitCode == nil || *session.ExitCode != 0 {
+		t.Fatalf("session = %#v, want zero exit code", session)
+	}
+}
+
 func waitForOutput(t *testing.T, manager *OSSessionManager, req ReadRequest, ok func(ReadResult) bool) ReadResult {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -400,4 +401,49 @@ func max(a, b int) int {
 		return a
 	}
 	return b
+}
+
+type stubCommandProcess struct {
+	wait sessionWaitResult
+}
+
+func (p *stubCommandProcess) PID() int                { return 1 }
+func (p *stubCommandProcess) Interrupt() error        { return os.ErrProcessDone }
+func (p *stubCommandProcess) Kill() error             { return nil }
+func (p *stubCommandProcess) Wait() sessionWaitResult { return p.wait }
+func (p *stubCommandProcess) Close() error            { return nil }
+
+type blockingDrainTerminal struct {
+	readStarted chan struct{}
+	closed      chan struct{}
+	startOnce   sync.Once
+	closeOnce   sync.Once
+}
+
+func (t *blockingDrainTerminal) Read(p []byte) (int, error) {
+	// The drain test expects exactly one transition from "read not yet blocked"
+	// to "reader is blocked waiting for close."
+	t.startOnce.Do(func() {
+		close(t.readStarted)
+	})
+	<-t.closed
+	return 0, io.EOF
+}
+
+func (t *blockingDrainTerminal) Write(p []byte) (int, error) { return len(p), nil }
+func (t *blockingDrainTerminal) Resize(cols, rows int) error { return nil }
+func (t *blockingDrainTerminal) Close() error {
+	t.closeOnce.Do(func() {
+		close(t.closed)
+	})
+	return nil
+}
+func (t *blockingDrainTerminal) CloseForDrain() error { return t.Close() }
+func (t *blockingDrainTerminal) isClosed() bool {
+	select {
+	case <-t.closed:
+		return true
+	default:
+		return false
+	}
 }

@@ -186,6 +186,20 @@ func TestOSRunnerDoesNotInheritEnvByDefault(t *testing.T) {
 	}
 }
 
+func TestOSRunnerEnvReturnsEmptySliceWhenInheritanceDisabled(t *testing.T) {
+	runner, err := NewOSRunner(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewOSRunner returned error: %v", err)
+	}
+	env := runner.env(nil)
+	if env == nil {
+		t.Fatal("runner.env(nil) = nil, want explicit empty environment slice")
+	}
+	if len(env) != 0 {
+		t.Fatalf("runner.env(nil) = %v, want empty slice", env)
+	}
+}
+
 func TestHelperProcess(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") != "1" {
 		return

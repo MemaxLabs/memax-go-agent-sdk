@@ -1648,6 +1648,297 @@ func PlannerTaskProgressFromVerification() agenteval.Case {
 	}
 }
 
+// PlannerWorkspaceCommandRepairLoop returns a single-use scenario where a
+// planner-guided task uses managed command-session output to drive repair, is
+// forced through checkpoint and verify-before-final policies, and only
+// finalizes after verification marks the task completed.
+func PlannerWorkspaceCommandRepairLoop() agenteval.Case {
+	workspaceStore := workspace.NewMemoryStore(map[string]string{
+		"README.md": "status: broken",
+	})
+	taskStore := tasktools.NewMemoryStore([]tasktools.Task{{
+		ID:     "task-1",
+		Title:  "repair README status from watch output",
+		Status: tasktools.StatusInProgress,
+		Notes:  "use watch output, checkpoint before mutating, verify before final answer",
+	}})
+	workspaceTools, toolsErr := workspacetools.NewTools(workspaceStore)
+	manager := commandtools.NewScriptedSessionManager(commandtools.ScriptedCommand{
+		ID:  "watch-1",
+		PID: 8181,
+		Pages: []commandtools.ScriptedOutputPage{
+			{
+				Chunks: []commandtools.OutputChunk{{
+					Seq:    1,
+					Stream: "stdout",
+					Text:   "watch: README.md status must be fixed\n",
+				}},
+				Running: true,
+			},
+			{
+				Chunks: []commandtools.OutputChunk{{
+					Seq:    2,
+					Stream: "stdout",
+					Text:   "watch: ok\n",
+				}},
+				Running: true,
+			},
+		},
+		StopExitCode: intPtr(0),
+	})
+	verifyTool := verifytools.NewTool(verifytools.Config{
+		Verifier: tasktools.NewVerificationProgressVerifier(
+			taskStore,
+			verifierForReadmeStatus(workspaceStore, "status: fixed"),
+			tasktools.WithVerificationFailStatus(tasktools.StatusInProgress),
+		),
+	})
+	checkpointPolicy := agentpolicy.RequireCheckpointBeforePatch()
+	finalPolicy := agentpolicy.RequireVerificationBeforeFinal()
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "start-1",
+				Name:  commandtools.StartToolName,
+				Input: json.RawMessage(`{"id":"watch-1","command":["npm","run","test:watch"],"purpose":"watch README status"}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "read-1",
+				Name:  commandtools.ReadOutputToolName,
+				Input: json.RawMessage(`{"id":"watch-1"}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "patch-1",
+				Name: workspacetools.ApplyPatchToolName,
+				Input: json.RawMessage(`{"operations":[
+					{"path":"README.md","old_content":"status: broken","new_content":"status: fixed"}
+				]}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "checkpoint-1",
+				Name:  workspacetools.CheckpointToolName,
+				Input: json.RawMessage(`{"label":"before README repair"}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "patch-2",
+				Name: workspacetools.ApplyPatchToolName,
+				// Repeat the exact guarded edit after checkpoint creation. This keeps
+				// the scenario honest about the policy boundary: patch-2 only succeeds
+				// if patch-1 was denied before mutating the workspace.
+				Input: json.RawMessage(`{"operations":[
+					{"path":"README.md","old_content":"status: broken","new_content":"status: fixed"}
+				]}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "read-2",
+				Name:  commandtools.ReadOutputToolName,
+				Input: json.RawMessage(`{"id":"watch-1","after_seq":1}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "stop-1",
+				Name:  commandtools.StopToolName,
+				Input: json.RawMessage(`{"id":"watch-1","force":true}`),
+			},
+		}},
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "README fixed from watch output."}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "verify-1",
+				Name: verifytools.ToolName,
+				Input: json.RawMessage(`{
+					"name":"test",
+					"target":"README.md",
+					"metadata":{"task_id":"task-1"}
+				}`),
+			},
+		}},
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "README fixed, verified, and task completed."}},
+	)
+
+	return agenteval.Case{
+		Name:   "planner_workspace_command_repair_loop",
+		Prompt: "Use the watch command to diagnose README.md, repair it safely, verify it, and finish the active task.",
+		Options: memaxagent.Options{
+			Model: modelClient,
+			Tools: tool.NewRegistry(append(workspaceTools,
+				commandtools.NewStartTool(manager),
+				commandtools.NewReadOutputTool(manager),
+				commandtools.NewStopTool(manager),
+				verifyTool,
+			)...),
+			Hooks: hook.NewRunner(append(checkpointPolicy.Options(), finalPolicy.Options()...)...),
+			Planner: tasktools.Planner(taskStore,
+				planner.WithTaskGoal("repair README status using watch output and verified evidence"),
+				planner.WithTaskToolHints(
+					commandtools.StartToolName,
+					commandtools.ReadOutputToolName,
+					commandtools.StopToolName,
+					workspacetools.CheckpointToolName,
+					workspacetools.ApplyPatchToolName,
+					verifytools.ToolName,
+				),
+				planner.WithTaskVerificationHints("call workspace_verify with metadata.task_id before final answer"),
+			),
+		},
+		Assertions: []agenteval.Assertion{
+			toolConstructionSucceeded(toolsErr),
+			agenteval.ToolUsed(commandtools.StartToolName),
+			agenteval.ToolUsed(commandtools.ReadOutputToolName),
+			agenteval.ToolUsed(workspacetools.ApplyPatchToolName),
+			agenteval.ToolUsed(workspacetools.CheckpointToolName),
+			agenteval.ToolUsed(commandtools.StopToolName),
+			agenteval.ToolUsed(verifytools.ToolName),
+			agenteval.EventKindEmitted(memaxagent.EventCommandStarted),
+			agenteval.EventKindEmitted(memaxagent.EventCommandOutput),
+			agenteval.EventKindEmitted(memaxagent.EventCommandStopped),
+			agenteval.EventKindEmitted(memaxagent.EventWorkspaceCheckpoint),
+			agenteval.EventKindEmitted(memaxagent.EventWorkspacePatch),
+			agenteval.EventKindEmitted(memaxagent.EventVerification),
+			agenteval.FinalEquals("README fixed, verified, and task completed."),
+			requestCountEquals(modelClient, 10),
+			{
+				Name: "planner-guided loop composes command repair checkpoint and verification",
+				Check: func(result agenteval.Result) error {
+					results := result.ToolResults()
+					if len(results) < 8 {
+						return fmt.Errorf("tool results = %#v, want watch repair loop", results)
+					}
+					if results[1].IsError || !strings.Contains(results[1].Content, "status must be fixed") {
+						return fmt.Errorf("first read result = %#v, want failing watch output", results[1])
+					}
+					if !results[2].IsError || !strings.Contains(results[2].Content, agentpolicy.CheckpointBeforePatchReason()) {
+						return fmt.Errorf("first patch result = %#v, want checkpoint denial", results[2])
+					}
+					workspacePatchEvents := 0
+					workspaceCheckpointEvents := 0
+					for _, event := range result.Events {
+						switch event.Kind {
+						case memaxagent.EventWorkspacePatch:
+							workspacePatchEvents++
+						case memaxagent.EventWorkspaceCheckpoint:
+							workspaceCheckpointEvents++
+						}
+					}
+					if workspacePatchEvents != 1 {
+						return fmt.Errorf("workspace patch events = %d, want exactly one successful patch after denial", workspacePatchEvents)
+					}
+					if workspaceCheckpointEvents != 1 {
+						return fmt.Errorf("workspace checkpoint events = %d, want exactly one checkpoint event", workspaceCheckpointEvents)
+					}
+					if results[3].IsError || !strings.Contains(results[3].Content, "created workspace checkpoint checkpoint-1") {
+						return fmt.Errorf("checkpoint result = %#v, want checkpoint success", results[3])
+					}
+					if results[4].IsError || !strings.Contains(results[4].Content, "modified README.md") {
+						return fmt.Errorf("second patch result = %#v, want successful patch", results[4])
+					}
+					if results[5].IsError || !strings.Contains(results[5].Content, "watch: ok") {
+						return fmt.Errorf("second read result = %#v, want passing watch output", results[5])
+					}
+					if results[6].IsError || !strings.Contains(results[6].Content, "status: stopped") {
+						return fmt.Errorf("stop result = %#v, want clean stop", results[6])
+					}
+					if results[7].IsError || !strings.Contains(results[7].Content, "verification test passed") {
+						return fmt.Errorf("verification result = %#v, want verification success", results[7])
+					}
+					if results[7].Metadata == nil {
+						return fmt.Errorf("verification metadata = nil, want completed task update")
+					}
+					if results[7].Metadata[model.MetadataTaskStatus] != string(tasktools.StatusCompleted) {
+						return fmt.Errorf("verification metadata = %#v, want completed task update", results[7].Metadata)
+					}
+					content, err := workspaceStore.ReadFile(context.Background(), "README.md")
+					if err != nil {
+						return err
+					}
+					if content != "status: fixed" {
+						return fmt.Errorf("README.md = %q, want repaired content", content)
+					}
+					startRequests := manager.StartRequests()
+					if len(startRequests) != 1 || startRequests[0].Purpose != "watch README status" {
+						return fmt.Errorf("start requests = %#v, want one watch start request", startRequests)
+					}
+					readRequests := manager.ReadRequests()
+					if len(readRequests) != 2 || readRequests[1].AfterSeq != 1 {
+						return fmt.Errorf("read requests = %#v, want second read after_seq=1", readRequests)
+					}
+					stopRequests := manager.StopRequests()
+					if len(stopRequests) != 1 || stopRequests[0].ID != "watch-1" {
+						return fmt.Errorf("stop requests = %#v, want stop watch-1", stopRequests)
+					}
+					tasks, err := taskStore.List(context.Background())
+					if err != nil {
+						return err
+					}
+					if len(tasks) != 1 || tasks[0].Status != tasktools.StatusCompleted {
+						return fmt.Errorf("tasks = %#v, want completed task", tasks)
+					}
+					if !strings.Contains(strings.Join(tasks[0].Evidence, ","), "verification:test") {
+						return fmt.Errorf("task evidence = %#v, want verification evidence", tasks[0].Evidence)
+					}
+					return nil
+				},
+			},
+			{
+				Name: "planner prompt and finalization retry reflect composed workflow",
+				Check: func(agenteval.Result) error {
+					requests := modelClient.Requests()
+					if len(requests) < 10 {
+						return fmt.Errorf("requests = %d, want 10", len(requests))
+					}
+					initialPrompt := requests[0].SystemPrompt
+					for _, want := range []string{
+						"repair README status using watch output and verified evidence",
+						"[in_progress] task-1",
+						"use watch output, checkpoint before mutating, verify before final answer",
+						commandtools.StartToolName,
+						verifytools.ToolName,
+						"call workspace_verify with metadata.task_id before final answer",
+					} {
+						if !strings.Contains(initialPrompt, want) {
+							return fmt.Errorf("initial prompt missing %q:\n%s", want, initialPrompt)
+						}
+					}
+					verifyRequest := requests[8]
+					if len(verifyRequest.Messages) == 0 {
+						return fmt.Errorf("verify request missing messages")
+					}
+					last := verifyRequest.Messages[len(verifyRequest.Messages)-1].PlainText()
+					if !strings.Contains(last, agentpolicy.VerifyBeforeFinalReason()) {
+						return fmt.Errorf("verify retry prompt = %q, want verify-before-final reason", last)
+					}
+					finalPrompt := requests[9].SystemPrompt
+					for _, want := range []string{"[completed] task-1", "verification:test", "README.md"} {
+						if !strings.Contains(finalPrompt, want) {
+							return fmt.Errorf("final prompt missing %q:\n%s", want, finalPrompt)
+						}
+					}
+					return nil
+				},
+			},
+		},
+	}
+}
+
 // PlannerVerificationGuidesRepair returns a single-use scenario where the
 // host plan names the verification phase, the model uses the verifier, and a
 // failed check drives a repair before the final answer.
