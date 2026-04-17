@@ -1,6 +1,7 @@
 package commandtools
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"os"
@@ -231,6 +232,21 @@ func TestHelperProcess(t *testing.T) {
 		case "linger":
 			_, _ = os.Stdout.WriteString("ready\n")
 			time.Sleep(30 * time.Second)
+		case "echo-stdin":
+			_, _ = os.Stdout.WriteString("ready\n")
+			scanner := bufio.NewScanner(os.Stdin)
+			for scanner.Scan() {
+				line := scanner.Text()
+				if line == "exit" {
+					_, _ = os.Stdout.WriteString("bye\n")
+					os.Exit(0)
+				}
+				_, _ = os.Stdout.WriteString("echo:" + line + "\n")
+			}
+			if err := scanner.Err(); err != nil {
+				_, _ = os.Stderr.WriteString(err.Error())
+				os.Exit(1)
+			}
 		case "cwd":
 			wd, err := os.Getwd()
 			if err != nil {

@@ -1891,6 +1891,7 @@ func emitCommandToolEvent(ctx context.Context, emit func(Event) bool, opts Optio
 		CWD:             metadatavalues.String(result.Metadata, model.MetadataCommandCWD),
 		Status:          metadatavalues.String(result.Metadata, model.MetadataCommandStatus),
 		PID:             metadatavalues.Int(result.Metadata, model.MetadataCommandPID),
+		InputBytes:      metadatavalues.Int(result.Metadata, model.MetadataCommandInputBytes),
 		ExitCode:        metadatavalues.Int(result.Metadata, model.MetadataCommandExitCode),
 		TimedOut:        metadatavalues.Bool(result.Metadata, model.MetadataCommandTimedOut),
 		DurationMS:      metadatavalues.Int(result.Metadata, model.MetadataCommandDurationMS),
@@ -1909,6 +1910,9 @@ func emitCommandToolEvent(ctx context.Context, emit func(Event) bool, opts Optio
 	case "start":
 		kind = EventCommandStarted
 		meterName = "memax.command.started"
+	case "write":
+		kind = EventCommandInput
+		meterName = "memax.command.input"
 	case "read":
 		kind = EventCommandOutput
 		meterName = "memax.command.output"

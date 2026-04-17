@@ -197,13 +197,15 @@ func TestQueryCommandSessionEventStreamGolden(t *testing.T) {
 	manager := commandtools.NewScriptedSessionManager(commandtools.ScriptedCommand{
 		ID:  "server-1",
 		PID: 4242,
-		Pages: []commandtools.ScriptedOutputPage{{
-			Chunks: []commandtools.OutputChunk{{
-				Seq:    1,
-				Stream: "stdout",
-				Text:   "ready\n",
-			}},
-			Running: true,
+		WritePages: []commandtools.ScriptedWritePage{{
+			Page: commandtools.ScriptedOutputPage{
+				Chunks: []commandtools.OutputChunk{{
+					Seq:    1,
+					Stream: "stdout",
+					Text:   "echo:hello\n",
+				}},
+				Running: true,
+			},
 		}},
 		StopExitCode: intPtr(143),
 	})
@@ -220,9 +222,9 @@ func TestQueryCommandSessionEventStreamGolden(t *testing.T) {
 			{{
 				Kind: model.StreamToolUse,
 				ToolUse: model.ToolUse{
-					ID:    "read-1",
-					Name:  commandtools.ReadOutputToolName,
-					Input: json.RawMessage(`{"id":"server-1"}`),
+					ID:    "write-1",
+					Name:  commandtools.WriteInputToolName,
+					Input: json.RawMessage(`{"id":"server-1","input":"hello","append_newline":true}`),
 				},
 			}},
 			{{
@@ -237,8 +239,8 @@ func TestQueryCommandSessionEventStreamGolden(t *testing.T) {
 		}},
 		Tools: tool.NewRegistry(
 			commandtools.NewStartTool(manager),
-			commandtools.NewReadOutputTool(manager),
 			commandtools.NewStopTool(manager),
+			commandtools.NewWriteInputTool(manager),
 		),
 	})
 	if err != nil {
@@ -499,6 +501,7 @@ type goldenEvent struct {
 	CommandID            string    `json:"command_id,omitempty"`
 	CommandStatus        string    `json:"command_status,omitempty"`
 	CommandPID           int       `json:"command_pid,omitempty"`
+	CommandInputBytes    int       `json:"command_input_bytes,omitempty"`
 	CommandNextSeq       int       `json:"command_next_seq,omitempty"`
 	CommandOutputChunks  int       `json:"command_output_chunks,omitempty"`
 	CommandDroppedChunks int       `json:"command_dropped_chunks,omitempty"`
@@ -596,12 +599,13 @@ func normalizeGoldenEvent(event Event) goldenEvent {
 			out.ApprovalSingleUse = event.Approval.SingleUse
 			out.ApprovalInputBound = event.Approval.InputBound
 		}
-	case EventCommandFinished, EventCommandStarted, EventCommandOutput, EventCommandStopped:
+	case EventCommandFinished, EventCommandStarted, EventCommandInput, EventCommandOutput, EventCommandStopped:
 		if event.Command != nil {
 			out.CommandOperation = event.Command.Operation
 			out.CommandID = event.Command.CommandID
 			out.CommandStatus = event.Command.Status
 			out.CommandPID = event.Command.PID
+			out.CommandInputBytes = event.Command.InputBytes
 			out.CommandNextSeq = event.Command.NextSeq
 			out.CommandOutputChunks = event.Command.OutputChunks
 			out.CommandDroppedChunks = event.Command.DroppedChunks

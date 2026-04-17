@@ -135,6 +135,66 @@ func TestOSSessionManagerStopAndCleanup(t *testing.T) {
 	}
 }
 
+func TestOSSessionManagerWriteInputEchoesAndExits(t *testing.T) {
+	manager, err := NewOSSessionManager(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewOSSessionManager returned error: %v", err)
+	}
+	started, err := manager.StartCommand(context.Background(), StartRequest{
+		SessionID: "session-1",
+		Argv: []string{
+			os.Args[0],
+			"-test.run=TestHelperProcess",
+			"--",
+			"session",
+			"echo-stdin",
+		},
+		Env: map[string]string{"GO_WANT_HELPER_PROCESS": "1"},
+	})
+	if err != nil {
+		t.Fatalf("StartCommand returned error: %v", err)
+	}
+	_ = waitForOutput(t, manager, ReadRequest{SessionID: "session-1", ID: started.ID}, func(result ReadResult) bool {
+		return strings.Contains(joinChunkText(result.Chunks), "ready\n")
+	})
+
+	wrote, err := manager.WriteCommandInput(context.Background(), WriteRequest{
+		SessionID: "session-1",
+		ID:        started.ID,
+		Input:     "hello\n",
+		Yield:     500 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("WriteCommandInput hello returned error: %v", err)
+	}
+	if !strings.Contains(joinChunkText(wrote.Chunks), "echo:hello\n") || wrote.InputBytes != len("hello\n") {
+		t.Fatalf("wrote = %#v, want echoed output and input byte count", wrote)
+	}
+
+	exited, err := manager.WriteCommandInput(context.Background(), WriteRequest{
+		SessionID: "session-1",
+		ID:        started.ID,
+		Input:     "exit\n",
+		Yield:     500 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("WriteCommandInput exit returned error: %v", err)
+	}
+	if !strings.Contains(joinChunkText(exited.Chunks), "bye\n") {
+		t.Fatalf("exited = %#v, want exit output chunk", exited)
+	}
+	final := waitForOutput(t, manager, ReadRequest{
+		SessionID: "session-1",
+		ID:        started.ID,
+		AfterSeq:  max(0, exited.NextSeq-1),
+	}, func(result ReadResult) bool {
+		return result.Session.Status == SessionExited
+	})
+	if final.Session.ExitCode == nil || *final.Session.ExitCode != 0 {
+		t.Fatalf("final = %#v, want exited session after exit input", final)
+	}
+}
+
 func TestOSSessionManagerDoesNotInheritEnvByDefault(t *testing.T) {
 	t.Setenv("MEMAX_COMMANDTOOLS_TEST_SECRET", "secret")
 	manager, err := NewOSSessionManager(t.TempDir())

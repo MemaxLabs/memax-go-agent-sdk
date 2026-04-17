@@ -386,6 +386,163 @@ func CommandSessionRepairLoop() agenteval.Case {
 	}
 }
 
+// CommandSessionInteractiveRepairLoop returns a single-use scenario where the
+// model interacts with a managed command session through stdin writes, repairs
+// the workspace, observes passing output, and exits the session.
+func CommandSessionInteractiveRepairLoop() agenteval.Case {
+	store := workspace.NewMemoryStore(map[string]string{
+		"README.md": "status: broken",
+	})
+	workspaceTools, workspaceErr := workspacetools.NewTools(store)
+	manager := commandtools.NewScriptedSessionManager(commandtools.ScriptedCommand{
+		ID:  "watch-1",
+		PID: 5151,
+		WritePages: []commandtools.ScriptedWritePage{
+			{
+				Page: commandtools.ScriptedOutputPage{
+					Chunks: []commandtools.OutputChunk{{
+						Seq:    1,
+						Stream: "stdout",
+						Text:   "watch: README.md status must be fixed\n",
+					}},
+					Running: true,
+				},
+			},
+			{
+				Page: commandtools.ScriptedOutputPage{
+					Chunks: []commandtools.OutputChunk{{
+						Seq:    2,
+						Stream: "stdout",
+						Text:   "watch: ok\n",
+					}},
+					Running: true,
+				},
+			},
+			{
+				Page: commandtools.ScriptedOutputPage{
+					Chunks: []commandtools.OutputChunk{{
+						Seq:    3,
+						Stream: "stdout",
+						Text:   "watch: bye\n",
+					}},
+					Running:  false,
+					ExitCode: intPtr(0),
+				},
+			},
+		},
+	})
+	tools := append(workspaceTools,
+		commandtools.NewStartTool(manager),
+		commandtools.NewWriteInputTool(manager),
+	)
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "start-1",
+				Name:  commandtools.StartToolName,
+				Input: json.RawMessage(`{"id":"watch-1","command":["npm","run","test:watch"],"purpose":"start interactive watch mode"}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "write-1",
+				Name:  commandtools.WriteInputToolName,
+				Input: json.RawMessage(`{"id":"watch-1","input":"check","append_newline":true}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "patch-1",
+				Name: workspacetools.ApplyPatchToolName,
+				Input: json.RawMessage(`{"operations":[
+					{"path":"README.md","old_content":"status: broken","new_content":"status: fixed"}
+				]}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "write-2",
+				Name:  commandtools.WriteInputToolName,
+				Input: json.RawMessage(`{"id":"watch-1","input":"check","append_newline":true}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "write-3",
+				Name:  commandtools.WriteInputToolName,
+				Input: json.RawMessage(`{"id":"watch-1","input":"exit","append_newline":true}`),
+			},
+		}},
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "Interactive watch passed after repair."}},
+	)
+
+	return agenteval.Case{
+		Name:   "command_session_interactive_repair_loop",
+		Prompt: "Start an interactive watch command, send checks through stdin, repair README.md if it fails, confirm it passes, then exit the session.",
+		Options: memaxagent.Options{
+			Model: modelClient,
+			Tools: tool.NewRegistry(tools...),
+		},
+		Assertions: []agenteval.Assertion{
+			toolConstructionSucceeded(workspaceErr),
+			agenteval.ToolUsed(commandtools.StartToolName),
+			agenteval.ToolUsed(commandtools.WriteInputToolName),
+			agenteval.ToolUsed(workspacetools.ApplyPatchToolName),
+			agenteval.EventKindEmitted(memaxagent.EventCommandStarted),
+			agenteval.EventKindEmitted(memaxagent.EventCommandInput),
+			agenteval.EventKindEmitted(memaxagent.EventWorkspacePatch),
+			agenteval.FinalEquals("Interactive watch passed after repair."),
+			requestCountEquals(modelClient, 6),
+			{
+				Name: "interactive command writes drive repair loop",
+				Check: func(result agenteval.Result) error {
+					content, err := store.ReadFile(context.Background(), "README.md")
+					if err != nil {
+						return err
+					}
+					if content != "status: fixed" {
+						return fmt.Errorf("README.md = %q, want repaired content", content)
+					}
+					writeRequests := manager.WriteRequests()
+					if len(writeRequests) != 3 ||
+						writeRequests[0].Input != "check\n" ||
+						writeRequests[1].Input != "check\n" ||
+						writeRequests[2].Input != "exit\n" {
+						return fmt.Errorf("write requests = %#v, want check/check/exit with newline", writeRequests)
+					}
+					results := result.ToolResults()
+					sawFail := false
+					sawPass := false
+					sawExit := false
+					for _, toolResult := range results {
+						if toolResult.Name != commandtools.WriteInputToolName {
+							continue
+						}
+						if strings.Contains(toolResult.Content, "status must be fixed") {
+							sawFail = true
+						}
+						if strings.Contains(toolResult.Content, "watch: ok") {
+							sawPass = true
+						}
+						if strings.Contains(toolResult.Content, "watch: bye") && strings.Contains(toolResult.Content, "status: exited") {
+							sawExit = true
+						}
+					}
+					if !sawFail || !sawPass || !sawExit {
+						return fmt.Errorf("tool results = %#v, want failing, passing, and exit write outputs", results)
+					}
+					return nil
+				},
+			},
+		},
+	}
+}
+
 // CommandApprovalPolicyRecovery returns a single-use scenario where a command
 // is denied until the model obtains input-bound host approval.
 func CommandApprovalPolicyRecovery() agenteval.Case {

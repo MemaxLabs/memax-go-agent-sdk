@@ -34,23 +34,24 @@
   {
     "kind": "tool_use",
     "turn": 2,
-    "tool_id": "read-1",
-    "tool_name": "read_command_output"
+    "tool_id": "write-1",
+    "tool_name": "write_command_input"
   },
   {
     "kind": "tool_result",
     "turn": 2,
-    "tool_id": "read-1",
-    "tool_name": "read_command_output",
-    "tool_result": "command output for server-1: npm run dev\nstatus: running\nnext_seq: 2\n[stdout #1]\nready\n"
+    "tool_id": "write-1",
+    "tool_name": "write_command_input",
+    "tool_result": "wrote input to command session server-1: npm run dev\nstatus: running\ninput_bytes: 6\nnext_seq: 2\n[stdout #1]\necho:hello\n"
   },
   {
-    "kind": "command_output",
+    "kind": "command_input",
     "turn": 2,
-    "command_operation": "read",
+    "command_operation": "write",
     "command_id": "server-1",
     "command_status": "running",
     "command_pid": 4242,
+    "command_input_bytes": 6,
     "command_next_seq": 2,
     "command_output_chunks": 1
   },

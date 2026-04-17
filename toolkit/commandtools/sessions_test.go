@@ -67,6 +67,64 @@ func TestScriptedSessionManagerStartReadStop(t *testing.T) {
 	}
 }
 
+func TestScriptedSessionManagerWriteInput(t *testing.T) {
+	manager := NewScriptedSessionManager(ScriptedCommand{
+		ID:  "server-1",
+		PID: 4242,
+		WritePages: []ScriptedWritePage{
+			{
+				Page: ScriptedOutputPage{
+					Chunks: []OutputChunk{
+						{Seq: 1, Stream: "stdout", Text: "echo:hello\n", Time: time.Unix(1, 0).UTC()},
+					},
+					Running: true,
+				},
+			},
+			{
+				Page: ScriptedOutputPage{
+					Chunks: []OutputChunk{
+						{Seq: 2, Stream: "stdout", Text: "bye\n", Time: time.Unix(2, 0).UTC()},
+					},
+					Running:  false,
+					ExitCode: intPtr(0),
+				},
+			},
+		},
+	})
+	if _, err := manager.StartCommand(context.Background(), StartRequest{
+		SessionID: "session-1",
+		Argv:      []string{"python", "-i"},
+	}); err != nil {
+		t.Fatalf("StartCommand returned error: %v", err)
+	}
+	first, err := manager.WriteCommandInput(context.Background(), WriteRequest{
+		SessionID: "session-1",
+		ID:        "server-1",
+		Input:     "hello\n",
+	})
+	if err != nil {
+		t.Fatalf("WriteCommandInput first returned error: %v", err)
+	}
+	if len(first.Chunks) != 1 || first.Chunks[0].Text != "echo:hello\n" || first.Session.Status != SessionRunning {
+		t.Fatalf("first = %#v, want running echoed write result", first)
+	}
+	second, err := manager.WriteCommandInput(context.Background(), WriteRequest{
+		SessionID: "session-1",
+		ID:        "server-1",
+		Input:     "exit\n",
+	})
+	if err != nil {
+		t.Fatalf("WriteCommandInput second returned error: %v", err)
+	}
+	if len(second.Chunks) != 1 || second.Chunks[0].Text != "bye\n" || second.Session.Status != SessionExited {
+		t.Fatalf("second = %#v, want exited write result", second)
+	}
+	requests := manager.WriteRequests()
+	if len(requests) != 2 || requests[0].Input != "hello\n" || requests[1].Input != "exit\n" {
+		t.Fatalf("write requests = %#v, want captured inputs", requests)
+	}
+}
+
 func TestStartReadStopToolsReturnMetadata(t *testing.T) {
 	manager := NewScriptedSessionManager(ScriptedCommand{
 		ID:  "dev-1",
@@ -75,10 +133,17 @@ func TestStartReadStopToolsReturnMetadata(t *testing.T) {
 			Chunks:  []OutputChunk{{Seq: 1, Stream: "stdout", Text: "listening on :3000\n"}},
 			Running: true,
 		}},
+		WritePages: []ScriptedWritePage{{
+			Page: ScriptedOutputPage{
+				Chunks:  []OutputChunk{{Seq: 2, Stream: "stdout", Text: "pong\n"}},
+				Running: true,
+			},
+		}},
 		StopExitCode: intPtr(143),
 	})
 	startTool := NewStartTool(manager)
 	readTool := NewReadOutputTool(manager)
+	writeTool := NewWriteInputTool(manager)
 	stopTool := NewStopTool(manager)
 	runtime := tool.Runtime{SessionID: "session-1"}
 
@@ -110,6 +175,22 @@ func TestStartReadStopToolsReturnMetadata(t *testing.T) {
 	}
 	if !strings.Contains(read.Content, "listening on :3000") {
 		t.Fatalf("read content = %q, want output chunk", read.Content)
+	}
+	wrote, err := writeTool.(tool.Definition).Handler(context.Background(), tool.Call{
+		Runtime: runtime,
+		Use: model.ToolUse{
+			Name:  WriteInputToolName,
+			Input: json.RawMessage(`{"id":"dev-1","input":"ping","append_newline":true}`),
+		},
+	})
+	if err != nil {
+		t.Fatalf("write handler returned error: %v", err)
+	}
+	if wrote.Metadata[MetadataCommandOperation] != "write" || wrote.Metadata[MetadataCommandInputBytes] != 5 || wrote.Metadata[MetadataCommandOutputChunks] != 1 {
+		t.Fatalf("write metadata = %#v, want command write metadata", wrote.Metadata)
+	}
+	if !strings.Contains(wrote.Content, "pong") {
+		t.Fatalf("write content = %q, want write output chunk", wrote.Content)
 	}
 	stopped, err := stopTool.(tool.Definition).Handler(context.Background(), tool.Call{
 		Runtime: runtime,
@@ -156,6 +237,28 @@ func TestSessionCleanupOptions(t *testing.T) {
 	}
 	if len(sessions) != 0 {
 		t.Fatalf("sessions = %#v, want cleanup to remove session-owned commands", sessions)
+	}
+}
+
+func TestNewSessionToolsIncludesWriteWhenSupported(t *testing.T) {
+	manager := NewScriptedSessionManager(ScriptedCommand{ID: "server-1"})
+	tools, err := NewSessionTools(manager)
+	if err != nil {
+		t.Fatalf("NewSessionTools returned error: %v", err)
+	}
+	var names []string
+	for _, entry := range tools {
+		names = append(names, entry.Spec().Name)
+	}
+	want := []string{
+		StartToolName,
+		ReadOutputToolName,
+		StopToolName,
+		ListToolName,
+		WriteInputToolName,
+	}
+	if !sameStrings(names, want) {
+		t.Fatalf("tool names = %#v, want %#v", names, want)
 	}
 }
 

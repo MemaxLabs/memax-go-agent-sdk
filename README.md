@@ -259,14 +259,16 @@ Use `toolkit/agentpolicy` to add argv-prefix allowlists, denylists,
 input-bound approvals, or verify-before-final gates for selected commands.
 
 For longer-lived commands such as dev servers or watch jobs, the same package
-also provides `start_command`, `read_command_output`, `stop_command`, and
-`list_commands` over host-owned session interfaces. This keeps background
+also provides `start_command`, `write_command_input`,
+`read_command_output`, `stop_command`, and `list_commands` over host-owned
+session interfaces. This keeps background
 process lifecycle explicit and transcript-visible instead of hiding it behind a
 single opaque shell tool. `commandtools.OSSessionManager` is the reference
 local adapter: it launches argv directly, applies rooted cwd resolution,
-retains bounded stdout/stderr chunks with drop accounting, and supports start,
-read, stop, list, and cleanup over real local processes. Like `OSRunner`, it
-is not a sandbox and does not filter executables, arguments, or system access.
+retains bounded stdout/stderr chunks with drop accounting, keeps stdin open for
+interactive writes, and supports start, write, read, stop, list, and cleanup
+over real local processes. Like `OSRunner`, it is not a sandbox and does not
+filter executables, arguments, or system access.
 Graceful stop is best-effort and platform dependent; on Unix it attempts an
 interrupt before forcing termination, while some Windows processes fall back to
 forced termination immediately.

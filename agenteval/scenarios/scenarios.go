@@ -61,6 +61,7 @@ func All() []agenteval.Case {
 		WorkspaceVerificationRollback(),
 		CommandTestRepairLoop(),
 		CommandSessionRepairLoop(),
+		CommandSessionInteractiveRepairLoop(),
 		CommandApprovalPolicyRecovery(),
 		CommandVerifyBeforeFinalPolicyRecovery(),
 		OpenAIProviderTextAndUsage(),

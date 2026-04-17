@@ -30,7 +30,8 @@ configured:
    `EventApprovalGranted` or `EventApprovalDenied`. A later tool result that
    consumes an approval grant can be followed by `EventApprovalConsumed`.
    Command tool results can be followed by `EventCommandFinished`,
-   `EventCommandStarted`, `EventCommandOutput`, or `EventCommandStopped`.
+   `EventCommandStarted`, `EventCommandInput`, `EventCommandOutput`, or
+   `EventCommandStopped`.
 7. If the assistant returns a final answer, before-final hooks can deny
    finalization. A denial appends a user repair prompt and starts the next turn;
    no `EventResult` or terminal `EventError` is emitted for that denial unless
@@ -106,11 +107,11 @@ Command events are metadata-derived from `run_command` and compatible custom
 command tools. `EventCommandFinished` carries argv, cwd, exit code, timeout
 status, duration, retained output byte counts, and truncation status.
 Managed-session command tools can additionally emit `EventCommandStarted`,
-`EventCommandOutput`, and `EventCommandStopped` with a command session ID,
-status, optional PID, next output sequence, returned chunk count, and dropped
-buffer accounting. Command stdout/stderr remain in the paired `EventToolResult`,
-preserving the normal transcript-visible tool contract while giving hosts
-structured process status.
+`EventCommandInput`, `EventCommandOutput`, and `EventCommandStopped` with a
+command session ID, status, optional PID, next output sequence, stdin byte
+count, returned chunk count, and dropped buffer accounting. Command
+stdout/stderr remain in the paired `EventToolResult`, preserving the normal
+transcript-visible tool contract while giving hosts structured process status.
 
 Approval events are metadata-derived from `request_approval` results and from
 policy metadata attached to later tool results. Request events expose the action,
@@ -145,7 +146,7 @@ Important metric names include:
   `memax.workspace.checkpoint`, `memax.workspace.restore`
 - `memax.verification.run`
 - `memax.command.finished`, `memax.command.started`,
-  `memax.command.output`, `memax.command.stopped`,
+  `memax.command.input`, `memax.command.output`, `memax.command.stopped`,
   `memax.command.duration_ms`
 - `memax.approval.requests`, `memax.approval.grants`,
   `memax.approval.denials`, `memax.approval.consumed`
@@ -170,7 +171,7 @@ The public event contract is protected by golden tests:
 - `testdata/golden/verification_event_stream.json` covers failed verification
   as a tool error plus verification event ordering.
 - `testdata/golden/command_session_event_stream.json` covers managed command
-  session start, output read, and stop ordering.
+  session start, interactive stdin write, and stop ordering.
 
 When adding a new event kind or changing event order, update the docs and golden
 files in the same change.

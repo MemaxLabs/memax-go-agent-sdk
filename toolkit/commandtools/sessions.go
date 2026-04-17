@@ -20,6 +20,9 @@ const (
 	// StartToolName is the default tool name for starting a managed command
 	// session that can be inspected or stopped in later turns.
 	StartToolName = "start_command"
+	// WriteInputToolName is the default tool name for writing stdin to a managed
+	// command session and optionally waiting briefly for fresh output.
+	WriteInputToolName = "write_command_input"
 	// ReadOutputToolName is the default tool name for reading buffered output
 	// from a managed command session.
 	ReadOutputToolName = "read_command_output"
@@ -32,6 +35,7 @@ const (
 
 	defaultReadChunks     = 32
 	defaultReadBytes      = 16 * 1024
+	defaultWriteYield     = 250 * time.Millisecond
 	defaultSessionTimeout = time.Hour
 )
 
@@ -42,6 +46,7 @@ const (
 	MetadataCommandPID           = model.MetadataCommandPID
 	MetadataCommandStartedAt     = model.MetadataCommandStartedAt
 	MetadataCommandFinishedAt    = model.MetadataCommandFinishedAt
+	MetadataCommandInputBytes    = model.MetadataCommandInputBytes
 	MetadataCommandNextSeq       = model.MetadataCommandNextSeq
 	MetadataCommandOutputChunks  = model.MetadataCommandOutputChunks
 	MetadataCommandDroppedChunks = model.MetadataCommandDroppedChunks
@@ -118,6 +123,27 @@ type ReadResult struct {
 	NextSeq int
 }
 
+// WriteRequest writes stdin to a managed command session and can optionally
+// wait briefly for fresh output produced after the write.
+type WriteRequest struct {
+	ID              string
+	SessionID       string
+	ParentSessionID string
+	Identity        identity.Identity
+	Input           string
+	Yield           time.Duration
+	MaxChunks       int
+	MaxBytes        int
+}
+
+// WriteResult contains any new output observed after a write request.
+type WriteResult struct {
+	Session    CommandSession
+	Chunks     []OutputChunk
+	NextSeq    int
+	InputBytes int
+}
+
 // StopRequest stops a managed command session.
 type StopRequest struct {
 	ID              string
@@ -146,6 +172,11 @@ type Reader interface {
 	ReadCommandOutput(context.Context, ReadRequest) (ReadResult, error)
 }
 
+// Writer writes stdin to a running managed command session.
+type Writer interface {
+	WriteCommandInput(context.Context, WriteRequest) (WriteResult, error)
+}
+
 // Stopper stops managed command sessions.
 type Stopper interface {
 	StopCommand(context.Context, StopRequest) (CommandSession, error)
@@ -162,9 +193,10 @@ type Cleaner interface {
 	CleanupSession(context.Context, string) error
 }
 
-// SessionManager is the convenience full-surface interface for managed command
+// SessionManager is the convenience baseline interface for managed command
 // session tools. Hosts can still expose narrower capabilities by using the
-// individual New*Tool constructors.
+// individual New*Tool constructors. NewSessionTools also installs
+// write_command_input when the provided manager implements Writer.
 type SessionManager interface {
 	Starter
 	Reader
@@ -179,12 +211,16 @@ func NewSessionTools(manager SessionManager) ([]tool.Tool, error) {
 	if manager == nil {
 		return nil, fmt.Errorf("commandtools: session manager is required")
 	}
-	return []tool.Tool{
+	tools := []tool.Tool{
 		NewStartTool(manager),
 		NewReadOutputTool(manager),
 		NewStopTool(manager),
 		NewListTool(manager),
-	}, nil
+	}
+	if writer, ok := any(manager).(Writer); ok {
+		tools = append(tools, NewWriteInputTool(writer))
+	}
+	return tools, nil
 }
 
 // SessionCleanupOptions returns hook options that call cleaner when the agent
@@ -268,6 +304,86 @@ func NewReadOutputTool(reader Reader) tool.Tool {
 				return model.ToolResult{}, err
 			}
 			return readResult(result), nil
+		},
+	}
+}
+
+// NewWriteInputTool returns a tool that writes stdin to a managed command
+// session and can wait briefly for output produced after the write began.
+func NewWriteInputTool(writer Writer) tool.Tool {
+	return tool.Definition{
+		ToolSpec: model.ToolSpec{
+			Name:           WriteInputToolName,
+			Description:    "Write input to a managed command session and optionally wait briefly for new output.",
+			SearchHint:     "write send input stdin interact command session process watcher repl terminal",
+			Destructive:    true,
+			MaxResultBytes: 32 * 1024,
+			InputSchema: map[string]any{
+				"type":                 "object",
+				"required":             []any{"id"},
+				"additionalProperties": false,
+				"properties": map[string]any{
+					"id": map[string]any{
+						"type":        "string",
+						"description": "Command session ID returned by start_command.",
+						"minLength":   1,
+					},
+					"input": map[string]any{
+						"type":        "string",
+						"description": "Text to write to stdin. It may be empty when only waiting for fresh output.",
+					},
+					"append_newline": map[string]any{
+						"type":        "boolean",
+						"description": "Append a trailing newline after input. Useful for line-oriented REPLs and watch commands.",
+					},
+					"yield_ms": map[string]any{
+						"type":        "integer",
+						"description": "Optional time to wait for fresh output after writing. Defaults to a short wait when omitted; set to 0 to disable waiting.",
+						"minimum":     0,
+					},
+					"limit": map[string]any{
+						"type":        "integer",
+						"description": "Optional maximum number of chunks to return.",
+						"minimum":     1,
+					},
+					"max_bytes": map[string]any{
+						"type":        "integer",
+						"description": "Optional approximate retained byte budget for returned chunk text.",
+						"minimum":     1,
+					},
+				},
+			},
+		},
+		Handler: func(ctx context.Context, call tool.Call) (model.ToolResult, error) {
+			input, err := tool.DecodeInput[writeInput](call.Use)
+			if err != nil {
+				return model.ToolResult{}, err
+			}
+			req := WriteRequest{
+				ID:              strings.TrimSpace(input.ID),
+				SessionID:       call.Runtime.SessionID,
+				ParentSessionID: call.Runtime.ParentSessionID,
+				Identity:        call.Runtime.Identity,
+				Input:           input.Input,
+				MaxChunks:       input.Limit,
+				MaxBytes:        input.MaxBytes,
+			}
+			if req.ID == "" {
+				return model.ToolResult{}, fmt.Errorf("commandtools: id is required")
+			}
+			if input.AppendNewline {
+				req.Input += "\n"
+			}
+			if input.YieldMS == nil {
+				req.Yield = defaultWriteYield
+			} else {
+				req.Yield = time.Duration(*input.YieldMS) * time.Millisecond
+			}
+			result, err := writer.WriteCommandInput(ctx, req)
+			if err != nil {
+				return model.ToolResult{}, err
+			}
+			return writeResult(result), nil
 		},
 	}
 }
@@ -385,6 +501,15 @@ type readInput struct {
 	AfterSeq int    `json:"after_seq"`
 	Limit    int    `json:"limit"`
 	MaxBytes int    `json:"max_bytes"`
+}
+
+type writeInput struct {
+	ID            string `json:"id"`
+	Input         string `json:"input"`
+	AppendNewline bool   `json:"append_newline"`
+	YieldMS       *int   `json:"yield_ms"`
+	Limit         int    `json:"limit"`
+	MaxBytes      int    `json:"max_bytes"`
 }
 
 type stopInput struct {
@@ -543,6 +668,18 @@ func readResult(result ReadResult) model.ToolResult {
 	}
 }
 
+func writeResult(result WriteResult) model.ToolResult {
+	metadata := sessionMetadata(result.Session)
+	metadata[MetadataCommandOperation] = "write"
+	metadata[MetadataCommandInputBytes] = result.InputBytes
+	metadata[MetadataCommandNextSeq] = result.NextSeq
+	metadata[MetadataCommandOutputChunks] = len(result.Chunks)
+	return model.ToolResult{
+		Content:  formatSessionWrite(result),
+		Metadata: metadata,
+	}
+}
+
 func stopResult(session CommandSession) model.ToolResult {
 	metadata := sessionMetadata(session)
 	metadata[MetadataCommandOperation] = "stop"
@@ -640,6 +777,25 @@ func formatSessionRead(result ReadResult) string {
 	return b.String()
 }
 
+func formatSessionWrite(result WriteResult) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "wrote input to command session %s: %s", result.Session.ID, strings.Join(result.Session.Argv, " "))
+	fmt.Fprintf(&b, "\nstatus: %s", result.Session.Status)
+	fmt.Fprintf(&b, "\ninput_bytes: %d", result.InputBytes)
+	fmt.Fprintf(&b, "\nnext_seq: %d", result.NextSeq)
+	if result.Session.DroppedChunks > 0 {
+		fmt.Fprintf(&b, "\ndropped_chunks: %d", result.Session.DroppedChunks)
+	}
+	if len(result.Chunks) == 0 {
+		b.WriteString("\nno new output")
+		return b.String()
+	}
+	for _, chunk := range result.Chunks {
+		fmt.Fprintf(&b, "\n[%s #%d]\n%s", chunk.Stream, chunk.Seq, chunk.Text)
+	}
+	return b.String()
+}
+
 func formatSessionStop(session CommandSession) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "stopped command session %s: %s", session.ID, strings.Join(session.Argv, " "))
@@ -662,12 +818,20 @@ type ScriptedOutputPage struct {
 	TimedOut bool
 }
 
+// ScriptedWritePage is one deterministic write interaction returned by a
+// ScriptedSessionManager.
+type ScriptedWritePage struct {
+	Page  ScriptedOutputPage
+	Error string
+}
+
 // ScriptedCommand describes one managed command session for deterministic
 // tests and evals.
 type ScriptedCommand struct {
 	ID           string
 	PID          int
 	Pages        []ScriptedOutputPage
+	WritePages   []ScriptedWritePage
 	StopExitCode *int
 	StopTimedOut bool
 }
@@ -679,6 +843,7 @@ type ScriptedSessionManager struct {
 	commands      []ScriptedCommand
 	sessions      map[string]*scriptedSessionState
 	startRequests []StartRequest
+	writeRequests []WriteRequest
 	readRequests  []ReadRequest
 	stopRequests  []StopRequest
 }
@@ -687,6 +852,8 @@ type scriptedSessionState struct {
 	session  CommandSession
 	pages    []ScriptedOutputPage
 	page     int
+	writes   []ScriptedWritePage
+	write    int
 	stopExit *int
 	stopTime bool
 }
@@ -737,6 +904,7 @@ func (m *ScriptedSessionManager) StartCommand(ctx context.Context, req StartRequ
 			StartedAt:       now,
 		},
 		pages:    cloneOutputPages(cmd.Pages),
+		writes:   cloneWritePages(cmd.WritePages),
 		stopExit: cloneIntPtr(cmd.StopExitCode),
 		stopTime: cmd.StopTimedOut,
 	}
@@ -777,6 +945,53 @@ func (m *ScriptedSessionManager) ReadCommandOutput(ctx context.Context, req Read
 		Session: cloneSession(state.session),
 		Chunks:  cloneOutputChunks(chunks),
 		NextSeq: state.session.NextSeq,
+	}, nil
+}
+
+func (m *ScriptedSessionManager) WriteCommandInput(ctx context.Context, req WriteRequest) (WriteResult, error) {
+	if err := ctx.Err(); err != nil {
+		return WriteResult{}, err
+	}
+	if m == nil {
+		return WriteResult{}, fmt.Errorf("commandtools: nil ScriptedSessionManager")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.writeRequests = append(m.writeRequests, cloneWriteRequest(req))
+	state, err := m.lookupSession(req.SessionID, req.ID)
+	if err != nil {
+		return WriteResult{}, err
+	}
+	if state.session.Status != SessionRunning {
+		return WriteResult{
+			Session:    cloneSession(state.session),
+			NextSeq:    state.session.NextSeq,
+			InputBytes: len(req.Input),
+		}, nil
+	}
+	page := ScriptedWritePage{}
+	if state.write < len(state.writes) {
+		page = cloneWritePage(state.writes[state.write])
+		state.write++
+	}
+	if page.Error != "" {
+		return WriteResult{}, fmt.Errorf("commandtools: %s", page.Error)
+	}
+	limitChunks := req.MaxChunks
+	if limitChunks <= 0 {
+		limitChunks = defaultReadChunks
+	}
+	maxBytes := req.MaxBytes
+	if maxBytes <= 0 {
+		maxBytes = defaultReadBytes
+	}
+	chunks := limitOutputChunks(page.Page.Chunks, limitChunks, maxBytes)
+	updateSessionFromPage(&state.session, page.Page, chunks)
+	return WriteResult{
+		Session:    cloneSession(state.session),
+		Chunks:     cloneOutputChunks(chunks),
+		NextSeq:    state.session.NextSeq,
+		InputBytes: len(req.Input),
 	}, nil
 }
 
@@ -875,6 +1090,20 @@ func (m *ScriptedSessionManager) ReadRequests() []ReadRequest {
 	return out
 }
 
+// WriteRequests returns captured write requests.
+func (m *ScriptedSessionManager) WriteRequests() []WriteRequest {
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]WriteRequest, len(m.writeRequests))
+	for i, req := range m.writeRequests {
+		out[i] = cloneWriteRequest(req)
+	}
+	return out
+}
+
 // StopRequests returns captured stop requests.
 func (m *ScriptedSessionManager) StopRequests() []StopRequest {
 	if m == nil {
@@ -953,11 +1182,30 @@ func cloneScriptedCommands(commands []ScriptedCommand) []ScriptedCommand {
 			ID:           command.ID,
 			PID:          command.PID,
 			Pages:        cloneOutputPages(command.Pages),
+			WritePages:   cloneWritePages(command.WritePages),
 			StopExitCode: cloneIntPtr(command.StopExitCode),
 			StopTimedOut: command.StopTimedOut,
 		}
 	}
 	return out
+}
+
+func cloneWritePages(pages []ScriptedWritePage) []ScriptedWritePage {
+	if len(pages) == 0 {
+		return nil
+	}
+	out := make([]ScriptedWritePage, len(pages))
+	for i, page := range pages {
+		out[i] = cloneWritePage(page)
+	}
+	return out
+}
+
+func cloneWritePage(page ScriptedWritePage) ScriptedWritePage {
+	return ScriptedWritePage{
+		Page:  cloneOutputPage(page.Page),
+		Error: page.Error,
+	}
 }
 
 func cloneOutputPages(pages []ScriptedOutputPage) []ScriptedOutputPage {
@@ -1028,5 +1276,7 @@ func cloneStartRequest(req StartRequest) StartRequest {
 }
 
 func cloneReadRequest(req ReadRequest) ReadRequest { return req }
+
+func cloneWriteRequest(req WriteRequest) WriteRequest { return req }
 
 func cloneStopRequest(req StopRequest) StopRequest { return req }

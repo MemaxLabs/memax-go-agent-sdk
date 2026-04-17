@@ -20,6 +20,10 @@ const (
 	defaultSessionMaxBufferedBytes  = 256 * 1024
 	defaultSessionMaxBufferedChunks = 256
 	defaultSessionReadChunkBytes    = 4 * 1024
+	// After a write produces output, allow a short extra window for cmd.Wait to
+	// observe a nearly-immediate process exit so write_command_input can return a
+	// stable exited session instead of racing the final state handoff.
+	postWriteSettleWindow = 100 * time.Millisecond
 )
 
 // OSSessionManager runs managed command sessions on the local operating
@@ -169,18 +173,22 @@ func (m *OSSessionManager) StartCommand(ctx context.Context, req StartRequest) (
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = cwd
 	cmd.Env = m.runner.env(req.Env)
-	if req.Stdin != "" {
-		cmd.Stdin = strings.NewReader(req.Stdin)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return CommandSession{}, fmt.Errorf("commandtools: stdin pipe: %w", err)
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		_ = stdin.Close()
 		return CommandSession{}, fmt.Errorf("commandtools: stdout pipe: %w", err)
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
+		_ = stdin.Close()
 		return CommandSession{}, fmt.Errorf("commandtools: stderr pipe: %w", err)
 	}
 	if err := cmd.Start(); err != nil {
+		_ = stdin.Close()
 		return CommandSession{}, fmt.Errorf("commandtools: start command: %w", err)
 	}
 
@@ -188,6 +196,7 @@ func (m *OSSessionManager) StartCommand(ctx context.Context, req StartRequest) (
 	state := &osSessionState{
 		manager: m,
 		cmd:     cmd,
+		stdin:   stdin,
 		session: CommandSession{
 			SessionID:       req.SessionID,
 			ParentSessionID: req.ParentSessionID,
@@ -200,7 +209,8 @@ func (m *OSSessionManager) StartCommand(ctx context.Context, req StartRequest) (
 			StartedAt:       now,
 			NextSeq:         1,
 		},
-		done: make(chan struct{}),
+		done:    make(chan struct{}),
+		updates: make(chan struct{}, 1),
 	}
 	if timeout > 0 {
 		state.timer = time.AfterFunc(timeout, state.timeout)
@@ -228,6 +238,14 @@ func (m *OSSessionManager) StartCommand(ctx context.Context, req StartRequest) (
 	m.sessions[id] = state
 	m.mu.Unlock()
 
+	if req.Stdin != "" {
+		if _, err := io.WriteString(stdin, req.Stdin); err != nil {
+			_ = cmd.Process.Kill()
+			_, _ = cmd.Process.Wait()
+			return CommandSession{}, fmt.Errorf("commandtools: write initial stdin: %w", err)
+		}
+	}
+
 	stdoutDone := make(chan struct{})
 	stderrDone := make(chan struct{})
 	go state.captureStream("stdout", stdout, stdoutDone)
@@ -254,6 +272,26 @@ func (m *OSSessionManager) ReadCommandOutput(ctx context.Context, req ReadReques
 		return ReadResult{}, err
 	}
 	return state.read(req.AfterSeq, req.MaxChunks, req.MaxBytes), nil
+}
+
+func (m *OSSessionManager) WriteCommandInput(ctx context.Context, req WriteRequest) (WriteResult, error) {
+	if err := ctx.Err(); err != nil {
+		return WriteResult{}, err
+	}
+	if m == nil {
+		return WriteResult{}, fmt.Errorf("commandtools: nil OSSessionManager")
+	}
+	if req.Yield < 0 {
+		return WriteResult{}, fmt.Errorf("commandtools: yield must be non-negative")
+	}
+	if err := validateStdin(req.Input, m.maxStdinBytes); err != nil {
+		return WriteResult{}, err
+	}
+	state, err := m.lookupSession(req.SessionID, req.ID)
+	if err != nil {
+		return WriteResult{}, err
+	}
+	return state.writeInput(ctx, req)
 }
 
 func (m *OSSessionManager) StopCommand(ctx context.Context, req StopRequest) (CommandSession, error) {
@@ -355,14 +393,17 @@ type osSessionState struct {
 	manager       *OSSessionManager
 	mu            sync.RWMutex
 	cmd           *exec.Cmd
+	stdin         io.WriteCloser
 	session       CommandSession
 	output        []OutputChunk
 	bufferBytes   int
 	stopRequested bool
 	timedOut      bool
 	done          chan struct{}
+	updates       chan struct{}
 	timer         *time.Timer
 	finishOnce    sync.Once
+	stdinMu       sync.Mutex
 }
 
 func (s *osSessionState) snapshot() CommandSession {
@@ -401,6 +442,109 @@ func (s *osSessionState) read(afterSeq, maxChunks, maxBytes int) ReadResult {
 		Chunks:  chunks,
 		NextSeq: session.NextSeq,
 	}
+}
+
+func (s *osSessionState) writeInput(ctx context.Context, req WriteRequest) (WriteResult, error) {
+	session := s.snapshot()
+	if session.Status != SessionRunning {
+		return WriteResult{
+			Session:    session,
+			NextSeq:    session.NextSeq,
+			InputBytes: len(req.Input),
+		}, nil
+	}
+	afterSeq := maxInt(0, session.NextSeq-1)
+	if req.Input != "" {
+		s.stdinMu.Lock()
+		stdin := s.stdin
+		if stdin == nil {
+			s.stdinMu.Unlock()
+			return WriteResult{}, fmt.Errorf("commandtools: command session %s stdin is closed", session.ID)
+		}
+		_, err := io.WriteString(stdin, req.Input)
+		s.stdinMu.Unlock()
+		if err != nil {
+			return WriteResult{}, fmt.Errorf("commandtools: write input to command session %s: %w", session.ID, err)
+		}
+	}
+	if err := s.waitForUpdate(ctx, afterSeq, req.Yield); err != nil {
+		return WriteResult{}, err
+	}
+	result := s.read(afterSeq, req.MaxChunks, req.MaxBytes)
+	return WriteResult{
+		Session:    result.Session,
+		Chunks:     result.Chunks,
+		NextSeq:    result.NextSeq,
+		InputBytes: len(req.Input),
+	}, nil
+}
+
+func (s *osSessionState) waitForUpdate(ctx context.Context, afterSeq int, yield time.Duration) error {
+	if yield <= 0 {
+		return nil
+	}
+	deadline := time.NewTimer(yield + postWriteSettleWindow)
+	defer deadline.Stop()
+	var settleTimer *time.Timer
+	var settle <-chan time.Time
+	defer func() {
+		if settleTimer != nil {
+			settleTimer.Stop()
+		}
+	}()
+	advanced := false
+	resetSettle := func() {
+		if settleTimer == nil {
+			settleTimer = time.NewTimer(postWriteSettleWindow)
+			settle = settleTimer.C
+			return
+		}
+		if !settleTimer.Stop() {
+			select {
+			case <-settleTimer.C:
+			default:
+			}
+		}
+		settleTimer.Reset(postWriteSettleWindow)
+	}
+	for {
+		if s.hasAdvanced(afterSeq) {
+			advanced = true
+			resetSettle()
+		}
+		if advanced && !s.isRunning() {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-s.done:
+			return nil
+		case <-s.updates:
+			if s.hasAdvanced(afterSeq) {
+				advanced = true
+				resetSettle()
+			}
+		case <-settle:
+			if advanced {
+				return nil
+			}
+		case <-deadline.C:
+			return nil
+		}
+	}
+}
+
+func (s *osSessionState) hasAdvanced(afterSeq int) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.session.NextSeq-1 > afterSeq || s.session.Status != SessionRunning
+}
+
+func (s *osSessionState) isRunning() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.session.Status == SessionRunning
 }
 
 func (s *osSessionState) stop(ctx context.Context, force bool) (CommandSession, error) {
@@ -525,6 +669,7 @@ func (s *osSessionState) appendOutput(stream, text string) {
 		s.session.DroppedChunks++
 		s.session.DroppedBytes += len(dropped.Text)
 	}
+	s.signalUpdate()
 }
 
 func (s *osSessionState) finish(waitErr error) {
@@ -544,6 +689,30 @@ func (s *osSessionState) finish(waitErr error) {
 		s.session.ExitCode = &exit
 		s.session.TimedOut = s.timedOut
 		s.mu.Unlock()
+		s.stdinMu.Lock()
+		if s.stdin != nil {
+			_ = s.stdin.Close()
+			s.stdin = nil
+		}
+		s.stdinMu.Unlock()
+		s.signalUpdate()
 		close(s.done)
 	})
+}
+
+func (s *osSessionState) signalUpdate() {
+	if s == nil || s.updates == nil {
+		return
+	}
+	select {
+	case s.updates <- struct{}{}:
+	default:
+	}
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }

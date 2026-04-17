@@ -82,6 +82,9 @@ const (
 	// EventCommandOutput is emitted when read_command_output returns buffered
 	// output for a managed command session.
 	EventCommandOutput EventKind = "command_output"
+	// EventCommandInput is emitted when write_command_input writes stdin to a
+	// managed command session and optionally observes fresh output.
+	EventCommandInput EventKind = "command_input"
 	// EventCommandStopped is emitted when stop_command stops a managed command
 	// session.
 	EventCommandStopped EventKind = "command_stopped"
@@ -198,10 +201,11 @@ type ApprovalSummaryEvent struct {
 
 // CommandEvent describes one host-owned command lifecycle observation.
 // `run_command` uses Action "run" and populates process status fields.
-// Managed command sessions populate Action "start", "read", or "stop" plus
-// CommandID, Status, PID, NextSeq, OutputChunks, DroppedChunks, and
-// DroppedBytes as appropriate. Command output text remains in the paired
-// EventToolResult so transcript-visible tool behavior stays explicit.
+// Managed command sessions populate Action "start", "write", "read", or
+// "stop" plus CommandID, Status, PID, NextSeq, OutputChunks, DroppedChunks,
+// and DroppedBytes as appropriate. "write" additionally sets InputBytes.
+// Command output text remains in the paired EventToolResult so
+// transcript-visible tool behavior stays explicit.
 type CommandEvent struct {
 	Operation       string
 	CommandID       string
@@ -209,6 +213,7 @@ type CommandEvent struct {
 	CWD             string
 	Status          string
 	PID             int
+	InputBytes      int
 	ExitCode        int
 	TimedOut        bool
 	DurationMS      int

@@ -212,6 +212,9 @@ const (
 	// MetadataCommandFinishedAt carries the command session finish time in
 	// RFC3339Nano format when known.
 	MetadataCommandFinishedAt = "command_finished_at"
+	// MetadataCommandInputBytes carries the number of stdin bytes written by a
+	// write_command_input result.
+	MetadataCommandInputBytes = "command_input_bytes"
 	// MetadataCommandNextSeq carries the next output sequence number visible to
 	// a later read_command_output call.
 	MetadataCommandNextSeq = "command_next_seq"
