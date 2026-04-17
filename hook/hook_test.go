@@ -55,6 +55,29 @@ func TestAfterToolUseRunsAllHooks(t *testing.T) {
 	}
 }
 
+func TestBeforeFinalShortCircuitsOnDenial(t *testing.T) {
+	runner := NewRunner()
+	runner.AddBeforeFinal(func(context.Context, BeforeFinalInput) (BeforeFinalResult, error) {
+		return BeforeFinalResult{DenyReason: "verify first"}, nil
+	})
+	runner.AddBeforeFinal(func(context.Context, BeforeFinalInput) (BeforeFinalResult, error) {
+		t.Fatal("second hook should not run")
+		return BeforeFinalResult{}, nil
+	})
+
+	result, err := runner.BeforeFinal(context.Background(), BeforeFinalInput{
+		SessionID: "session-1",
+		Turn:      2,
+		Answer:    "done",
+	})
+	if err != nil {
+		t.Fatalf("BeforeFinal returned error: %v", err)
+	}
+	if result.DenyReason != "verify first" {
+		t.Fatalf("DenyReason = %q, want verify first", result.DenyReason)
+	}
+}
+
 func TestUserPromptCanRewritePrompt(t *testing.T) {
 	runner := NewRunner(WithUserPrompt(func(_ context.Context, input UserPromptInput) (UserPromptResult, error) {
 		return UserPromptResult{Prompt: input.Prompt + " rewritten"}, nil

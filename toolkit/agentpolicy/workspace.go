@@ -17,6 +17,7 @@ import (
 )
 
 const checkpointBeforePatchReason = "create a workspace checkpoint before applying patches"
+const verifyBeforeFinalReason = "run workspace verification successfully after the latest workspace change before finalizing"
 
 const (
 	// MetadataRollbackRecommended marks verification results where rollback
@@ -140,6 +141,125 @@ func CheckpointBeforePatchReason() string {
 type RollbackOnFailedVerification struct {
 	mu          sync.RWMutex
 	checkpoints map[string]string
+}
+
+// VerifyBeforeFinal tracks workspace changes and denies final answers until a
+// successful verification result has been observed after the latest mutation.
+// It is recommendation-free and execution-free: the model must call the
+// configured verification tool itself through the normal tool pipeline.
+type VerifyBeforeFinal struct {
+	mu    sync.RWMutex
+	dirty map[string]bool
+}
+
+// RequireVerificationBeforeFinal returns a policy that can be installed into a
+// hook runner with hook.NewRunner(policy.Options()...). It treats successful
+// mutating workspace patches and restores as requiring verification; successful
+// verification clears the requirement for that session.
+func RequireVerificationBeforeFinal() *VerifyBeforeFinal {
+	return &VerifyBeforeFinal{dirty: map[string]bool{}}
+}
+
+// Options returns hook options for tracking workspace verification readiness
+// and denying premature final answers.
+func (p *VerifyBeforeFinal) Options() []hook.Option {
+	return []hook.Option{
+		hook.WithAfterToolUse(p.AfterToolUse),
+		hook.WithBeforeFinal(p.BeforeFinal),
+		hook.WithSessionEnded(p.SessionEnded),
+	}
+}
+
+// AfterToolUse records workspace mutation and verification results.
+func (p *VerifyBeforeFinal) AfterToolUse(ctx context.Context, input hook.AfterToolUseInput) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if input.SessionID == "" || input.Result.IsError {
+		return nil
+	}
+	if operation, _ := input.Result.Metadata[model.MetadataWorkspaceOperation].(string); isVerificationRequiredWorkspaceOperation(operation, input.Result.Metadata) {
+		p.setDirty(input.SessionID, true)
+		return nil
+	}
+	if operation, _ := input.Result.Metadata[model.MetadataVerificationOperation].(string); operation == "verify" {
+		if passed, _ := input.Result.Metadata[model.MetadataVerificationPassed].(bool); passed {
+			p.setDirty(input.SessionID, false)
+		}
+	}
+	return nil
+}
+
+// BeforeFinal denies finalization when the current session has unverified
+// workspace mutations.
+func (p *VerifyBeforeFinal) BeforeFinal(ctx context.Context, input hook.BeforeFinalInput) (hook.BeforeFinalResult, error) {
+	if err := ctx.Err(); err != nil {
+		return hook.BeforeFinalResult{}, err
+	}
+	if p.isDirty(input.SessionID) {
+		return hook.BeforeFinalResult{DenyReason: verifyBeforeFinalReason}, nil
+	}
+	return hook.BeforeFinalResult{}, nil
+}
+
+// SessionEnded removes verification state for the completed session.
+func (p *VerifyBeforeFinal) SessionEnded(_ context.Context, input hook.SessionEndedInput) error {
+	p.Reset(input.SessionID)
+	return nil
+}
+
+// Reset removes verification state for sessionID. It is safe to call on a nil
+// policy or with an empty session ID.
+func (p *VerifyBeforeFinal) Reset(sessionID string) {
+	if p == nil || sessionID == "" {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	delete(p.dirty, sessionID)
+}
+
+func (p *VerifyBeforeFinal) setDirty(sessionID string, dirty bool) {
+	if p == nil || sessionID == "" {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.dirty == nil {
+		p.dirty = map[string]bool{}
+	}
+	if dirty {
+		p.dirty[sessionID] = true
+		return
+	}
+	delete(p.dirty, sessionID)
+}
+
+func (p *VerifyBeforeFinal) isDirty(sessionID string) bool {
+	if p == nil || sessionID == "" {
+		return false
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.dirty[sessionID]
+}
+
+func isVerificationRequiredWorkspaceOperation(operation string, metadata map[string]any) bool {
+	switch operation {
+	case "restore":
+		return true
+	case "patch":
+		dryRun, _ := metadata["dry_run"].(bool)
+		return !dryRun
+	default:
+		return false
+	}
+}
+
+// VerifyBeforeFinalReason returns the model-visible denial reason used by
+// RequireVerificationBeforeFinal. It is exported for tests and host UI copy.
+func VerifyBeforeFinalReason() string {
+	return verifyBeforeFinalReason
 }
 
 // RecommendRollbackOnFailedVerification returns a rollback recommendation

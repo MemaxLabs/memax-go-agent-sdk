@@ -37,6 +37,24 @@ type AfterToolUseInput struct {
 // changed external state.
 type AfterToolUseFunc func(context.Context, AfterToolUseInput) error
 
+type BeforeFinalInput struct {
+	SessionID string
+	Turn      int
+	Answer    string
+}
+
+// BeforeFinalResult controls whether a final answer may complete the run.
+type BeforeFinalResult struct {
+	// DenyReason blocks finalization when non-empty. The reason is appended to
+	// the transcript as a user repair prompt so the agent can recover with
+	// normal tool calls in a later turn.
+	DenyReason string
+}
+
+// BeforeFinalFunc runs after the model produces a no-tool assistant response
+// and before output validation, memory distillation, and EventResult.
+type BeforeFinalFunc func(context.Context, BeforeFinalInput) (BeforeFinalResult, error)
+
 type SessionStartedInput struct {
 	SessionID string
 }
@@ -96,6 +114,7 @@ type Runner struct {
 	mu             sync.RWMutex
 	before         []BeforeToolUseFunc
 	after          []AfterToolUseFunc
+	beforeFinal    []BeforeFinalFunc
 	sessionStarted []SessionStartedFunc
 	sessionEnded   []SessionEndedFunc
 	userPrompt     []UserPromptFunc
@@ -125,6 +144,13 @@ func WithBeforeToolUse(fn BeforeToolUseFunc) Option {
 func WithAfterToolUse(fn AfterToolUseFunc) Option {
 	return func(r *Runner) {
 		r.AddAfterToolUse(fn)
+	}
+}
+
+// WithBeforeFinal registers a before-final hook.
+func WithBeforeFinal(fn BeforeFinalFunc) Option {
+	return func(r *Runner) {
+		r.AddBeforeFinal(fn)
 	}
 }
 
@@ -181,6 +207,16 @@ func (r *Runner) AddAfterToolUse(fn AfterToolUseFunc) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.after = append(r.after, fn)
+}
+
+// AddBeforeFinal appends a before-final hook.
+func (r *Runner) AddBeforeFinal(fn BeforeFinalFunc) {
+	if r == nil || fn == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.beforeFinal = append(r.beforeFinal, fn)
 }
 
 // AddSessionStarted appends a session-start hook.
@@ -256,6 +292,20 @@ func (r *Runner) AfterToolUse(ctx context.Context, input AfterToolUseInput) []er
 		}
 	}
 	return errs
+}
+
+// BeforeFinal runs before-final hooks until one denies or fails.
+func (r *Runner) BeforeFinal(ctx context.Context, input BeforeFinalInput) (BeforeFinalResult, error) {
+	for _, fn := range r.beforeFinalSnapshot() {
+		result, err := fn(ctx, input)
+		if err != nil {
+			return BeforeFinalResult{}, err
+		}
+		if result.DenyReason != "" {
+			return result, nil
+		}
+	}
+	return BeforeFinalResult{}, nil
 }
 
 // SessionStarted runs session-start hooks and returns observer errors.
@@ -337,6 +387,15 @@ func (r *Runner) afterSnapshot() []AfterToolUseFunc {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return append([]AfterToolUseFunc(nil), r.after...)
+}
+
+func (r *Runner) beforeFinalSnapshot() []BeforeFinalFunc {
+	if r == nil {
+		return nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return append([]BeforeFinalFunc(nil), r.beforeFinal...)
 }
 
 func (r *Runner) sessionStartedSnapshot() []SessionStartedFunc {

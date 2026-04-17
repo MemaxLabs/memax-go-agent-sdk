@@ -26,11 +26,14 @@ configured:
    `EventSkillResourceLoaded`. Workspace-related tool results can be followed
    by `EventWorkspacePatch`, `EventWorkspaceDiff`,
    `EventWorkspaceCheckpoint`, or `EventWorkspaceRestore`.
-7. If the assistant returns a final answer, optional `EventMemoryCandidates`
-   after successful distillation and before `EventResult`.
-8. Optional non-terminal `EventMemoryCandidateHandlerError` if the opt-in
+7. If the assistant returns a final answer, before-final hooks can deny
+   finalization. A denial appends a user repair prompt and starts the next turn;
+   no `EventResult` or terminal `EventError` is emitted for that denial.
+8. If the final answer is accepted, optional `EventMemoryCandidates` after
+   successful distillation and before `EventResult`.
+9. Optional non-terminal `EventMemoryCandidateHandlerError` if the opt-in
    candidate handler fails.
-9. `EventResult` for successful completion, or `EventError` for terminal
+10. `EventResult` for successful completion, or `EventError` for terminal
    failures.
 
 Tool-use lifecycle events are paired by `ToolUse.ID`. The complete
@@ -106,6 +109,7 @@ Important metric names include:
 - `memax.model.input_tokens`, `memax.model.output_tokens`,
   `memax.model.total_tokens`
 - `memax.budget.exceeded`
+- `memax.final.denials`
 - `memax.memory.candidates`, `memax.memory.candidate_handler.errors`
 - `memax.skill.discovery`, `memax.skill.search`, `memax.skill.loaded`,
   `memax.skill.resource_loaded`

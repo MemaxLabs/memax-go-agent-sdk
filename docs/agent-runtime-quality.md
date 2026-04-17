@@ -288,7 +288,7 @@ retrieval, usage, and review infrastructure.
 verification hints, scoped subagent plan handoff, and opt-in progress updates
 from verification or subagent results exist. Initial hook-based agent policy
 presets exist for checkpoint-before-patch recovery and rollback guidance after
-failed verification.
+failed verification, plus a verify-before-final gate for workspace mutations.
 
 **Gap:** The SDK lacks explicit policies for when to plan, update, delegate,
 verify, ask the user, or stop.
@@ -314,6 +314,8 @@ verify, ask the user, or stop.
   through normal tool results.
 - Rollback-on-failed-verification policy guidance drives explicit checkpoint
   restore through normal tool results.
+- Verify-before-final policy denial prevents premature final answers after
+  workspace mutation and drives verification through normal tool results.
 
 ### 7. Provider Fidelity and Compatibility
 

@@ -52,6 +52,7 @@ func All() []agenteval.Case {
 		WorkspaceOSStorePatchRollback(),
 		WorkspaceCheckpointPolicyRecovery(),
 		WorkspaceRollbackPolicyRecovery(),
+		WorkspaceVerifyBeforeFinalPolicyRecovery(),
 		PlannerVerificationGuidesRepair(),
 		PlannerTaskProgressFromVerification(),
 		WorkspaceVerificationRepair(),

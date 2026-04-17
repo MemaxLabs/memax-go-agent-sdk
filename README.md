@@ -454,6 +454,12 @@ does not restore automatically; rollback still happens through the normal
 `workspace_restore` tool so the transcript, permissions, hooks, and events stay
 observable.
 
+To prevent premature final answers after workspace changes, install
+`agentpolicy.RequireVerificationBeforeFinal()`. The policy tracks successful
+mutating workspace patches and restores, denies finalization until a successful
+`workspace_verify` result is observed in the same session, and appends the
+denial as a normal user repair prompt so the model can recover by calling tools.
+
 To bound an agent run across model calls, tool calls, tokens, turns, and wall
 time, set `Options.Budget`:
 

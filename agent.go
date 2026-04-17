@@ -575,6 +575,34 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 			if len(uses) == 0 {
 				cancelEarlyTools()
 				result := assistant.PlainText()
+				finalGate, err := opts.Hooks.BeforeFinal(turnCtx, hook.BeforeFinalInput{
+					SessionID: sessionID,
+					Turn:      turn,
+					Answer:    result,
+				})
+				if err != nil {
+					err = fmt.Errorf("before final hook: %w", err)
+					turnSpan.RecordError(err)
+					emitError(turnCtx, emit, sessionID, turn, err)
+					_ = finish(turn, hook.StopReasonError, err)
+					shouldStop = true
+					return
+				}
+				if finalGate.DenyReason != "" {
+					if err := appendFinalRetryPrompt(turnCtx, opts.Sessions, sessionID, finalGate.DenyReason); err != nil {
+						err = fmt.Errorf("append finalization retry prompt: %w", err)
+						turnSpan.RecordError(err)
+						emitError(turnCtx, emit, sessionID, turn, err)
+						_ = finish(turn, hook.StopReasonError, err)
+						shouldStop = true
+						return
+					}
+					opts.Meter.Add(turnCtx, "memax.final.denials", 1,
+						telemetry.String("memax.session_id", sessionID),
+						telemetry.Int("memax.turn", turn),
+					)
+					return
+				}
 				if err := outputValidator.Validate(turnCtx, result); err != nil {
 					if outputRetries < outputValidator.RetryLimit() {
 						outputRetries++
@@ -749,6 +777,24 @@ func appendOutputRetryPrompt(ctx context.Context, store session.Store, sessionID
 		Role:    model.RoleUser,
 		Content: []model.ContentBlock{{Type: model.ContentText, Text: message}},
 	})
+}
+
+func appendFinalRetryPrompt(ctx context.Context, store session.Store, sessionID string, reason string) error {
+	return store.Append(ctx, sessionID, model.Message{
+		Role: model.RoleUser,
+		Content: []model.ContentBlock{{
+			Type: model.ContentText,
+			Text: finalRetryPrompt(reason),
+		}},
+	})
+}
+
+func finalRetryPrompt(reason string) string {
+	detail := strings.TrimSpace(reason)
+	if detail == "" {
+		detail = "the final answer is not ready"
+	}
+	return "Your previous final answer cannot be accepted yet: " + detail + "\nUse the available tools to satisfy this requirement, then provide the final answer."
 }
 
 func outputRetryPrompt(err error) string {

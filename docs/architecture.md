@@ -173,7 +173,7 @@ agent loop.
 
 The optional `toolkit/checkpointtools` package provides `create_checkpoint`, `list_checkpoints`, `restore_checkpoint`, and `delete_checkpoint` over the `checkpoint.Manager` interface. The SDK's in-memory manager stores checkpoint metadata and is useful for tests; production managers should connect these operations to a virtual workspace, filesystem snapshot service, database branch, or remote sandbox. Checkpoints are not stored inside session transcripts, but checkpoint records carry session and parent-session IDs for correlation.
 
-Before-tool hooks run after validation and before permission checks. They can deny execution with a model-visible reason. After-tool hooks observe completed results; observer failures are attached to result metadata and do not convert successful tool output into a model-visible failure.
+Before-tool hooks run after validation and before permission checks. They can deny execution with a model-visible reason. After-tool hooks observe completed results; observer failures are attached to result metadata and do not convert successful tool output into a model-visible failure. Before-final hooks run when the model produces a no-tool assistant answer and before final output validation or result emission; a denial appends a normal user repair prompt so finalization gates remain transcript-visible and recoverable.
 
 Session lifecycle hooks cover session start/end, user prompt submission, stop events, and context-window application. User prompt hooks may rewrite or deny the prompt before it is persisted. Session start/end, stop, and context-applied hooks are observational; their errors are surfaced as agent errors at stable lifecycle boundaries.
 
@@ -445,6 +445,13 @@ rollback metadata and a model-visible instruction to restore the checkpoint
 before continuing. It intentionally does not restore by itself: rollback is a
 normal `workspace_restore` tool call, so permissions, hooks, telemetry, and
 session transcripts remain explicit.
+
+`RequireVerificationBeforeFinal` uses after-tool hooks to mark a session dirty
+after successful mutating workspace patches or restores, clears the dirty state
+after a successful `workspace_verify`, and uses a before-final hook to deny
+premature final answers. The denial is appended as a user repair prompt rather
+than returned as a terminal error, so the model can run verification and then
+finalize through the normal loop.
 
 ## Context Window
 

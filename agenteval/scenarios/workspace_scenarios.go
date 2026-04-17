@@ -551,6 +551,95 @@ func WorkspaceRollbackPolicyRecovery() agenteval.Case {
 	}
 }
 
+// WorkspaceVerifyBeforeFinalPolicyRecovery returns a single-use scenario where
+// the model attempts to finalize after a workspace mutation, the policy appends
+// a recoverable verification requirement, and the model verifies before
+// finalizing.
+func WorkspaceVerifyBeforeFinalPolicyRecovery() agenteval.Case {
+	store := workspace.NewMemoryStore(map[string]string{
+		"README.md": "status: broken",
+	})
+	workspaceTools, toolsErr := workspacetools.NewTools(store)
+	policy := agentpolicy.RequireVerificationBeforeFinal()
+	verifyTool := verifytools.NewTool(verifytools.Config{
+		Verifier: verifierForReadmeStatus(store, "status: fixed"),
+	})
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "patch-1",
+				Name: workspacetools.ApplyPatchToolName,
+				Input: json.RawMessage(`{"operations":[
+					{"path":"README.md","old_content":"status: broken","new_content":"status: fixed"}
+				]}`),
+			},
+		}},
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "Fixed README."}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "verify-1",
+				Name:  verifytools.ToolName,
+				Input: json.RawMessage(`{"name":"test","target":"README.md"}`),
+			},
+		}},
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "Fixed README after verification."}},
+	)
+
+	return agenteval.Case{
+		Name:   "workspace_verify_before_final_policy_recovery",
+		Prompt: "Fix README.md and do not finalize until the workspace is verified.",
+		Options: memaxagent.Options{
+			Model: modelClient,
+			Tools: tool.NewRegistry(append(workspaceTools, verifyTool)...),
+			Hooks: hook.NewRunner(policy.Options()...),
+		},
+		Assertions: []agenteval.Assertion{
+			toolConstructionSucceeded(toolsErr),
+			agenteval.ToolUsed(workspacetools.ApplyPatchToolName),
+			agenteval.ToolUsed(verifytools.ToolName),
+			agenteval.FinalEquals("Fixed README after verification."),
+			requestCountEquals(modelClient, 4),
+			{
+				Name: "finalization denial requires verification",
+				Check: func(result agenteval.Result) error {
+					results := result.ToolResults()
+					if len(results) < 2 {
+						return fmt.Errorf("tool results = %#v, want patch and verification", results)
+					}
+					if results[0].IsError || !strings.Contains(results[0].Content, "modified README.md") {
+						return fmt.Errorf("patch result = %#v, want successful patch", results[0])
+					}
+					if results[1].IsError || !strings.Contains(results[1].Content, "verification test passed") {
+						return fmt.Errorf("verification result = %#v, want passing verification", results[1])
+					}
+					requests := modelClient.Requests()
+					if len(requests) < 3 {
+						return fmt.Errorf("requests = %d, want retry prompt after denied final", len(requests))
+					}
+					retryMessages := requests[2].Messages
+					if len(retryMessages) < 4 {
+						return fmt.Errorf("retry messages = %#v, want user prompt after denied final", retryMessages)
+					}
+					last := retryMessages[len(retryMessages)-1].PlainText()
+					if !strings.Contains(last, agentpolicy.VerifyBeforeFinalReason()) {
+						return fmt.Errorf("retry prompt = %q, want verify-before-final reason", last)
+					}
+					content, err := store.ReadFile(context.Background(), "README.md")
+					if err != nil {
+						return err
+					}
+					if content != "status: fixed" {
+						return fmt.Errorf("README.md = %q, want fixed content", content)
+					}
+					return nil
+				},
+			},
+		},
+	}
+}
+
 // PlannerTaskProgressFromVerification returns a single-use scenario where
 // verification results update task state and the next planner prompt reflects
 // completed progress before the model finalizes.

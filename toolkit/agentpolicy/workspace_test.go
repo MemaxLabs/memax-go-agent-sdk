@@ -218,6 +218,81 @@ func TestRollbackOnFailedVerificationSessionEndedResetsState(t *testing.T) {
 	}
 }
 
+func TestVerifyBeforeFinalDeniesUntilVerificationPasses(t *testing.T) {
+	policy := RequireVerificationBeforeFinal()
+	if err := policy.AfterToolUse(context.Background(), workspacePatchResult("session-1", false)); err != nil {
+		t.Fatalf("AfterToolUse patch returned error: %v", err)
+	}
+	denied, err := policy.BeforeFinal(context.Background(), hook.BeforeFinalInput{
+		SessionID: "session-1",
+		Turn:      2,
+		Answer:    "done",
+	})
+	if err != nil {
+		t.Fatalf("BeforeFinal returned error: %v", err)
+	}
+	if denied.DenyReason != VerifyBeforeFinalReason() {
+		t.Fatalf("DenyReason = %q, want verify-before-final denial", denied.DenyReason)
+	}
+	if err := policy.AfterToolUse(context.Background(), verificationResult("session-1", true)); err != nil {
+		t.Fatalf("AfterToolUse verify returned error: %v", err)
+	}
+	allowed, err := policy.BeforeFinal(context.Background(), hook.BeforeFinalInput{
+		SessionID: "session-1",
+		Turn:      3,
+		Answer:    "done",
+	})
+	if err != nil {
+		t.Fatalf("BeforeFinal after verify returned error: %v", err)
+	}
+	if allowed.DenyReason != "" {
+		t.Fatalf("DenyReason = %q, want final allowed after verification", allowed.DenyReason)
+	}
+}
+
+func TestVerifyBeforeFinalIgnoresDryRunAndFailedTools(t *testing.T) {
+	policy := RequireVerificationBeforeFinal()
+	if err := policy.AfterToolUse(context.Background(), workspacePatchResult("session-1", true)); err != nil {
+		t.Fatalf("AfterToolUse dry-run returned error: %v", err)
+	}
+	if err := policy.AfterToolUse(context.Background(), hook.AfterToolUseInput{
+		SessionID: "session-1",
+		Use:       model.ToolUse{Name: workspacetools.ApplyPatchToolName},
+		Result: model.ToolResult{
+			IsError: true,
+			Metadata: map[string]any{
+				model.MetadataWorkspaceOperation: "patch",
+			},
+		},
+	}); err != nil {
+		t.Fatalf("AfterToolUse failed patch returned error: %v", err)
+	}
+	result, err := policy.BeforeFinal(context.Background(), hook.BeforeFinalInput{SessionID: "session-1"})
+	if err != nil {
+		t.Fatalf("BeforeFinal returned error: %v", err)
+	}
+	if result.DenyReason != "" {
+		t.Fatalf("DenyReason = %q, want dry-run and failed tool ignored", result.DenyReason)
+	}
+}
+
+func TestVerifyBeforeFinalSessionEndedResetsState(t *testing.T) {
+	policy := RequireVerificationBeforeFinal()
+	if err := policy.AfterToolUse(context.Background(), workspacePatchResult("session-1", false)); err != nil {
+		t.Fatalf("AfterToolUse patch returned error: %v", err)
+	}
+	if err := policy.SessionEnded(context.Background(), hook.SessionEndedInput{SessionID: "session-1", Reason: hook.StopReasonCanceled}); err != nil {
+		t.Fatalf("SessionEnded returned error: %v", err)
+	}
+	result, err := policy.BeforeFinal(context.Background(), hook.BeforeFinalInput{SessionID: "session-1"})
+	if err != nil {
+		t.Fatalf("BeforeFinal returned error: %v", err)
+	}
+	if result.DenyReason != "" {
+		t.Fatalf("DenyReason = %q, want cleanup to allow unrelated future final", result.DenyReason)
+	}
+}
+
 func checkpointInput(sessionID, checkpointID string) hook.AfterToolUseInput {
 	return hook.AfterToolUseInput{
 		SessionID: sessionID,
@@ -225,6 +300,28 @@ func checkpointInput(sessionID, checkpointID string) hook.AfterToolUseInput {
 		Result: model.ToolResult{Metadata: map[string]any{
 			model.MetadataWorkspaceOperation:    "checkpoint",
 			model.MetadataWorkspaceCheckpointID: checkpointID,
+		}},
+	}
+}
+
+func workspacePatchResult(sessionID string, dryRun bool) hook.AfterToolUseInput {
+	return hook.AfterToolUseInput{
+		SessionID: sessionID,
+		Use:       model.ToolUse{Name: workspacetools.ApplyPatchToolName},
+		Result: model.ToolResult{Metadata: map[string]any{
+			model.MetadataWorkspaceOperation: "patch",
+			"dry_run":                        dryRun,
+		}},
+	}
+}
+
+func verificationResult(sessionID string, passed bool) hook.AfterToolUseInput {
+	return hook.AfterToolUseInput{
+		SessionID: sessionID,
+		Use:       model.ToolUse{Name: verifytools.ToolName},
+		Result: model.ToolResult{Metadata: map[string]any{
+			model.MetadataVerificationOperation: "verify",
+			model.MetadataVerificationPassed:    passed,
 		}},
 	}
 }
