@@ -216,7 +216,8 @@ use blocks arrive while keeping mutating tools serialized.
 tools, in-memory workspace state, root-confined OS-backed workspace state,
 guarded structured patches, unified diffs, dry-run previews, patch review,
 diffs, checkpoints, restore, host-owned verification tools, host-owned command
-execution tools, lifecycle events, model-visible rollback guidance after failed
+execution tools, initial managed command-session tools over host-owned session
+interfaces, lifecycle events, model-visible rollback guidance after failed
 verification, and eval coverage exist as optional packages.
 
 **Gap:** A serious coding agent needs a workspace abstraction with diffs,
@@ -237,6 +238,10 @@ patches, snapshots, restore, reviewable mutations, and sandbox boundaries.
 - Command execution is an explicit host-owned runner capability with argv-only
   inputs, timeout/output caps, structured status metadata, and approval-summary
   support; the core SDK never gets implicit shell access.
+- Longer-lived command sessions are explicit tools over host-owned lifecycle
+  interfaces rather than hidden background shell state. Initial start/read/stop
+  support exists; production OS-backed managed session adapters remain future
+  work.
 - Command governance is expressed as hook-based policy presets: argv-prefix
   allow/deny rules, exact-input approval for selected commands, and
   verify-before-final gates after successful mutating commands.
@@ -255,6 +260,8 @@ patches, snapshots, restore, reviewable mutations, and sandbox boundaries.
   passes. Initial coverage exists.
 - Command failure returns process diagnostics, the model repairs workspace state,
   and the command passes on rerun. Initial coverage exists.
+- Managed command session output can drive a repair loop across turns, and the
+  model can stop the session explicitly after success. Initial coverage exists.
 - Command approval denial drives an exact-input `request_approval` call and a
   single-use approved retry. Initial coverage exists.
 - Command verification policy denial prevents finalization after a matching

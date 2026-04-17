@@ -197,6 +197,33 @@ const (
 	// MetadataCommandOutputTruncated records whether stdout or stderr was
 	// truncated before returning to the model.
 	MetadataCommandOutputTruncated = "command_output_truncated"
+	// MetadataCommandSessionID carries the managed command session identifier
+	// returned by start_command.
+	MetadataCommandSessionID = "command_session_id"
+	// MetadataCommandStatus carries the managed command status such as running,
+	// exited, or stopped.
+	MetadataCommandStatus = "command_status"
+	// MetadataCommandPID carries the managed command process identifier when the
+	// host exposes one.
+	MetadataCommandPID = "command_pid"
+	// MetadataCommandStartedAt carries the command session start time in
+	// RFC3339Nano format.
+	MetadataCommandStartedAt = "command_started_at"
+	// MetadataCommandFinishedAt carries the command session finish time in
+	// RFC3339Nano format when known.
+	MetadataCommandFinishedAt = "command_finished_at"
+	// MetadataCommandNextSeq carries the next output sequence number visible to
+	// a later read_command_output call.
+	MetadataCommandNextSeq = "command_next_seq"
+	// MetadataCommandOutputChunks carries the number of output chunks returned by
+	// a read_command_output result.
+	MetadataCommandOutputChunks = "command_output_chunks"
+	// MetadataCommandDroppedChunks carries the number of older output chunks
+	// evicted from the manager buffer.
+	MetadataCommandDroppedChunks = "command_dropped_chunks"
+	// MetadataCommandDroppedBytes carries the number of older output bytes
+	// evicted from the manager buffer.
+	MetadataCommandDroppedBytes = "command_dropped_bytes"
 	// MetadataTaskID identifies the task affected by a tool result or requested
 	// operation.
 	MetadataTaskID = "task_id"

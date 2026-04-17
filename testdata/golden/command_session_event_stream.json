@@ -1,0 +1,97 @@
+[
+  {
+    "kind": "session_started"
+  },
+  {
+    "kind": "model_request",
+    "turn": 1
+  },
+  {
+    "kind": "tool_use",
+    "turn": 1,
+    "tool_id": "start-1",
+    "tool_name": "start_command"
+  },
+  {
+    "kind": "tool_result",
+    "turn": 1,
+    "tool_id": "start-1",
+    "tool_name": "start_command",
+    "tool_result": "started command session server-1: npm run dev\nstatus: running\npid: 4242\npurpose: start local dev server"
+  },
+  {
+    "kind": "command_started",
+    "turn": 1,
+    "command_operation": "start",
+    "command_id": "server-1",
+    "command_status": "running",
+    "command_pid": 4242
+  },
+  {
+    "kind": "model_request",
+    "turn": 2
+  },
+  {
+    "kind": "tool_use",
+    "turn": 2,
+    "tool_id": "read-1",
+    "tool_name": "read_command_output"
+  },
+  {
+    "kind": "tool_result",
+    "turn": 2,
+    "tool_id": "read-1",
+    "tool_name": "read_command_output",
+    "tool_result": "command output for server-1: npm run dev\nstatus: running\nnext_seq: 2\n[stdout #1]\nready\n"
+  },
+  {
+    "kind": "command_output",
+    "turn": 2,
+    "command_operation": "read",
+    "command_id": "server-1",
+    "command_status": "running",
+    "command_pid": 4242,
+    "command_next_seq": 2,
+    "command_output_chunks": 1
+  },
+  {
+    "kind": "model_request",
+    "turn": 3
+  },
+  {
+    "kind": "tool_use",
+    "turn": 3,
+    "tool_id": "stop-1",
+    "tool_name": "stop_command"
+  },
+  {
+    "kind": "tool_result",
+    "turn": 3,
+    "tool_id": "stop-1",
+    "tool_name": "stop_command",
+    "tool_result": "stopped command session server-1: npm run dev\nstatus: stopped\nexit_code: 143"
+  },
+  {
+    "kind": "command_stopped",
+    "turn": 3,
+    "command_operation": "stop",
+    "command_id": "server-1",
+    "command_status": "stopped",
+    "command_pid": 4242,
+    "command_next_seq": 2
+  },
+  {
+    "kind": "model_request",
+    "turn": 4
+  },
+  {
+    "kind": "assistant",
+    "turn": 4,
+    "text": "server lifecycle complete"
+  },
+  {
+    "kind": "result",
+    "turn": 4,
+    "result": "server lifecycle complete"
+  }
+]

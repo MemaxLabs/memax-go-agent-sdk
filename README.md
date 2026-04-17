@@ -258,6 +258,16 @@ agent to patch, rerun, or ask for approval through the normal loop.
 Use `toolkit/agentpolicy` to add argv-prefix allowlists, denylists,
 input-bound approvals, or verify-before-final gates for selected commands.
 
+For longer-lived commands such as dev servers or watch jobs, the same package
+also provides `start_command`, `read_command_output`, `stop_command`, and
+`list_commands` over host-owned session interfaces. This keeps background
+process lifecycle explicit and transcript-visible instead of hiding it behind a
+single opaque shell tool. `commandtools.ScriptedSessionManager` is included for
+deterministic tests and evals, and `commandtools.SessionCleanupOptions(...)`
+installs `SessionEnded` cleanup hooks so session-owned commands do not outlive
+the parent agent run. `commandtools.NewSessionTools(...)` builds the standard
+tool set for hosts that implement the full managed-session surface.
+
 To require a machine-readable final answer, configure `Options.Output` with a
 JSON Schema. The default prompt builder includes the contract, and `Query`
 validates the final answer. If validation fails, the SDK appends a repair prompt

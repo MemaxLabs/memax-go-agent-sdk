@@ -76,8 +76,17 @@ const (
 	// EventCommandFinished is emitted when a command tool returns process
 	// status and retained output metadata.
 	EventCommandFinished EventKind = "command_finished"
-	EventError           EventKind = "error"
-	EventResult          EventKind = "result"
+	// EventCommandStarted is emitted when start_command creates a managed
+	// command session.
+	EventCommandStarted EventKind = "command_started"
+	// EventCommandOutput is emitted when read_command_output returns buffered
+	// output for a managed command session.
+	EventCommandOutput EventKind = "command_output"
+	// EventCommandStopped is emitted when stop_command stops a managed command
+	// session.
+	EventCommandStopped EventKind = "command_stopped"
+	EventError          EventKind = "error"
+	EventResult         EventKind = "result"
 )
 
 // Event is emitted by Query as the orchestration loop progresses.
@@ -187,19 +196,29 @@ type ApprovalSummaryEvent struct {
 	ByteDelta   int
 }
 
-// CommandEvent describes one host-owned command execution. Command output is
-// exposed through the paired EventToolResult; this event carries process
-// status and accounting fields for UIs, audit logs, and metrics.
+// CommandEvent describes one host-owned command lifecycle observation.
+// `run_command` uses Action "run" and populates process status fields.
+// Managed command sessions populate Action "start", "read", or "stop" plus
+// CommandID, Status, PID, NextSeq, OutputChunks, DroppedChunks, and
+// DroppedBytes as appropriate. Command output text remains in the paired
+// EventToolResult so transcript-visible tool behavior stays explicit.
 type CommandEvent struct {
 	Operation       string
+	CommandID       string
 	Argv            []string
 	CWD             string
+	Status          string
+	PID             int
 	ExitCode        int
 	TimedOut        bool
 	DurationMS      int
 	StdoutBytes     int
 	StderrBytes     int
 	OutputTruncated bool
+	NextSeq         int
+	OutputChunks    int
+	DroppedChunks   int
+	DroppedBytes    int
 }
 
 func newEvent(kind EventKind, sessionID string, turn int) Event {

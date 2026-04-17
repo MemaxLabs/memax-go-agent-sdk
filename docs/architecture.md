@@ -191,6 +191,17 @@ Command results carry exit code, timeout, duration, retained output byte counts,
 truncation status, and argv metadata, which drive `EventCommandFinished` and
 `memax.command.*` metrics.
 
+The same package also supports managed command sessions for longer-lived work
+such as dev servers, watchers, or background checks. `start_command`,
+`read_command_output`, `stop_command`, and `list_commands` sit on top of
+host-owned `Starter`, `Reader`, `Stopper`, and `Lister` interfaces. Session
+tools remain argv-only, transcript-visible, and metadata-driven. They do not
+introduce hidden shell state into the core loop. `commandtools.SessionCleanupOptions`
+adapts a `Cleaner` into a `SessionEnded` hook so host-managed processes can be
+cleaned up when the parent agent session finishes. `ScriptedSessionManager`
+provides deterministic managed sessions for evals; production OS-backed managed
+session adapters remain future work.
+
 The optional `toolkit/checkpointtools` package provides `create_checkpoint`, `list_checkpoints`, `restore_checkpoint`, and `delete_checkpoint` over the `checkpoint.Manager` interface. The SDK's in-memory manager stores checkpoint metadata and is useful for tests; production managers should connect these operations to a virtual workspace, filesystem snapshot service, database branch, or remote sandbox. Checkpoints are not stored inside session transcripts, but checkpoint records carry session and parent-session IDs for correlation.
 
 Before-tool hooks run after validation and before permission checks. They can deny execution with a model-visible reason. After-tool hooks observe completed results; observer failures are attached to result metadata and do not convert successful tool output into a model-visible failure. Before-final hooks run when the model produces a no-tool assistant answer and before final output validation or result emission; a denial appends a normal user repair prompt so finalization gates remain transcript-visible and recoverable. `Options.MaxFinalDenials` bounds these repair attempts; zero uses the SDK default and negative disables before-final retries.
@@ -494,7 +505,8 @@ audit logs without parsing generic tool-result text.
 The approval request schema includes an optional structured summary with title,
 description, risk, paths, change counts, and byte delta. Toolkit helpers such as
 `workspacetools.ApprovalSummaryFromPatchInput` and
-`commandtools.ApprovalSummaryFromRunInput` can derive summaries from
+`commandtools.ApprovalSummaryFromRunInput` and
+`commandtools.ApprovalSummaryFromStartInput` can derive summaries from
 tool-specific inputs while keeping the core approval contract provider-,
 workspace-, and command-runner-neutral.
 

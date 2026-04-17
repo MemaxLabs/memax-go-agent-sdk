@@ -1884,38 +1884,61 @@ func emitCommandToolEvent(ctx context.Context, emit func(Event) bool, opts Optio
 	if operation == "" {
 		return true
 	}
-	if operation != "run" {
-		return true
-	}
 	commandEvent := &CommandEvent{
 		Operation:       operation,
+		CommandID:       metadatavalues.String(result.Metadata, model.MetadataCommandSessionID),
 		Argv:            metadataStrings(result.Metadata, model.MetadataCommandArgv),
 		CWD:             metadatavalues.String(result.Metadata, model.MetadataCommandCWD),
+		Status:          metadatavalues.String(result.Metadata, model.MetadataCommandStatus),
+		PID:             metadatavalues.Int(result.Metadata, model.MetadataCommandPID),
 		ExitCode:        metadatavalues.Int(result.Metadata, model.MetadataCommandExitCode),
 		TimedOut:        metadatavalues.Bool(result.Metadata, model.MetadataCommandTimedOut),
 		DurationMS:      metadatavalues.Int(result.Metadata, model.MetadataCommandDurationMS),
 		StdoutBytes:     metadatavalues.Int(result.Metadata, model.MetadataCommandStdoutBytes),
 		StderrBytes:     metadatavalues.Int(result.Metadata, model.MetadataCommandStderrBytes),
 		OutputTruncated: metadatavalues.Bool(result.Metadata, model.MetadataCommandOutputTruncated),
+		NextSeq:         metadatavalues.Int(result.Metadata, model.MetadataCommandNextSeq),
+		OutputChunks:    metadatavalues.Int(result.Metadata, model.MetadataCommandOutputChunks),
+		DroppedChunks:   metadatavalues.Int(result.Metadata, model.MetadataCommandDroppedChunks),
+		DroppedBytes:    metadatavalues.Int(result.Metadata, model.MetadataCommandDroppedBytes),
 	}
-	event := newEvent(EventCommandFinished, sessionID, turn)
+	kind := EventCommandFinished
+	meterName := "memax.command.finished"
+	switch operation {
+	case "run":
+	case "start":
+		kind = EventCommandStarted
+		meterName = "memax.command.started"
+	case "read":
+		kind = EventCommandOutput
+		meterName = "memax.command.output"
+	case "stop":
+		kind = EventCommandStopped
+		meterName = "memax.command.stopped"
+	default:
+		return true
+	}
+	event := newEvent(kind, sessionID, turn)
 	event.Command = commandEvent
 	if !emit(event) {
 		return false
 	}
-	opts.Meter.Add(ctx, "memax.command.finished", 1,
+	opts.Meter.Add(ctx, meterName, 1,
 		telemetry.String("memax.session_id", sessionID),
 		telemetry.Int("memax.turn", turn),
+		telemetry.String("memax.command.operation", commandEvent.Operation),
 		telemetry.Int("memax.command.exit_code", commandEvent.ExitCode),
 		telemetry.Bool("memax.command.timed_out", commandEvent.TimedOut),
 		telemetry.Bool("memax.command.output_truncated", commandEvent.OutputTruncated),
 	)
-	opts.Meter.Record(ctx, "memax.command.duration_ms", float64(commandEvent.DurationMS),
-		telemetry.String("memax.session_id", sessionID),
-		telemetry.Int("memax.turn", turn),
-		telemetry.Int("memax.command.exit_code", commandEvent.ExitCode),
-		telemetry.Bool("memax.command.timed_out", commandEvent.TimedOut),
-	)
+	if operation == "run" {
+		opts.Meter.Record(ctx, "memax.command.duration_ms", float64(commandEvent.DurationMS),
+			telemetry.String("memax.session_id", sessionID),
+			telemetry.Int("memax.turn", turn),
+			telemetry.Int("memax.command.exit_code", commandEvent.ExitCode),
+			telemetry.Bool("memax.command.timed_out", commandEvent.TimedOut),
+		)
+	}
 	return true
 }
 

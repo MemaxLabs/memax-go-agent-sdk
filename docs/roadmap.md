@@ -80,6 +80,12 @@ system prompt.
   mutating-tool ordering, permission-denial recovery, stream-failure cleanup,
   and cancellation.
 - Add autonomy eval harness. Initial `agenteval` runner, scripted model, result capture, expected-error assertions, reusable assertions, and `agenteval/scenarios` package exist for deterministic tool recovery, structured-output repair, memory search/save, memory distillation candidates, memory candidate handler persistence, session resume, context retry, subagent delegation, subagent scoped plan progress, planner-guided tool use, planner verification repair, planner/task progress from verification, planner/task-state updates, progressive skill disclosure, httptest-backed provider usage mapping, provider tool-use round trips, permission/hook denial recovery, checkpoint-before-patch policy recovery, rollback-policy recovery, verify-before-final policy recovery, approval-policy recovery and denial fallback, command approval and command verify-before-final policy recovery, finalization-policy exhaustion, large-result storage recovery, budget-stop enforcement, and deferred tool discovery. Live evals remain future work.
+- Add managed command sessions. Initial `toolkit/commandtools` session tools
+  (`start_command`, `read_command_output`, `stop_command`, `list_commands`),
+  command session cleanup hooks, scripted managed sessions, command session
+  event coverage, and background command repair eval coverage exist over
+  host-owned lifecycle interfaces. Production OS-backed managed session
+  adapters remain future work.
 - Add context retention hardening. Initial `contextwindow.PreserveImportant`
   support keeps loaded skills, stored result handles, and tool errors with
   structurally valid tool-use groups under aggressive trimming.

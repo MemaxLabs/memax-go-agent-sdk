@@ -13,6 +13,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/skill"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
+	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/commandtools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/skilltools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/verifytools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/workspacetools"
@@ -189,6 +190,81 @@ func TestQueryObservabilityEventStreamGolden(t *testing.T) {
 	}
 	if strings.TrimSpace(string(data)) != strings.TrimSpace(string(want)) {
 		t.Fatalf("observability event stream golden mismatch\n got:\n%s\nwant:\n%s", data, want)
+	}
+}
+
+func TestQueryCommandSessionEventStreamGolden(t *testing.T) {
+	manager := commandtools.NewScriptedSessionManager(commandtools.ScriptedCommand{
+		ID:  "server-1",
+		PID: 4242,
+		Pages: []commandtools.ScriptedOutputPage{{
+			Chunks: []commandtools.OutputChunk{{
+				Seq:    1,
+				Stream: "stdout",
+				Text:   "ready\n",
+			}},
+			Running: true,
+		}},
+		StopExitCode: intPtr(143),
+	})
+	events, err := Query(context.Background(), "start and stop the server", Options{
+		Model: &fakeModel{turns: [][]model.StreamEvent{
+			{{
+				Kind: model.StreamToolUse,
+				ToolUse: model.ToolUse{
+					ID:    "start-1",
+					Name:  commandtools.StartToolName,
+					Input: json.RawMessage(`{"id":"server-1","command":["npm","run","dev"],"purpose":"start local dev server"}`),
+				},
+			}},
+			{{
+				Kind: model.StreamToolUse,
+				ToolUse: model.ToolUse{
+					ID:    "read-1",
+					Name:  commandtools.ReadOutputToolName,
+					Input: json.RawMessage(`{"id":"server-1"}`),
+				},
+			}},
+			{{
+				Kind: model.StreamToolUse,
+				ToolUse: model.ToolUse{
+					ID:    "stop-1",
+					Name:  commandtools.StopToolName,
+					Input: json.RawMessage(`{"id":"server-1","force":true}`),
+				},
+			}},
+			{{Kind: model.StreamText, Text: "server lifecycle complete"}},
+		}},
+		Tools: tool.NewRegistry(
+			commandtools.NewStartTool(manager),
+			commandtools.NewReadOutputTool(manager),
+			commandtools.NewStopTool(manager),
+		),
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+
+	var got []goldenEvent
+	for event := range events {
+		if event.Kind == EventError {
+			t.Fatalf("query error: %v", event.Err)
+		}
+		got = append(got, normalizeGoldenEvent(event))
+	}
+
+	data, err := json.MarshalIndent(got, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal golden events: %v", err)
+	}
+	data = append(data, '\n')
+
+	want, err := os.ReadFile("testdata/golden/command_session_event_stream.json")
+	if err != nil {
+		t.Fatalf("read golden file: %v", err)
+	}
+	if strings.TrimSpace(string(data)) != strings.TrimSpace(string(want)) {
+		t.Fatalf("command session event stream golden mismatch\n got:\n%s\nwant:\n%s", data, want)
 	}
 }
 
@@ -419,6 +495,14 @@ type goldenEvent struct {
 	ApprovalConsumed     bool      `json:"approval_consumed,omitempty"`
 	ApprovalSingleUse    bool      `json:"approval_single_use,omitempty"`
 	ApprovalInputBound   bool      `json:"approval_input_bound,omitempty"`
+	CommandOperation     string    `json:"command_operation,omitempty"`
+	CommandID            string    `json:"command_id,omitempty"`
+	CommandStatus        string    `json:"command_status,omitempty"`
+	CommandPID           int       `json:"command_pid,omitempty"`
+	CommandNextSeq       int       `json:"command_next_seq,omitempty"`
+	CommandOutputChunks  int       `json:"command_output_chunks,omitempty"`
+	CommandDroppedChunks int       `json:"command_dropped_chunks,omitempty"`
+	CommandDroppedBytes  int       `json:"command_dropped_bytes,omitempty"`
 	Result               string    `json:"result,omitempty"`
 	Error                string    `json:"error,omitempty"`
 }
@@ -512,6 +596,17 @@ func normalizeGoldenEvent(event Event) goldenEvent {
 			out.ApprovalSingleUse = event.Approval.SingleUse
 			out.ApprovalInputBound = event.Approval.InputBound
 		}
+	case EventCommandFinished, EventCommandStarted, EventCommandOutput, EventCommandStopped:
+		if event.Command != nil {
+			out.CommandOperation = event.Command.Operation
+			out.CommandID = event.Command.CommandID
+			out.CommandStatus = event.Command.Status
+			out.CommandPID = event.Command.PID
+			out.CommandNextSeq = event.Command.NextSeq
+			out.CommandOutputChunks = event.Command.OutputChunks
+			out.CommandDroppedChunks = event.Command.DroppedChunks
+			out.CommandDroppedBytes = event.Command.DroppedBytes
+		}
 	case EventResult:
 		out.Result = event.Result
 		if event.Usage != nil {
@@ -528,6 +623,8 @@ func normalizeGoldenEvent(event Event) goldenEvent {
 	}
 	return out
 }
+
+func intPtr(v int) *int { return &v }
 
 type oneShotCompactionPolicy struct {
 	emitted bool
