@@ -1387,6 +1387,72 @@ func TestQueryStructuredOutputExhaustionStopsRun(t *testing.T) {
 	}
 }
 
+func TestQueryBeforeFinalDenialExhaustionStopsRun(t *testing.T) {
+	fake := &fakeModel{turns: [][]model.StreamEvent{
+		{{Kind: model.StreamText, Text: "not yet"}},
+		{{Kind: model.StreamText, Text: "still not"}},
+	}}
+	var stopReason hook.StopReason
+	hooks := hook.NewRunner(
+		hook.WithBeforeFinal(func(context.Context, hook.BeforeFinalInput) (hook.BeforeFinalResult, error) {
+			return hook.BeforeFinalResult{DenyReason: "run verification first"}, nil
+		}),
+		hook.WithStop(func(_ context.Context, input hook.StopInput) error {
+			stopReason = input.Reason
+			return nil
+		}),
+	)
+	events, err := Query(context.Background(), "start", Options{
+		Model:           fake,
+		Hooks:           hooks,
+		MaxFinalDenials: 1,
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+	var gotErr error
+	for event := range events {
+		if event.Kind == EventError {
+			gotErr = event.Err
+		}
+	}
+	if gotErr == nil || !strings.Contains(gotErr.Error(), "finalization denied after 1 retries") || !strings.Contains(gotErr.Error(), "run verification first") {
+		t.Fatalf("event error = %v, want finalization denial exhaustion", gotErr)
+	}
+	if len(fake.requests) != 2 {
+		t.Fatalf("model requests = %d, want one retry then exhaustion", len(fake.requests))
+	}
+	if stopReason != hook.StopReasonPolicy {
+		t.Fatalf("stop reason = %q, want policy", stopReason)
+	}
+	retryMessages := fake.requests[1].Messages
+	if len(retryMessages) < 3 || !strings.Contains(retryMessages[len(retryMessages)-1].PlainText(), "run verification first") {
+		t.Fatalf("retry messages = %#v, want finalization repair prompt", retryMessages)
+	}
+}
+
+func TestQueryBeforeFinalNegativeMaxDenialsDisablesRetry(t *testing.T) {
+	fake := &fakeModel{turns: [][]model.StreamEvent{
+		{{Kind: model.StreamText, Text: "not yet"}},
+	}}
+	events, err := Query(context.Background(), "start", Options{
+		Model: fake,
+		Hooks: hook.NewRunner(hook.WithBeforeFinal(func(context.Context, hook.BeforeFinalInput) (hook.BeforeFinalResult, error) {
+			return hook.BeforeFinalResult{DenyReason: "blocked"}, nil
+		})),
+		MaxFinalDenials: -1,
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+	if _, err := Drain(events); err == nil || !strings.Contains(err.Error(), "finalization denied after 0 retries") {
+		t.Fatalf("Drain error = %v, want immediate finalization denial exhaustion", err)
+	}
+	if len(fake.requests) != 1 {
+		t.Fatalf("model requests = %d, want no retry", len(fake.requests))
+	}
+}
+
 func TestQueryRejectsInvalidOutputSchema(t *testing.T) {
 	_, err := Query(context.Background(), "start", Options{
 		Model: &fakeModel{},

@@ -315,7 +315,8 @@ verify, ask the user, or stop.
 - Rollback-on-failed-verification policy guidance drives explicit checkpoint
   restore through normal tool results.
 - Verify-before-final policy denial prevents premature final answers after
-  workspace mutation and drives verification through normal tool results.
+  workspace mutation, drives verification through normal tool results, and
+  stops with an expected error when the finalization denial budget is exhausted.
 
 ### 7. Provider Fidelity and Compatibility
 

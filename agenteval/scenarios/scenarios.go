@@ -67,6 +67,7 @@ func All() []agenteval.Case {
 		BudgetStopsBeforeSecondModelCall(),
 		BudgetStopsBeforeToolBatch(),
 		BudgetStopsAfterTokenUsage(),
+		FinalizationPolicyExhaustion(),
 		DeferredToolDiscoveryRecovery(),
 		StreamingSafeToolOverlap(),
 		StreamingMutatingToolWaits(),

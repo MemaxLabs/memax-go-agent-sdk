@@ -36,6 +36,7 @@ func TestOptionsMergeAppliesOverridesAndCopiesSlices(t *testing.T) {
 		SystemPrompt:       "base system",
 		SessionID:          "base-session",
 		MaxTurns:           3,
+		MaxFinalDenials:    2,
 		MaxToolConcurrency: 2,
 		MaxRunDuration:     time.Second,
 	}
@@ -57,6 +58,7 @@ func TestOptionsMergeAppliesOverridesAndCopiesSlices(t *testing.T) {
 		SystemPrompt:       "override system",
 		SessionID:          "override-session",
 		MaxTurns:           9,
+		MaxFinalDenials:    -1,
 		MaxToolConcurrency: 4,
 		MaxRunDuration:     2 * time.Second,
 	}
@@ -106,7 +108,7 @@ func TestOptionsMergeAppliesOverridesAndCopiesSlices(t *testing.T) {
 	if got.SystemPrompt != "override system" || got.SessionID != "override-session" {
 		t.Fatalf("string overrides not applied: %#v", got)
 	}
-	if got.MaxTurns != 9 || got.MaxToolConcurrency != 4 || got.MaxRunDuration != 2*time.Second {
+	if got.MaxTurns != 9 || got.MaxFinalDenials != -1 || got.MaxToolConcurrency != 4 || got.MaxRunDuration != 2*time.Second {
 		t.Fatalf("limit overrides not applied: %#v", got)
 	}
 	if got.Tools != base.Tools || got.Sessions != base.Sessions {

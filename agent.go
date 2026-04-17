@@ -255,6 +255,7 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 	// Output repair attempts are scoped to the whole Query run so a contract
 	// cannot consume unbounded turns by repeatedly producing invalid finals.
 	outputRetries := 0
+	finalDenials := 0
 	var totalUsage model.Usage
 	budgetState := budgetTracker{startedAt: time.Now().UTC()}
 	for turn := 1; turn <= opts.MaxTurns; turn++ {
@@ -589,6 +590,19 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 					return
 				}
 				if finalGate.DenyReason != "" {
+					opts.Meter.Add(turnCtx, "memax.final.denials", 1,
+						telemetry.String("memax.session_id", sessionID),
+						telemetry.Int("memax.turn", turn),
+					)
+					if finalDenials >= finalDenialLimit(opts.MaxFinalDenials) {
+						err := fmt.Errorf("finalization denied after %d retries: %s", finalDenials, strings.TrimSpace(finalGate.DenyReason))
+						turnSpan.RecordError(err)
+						emitError(turnCtx, emit, sessionID, turn, err)
+						_ = finish(turn, hook.StopReasonPolicy, err)
+						shouldStop = true
+						return
+					}
+					finalDenials++
 					if err := appendFinalRetryPrompt(turnCtx, opts.Sessions, sessionID, finalGate.DenyReason); err != nil {
 						err = fmt.Errorf("append finalization retry prompt: %w", err)
 						turnSpan.RecordError(err)
@@ -597,10 +611,6 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 						shouldStop = true
 						return
 					}
-					opts.Meter.Add(turnCtx, "memax.final.denials", 1,
-						telemetry.String("memax.session_id", sessionID),
-						telemetry.Int("memax.turn", turn),
-					)
 					return
 				}
 				if err := outputValidator.Validate(turnCtx, result); err != nil {
@@ -795,6 +805,16 @@ func finalRetryPrompt(reason string) string {
 		detail = "the final answer is not ready"
 	}
 	return "Your previous final answer cannot be accepted yet: " + detail + "\nUse the available tools to satisfy this requirement, then provide the final answer."
+}
+
+func finalDenialLimit(maxFinalDenials int) int {
+	if maxFinalDenials < 0 {
+		return 0
+	}
+	if maxFinalDenials == 0 {
+		return defaultMaxFinalDenials
+	}
+	return maxFinalDenials
 }
 
 func outputRetryPrompt(err error) string {

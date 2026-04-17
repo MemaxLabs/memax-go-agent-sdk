@@ -88,6 +88,7 @@ const (
 	StopReasonError    StopReason = "error"
 	StopReasonMaxTurns StopReason = "max_turns"
 	StopReasonBudget   StopReason = "budget"
+	StopReasonPolicy   StopReason = "policy"
 	StopReasonCanceled StopReason = "canceled"
 )
 

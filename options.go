@@ -20,7 +20,10 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
 )
 
-const defaultMaxTurns = 50
+const (
+	defaultMaxTurns        = 50
+	defaultMaxFinalDenials = 3
+)
 
 // Options configures one agent run.
 type Options struct {
@@ -60,6 +63,10 @@ type Options struct {
 	SessionID          string
 	ParentSessionID    string
 	MaxTurns           int
+	// MaxFinalDenials controls how many before-final denials may be repaired
+	// with transcript prompts before the run fails. Zero uses the SDK default;
+	// a negative value disables finalization retries.
+	MaxFinalDenials    int
 	MaxToolConcurrency int
 	MaxRunDuration     time.Duration
 }
@@ -159,6 +166,9 @@ func (o Options) Merge(override Options) Options {
 	if override.MaxTurns != 0 {
 		o.MaxTurns = override.MaxTurns
 	}
+	if override.MaxFinalDenials != 0 {
+		o.MaxFinalDenials = override.MaxFinalDenials
+	}
 	if override.MaxToolConcurrency != 0 {
 		o.MaxToolConcurrency = override.MaxToolConcurrency
 	}
@@ -171,6 +181,9 @@ func (o Options) Merge(override Options) Options {
 func (o Options) withDefaults() Options {
 	if o.MaxTurns <= 0 {
 		o.MaxTurns = defaultMaxTurns
+	}
+	if o.MaxFinalDenials == 0 {
+		o.MaxFinalDenials = defaultMaxFinalDenials
 	}
 	if o.MaxToolConcurrency <= 0 {
 		o.MaxToolConcurrency = tool.DefaultMaxConcurrency

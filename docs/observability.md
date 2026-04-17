@@ -28,7 +28,8 @@ configured:
    `EventWorkspaceCheckpoint`, or `EventWorkspaceRestore`.
 7. If the assistant returns a final answer, before-final hooks can deny
    finalization. A denial appends a user repair prompt and starts the next turn;
-   no `EventResult` or terminal `EventError` is emitted for that denial.
+   no `EventResult` or terminal `EventError` is emitted for that denial unless
+   the configured final-denial retry budget is exhausted.
 8. If the final answer is accepted, optional `EventMemoryCandidates` after
    successful distillation and before `EventResult`.
 9. Optional non-terminal `EventMemoryCandidateHandlerError` if the opt-in

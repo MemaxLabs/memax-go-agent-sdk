@@ -317,6 +317,49 @@ func BudgetStopsAfterTokenUsage() agenteval.Case {
 	}
 }
 
+// FinalizationPolicyExhaustion returns a single-use scenario where a
+// before-final policy keeps denying finalization until the configured denial
+// retry budget is exhausted.
+func FinalizationPolicyExhaustion() agenteval.Case {
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "premature final"}},
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "still premature"}},
+	)
+
+	return agenteval.Case{
+		Name:       "finalization_policy_exhaustion",
+		Prompt:     "Try to finalize before satisfying policy.",
+		AllowError: true,
+		Options: memaxagent.Options{
+			Model: modelClient,
+			Hooks: hook.NewRunner(hook.WithBeforeFinal(func(context.Context, hook.BeforeFinalInput) (hook.BeforeFinalResult, error) {
+				return hook.BeforeFinalResult{DenyReason: "policy requires verification"}, nil
+			})),
+			MaxFinalDenials: 1,
+		},
+		Assertions: []agenteval.Assertion{
+			agenteval.RunErrorContains("finalization denied after 1 retries"),
+			agenteval.RunErrorContains("policy requires verification"),
+			agenteval.EventKindEmitted(memaxagent.EventError),
+			requestCountEquals(modelClient, 2),
+			{
+				Name: "no final result after policy exhaustion",
+				Check: func(result agenteval.Result) error {
+					if result.Final != "" {
+						return fmt.Errorf("final = %q, want no final result", result.Final)
+					}
+					for _, event := range result.Events {
+						if event.Kind == memaxagent.EventResult {
+							return fmt.Errorf("unexpected result event: %#v", event)
+						}
+					}
+					return nil
+				},
+			},
+		},
+	}
+}
+
 // DeferredToolDiscoveryRecovery returns a single-use scenario where the model
 // starts with only the search tool visible, discovers a deferred tool, and uses
 // that tool on a later turn through normal tool selection.

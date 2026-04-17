@@ -459,6 +459,8 @@ To prevent premature final answers after workspace changes, install
 mutating workspace patches and restores, denies finalization until a successful
 `workspace_verify` result is observed in the same session, and appends the
 denial as a normal user repair prompt so the model can recover by calling tools.
+Use `Options.MaxFinalDenials` to cap these repair turns; zero uses the SDK
+default and negative disables before-final retries.
 
 To bound an agent run across model calls, tool calls, tokens, turns, and wall
 time, set `Options.Budget`:
