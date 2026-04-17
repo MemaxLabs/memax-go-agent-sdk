@@ -62,6 +62,8 @@ gateway needs a nonstandard route.
 - `toolkit/tasktools`: optional task-state tools for planning, progress tracking, and resumable work summaries.
 - `toolkit/skilltools`: optional skill discovery tools over `skill.Source`.
 - `toolkit/workspacetools`: optional workspace read/list/patch/diff/checkpoint/restore tools over `workspace.Store`.
+- `toolkit/approvaltools`: optional host approval request tool over an
+  application-owned approver.
 - `toolkit/agentpolicy`: optional hook-based policy presets for common agent
   safety workflows.
 
@@ -454,6 +456,12 @@ than returned as a terminal error, so the model can run verification and then
 finalize through the normal loop. If before-final denials exceed
 `Options.MaxFinalDenials`, the run emits `EventError` and stops with
 `hook.StopReasonPolicy`.
+
+`RequireApprovalBeforeTools` uses before-tool hooks to deny configured tool
+names until a successful `request_approval` result for that tool name is
+observed in the same session. This mirrors production approval systems while
+staying SDK-neutral: the approver is host-owned, and both granted and denied
+decisions are normal transcript-visible tool results.
 
 ## Context Window
 

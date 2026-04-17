@@ -288,7 +288,8 @@ retrieval, usage, and review infrastructure.
 verification hints, scoped subagent plan handoff, and opt-in progress updates
 from verification or subagent results exist. Initial hook-based agent policy
 presets exist for checkpoint-before-patch recovery and rollback guidance after
-failed verification, plus a verify-before-final gate for workspace mutations.
+failed verification, a verify-before-final gate for workspace mutations, and
+explicit host approval tools/policies for sensitive tool use.
 
 **Gap:** The SDK lacks explicit policies for when to plan, update, delegate,
 verify, ask the user, or stop.
@@ -317,6 +318,8 @@ verify, ask the user, or stop.
 - Verify-before-final policy denial prevents premature final answers after
   workspace mutation, drives verification through normal tool results, and
   stops with an expected error when the finalization denial budget is exhausted.
+- Approval-before-tool policy denial drives explicit host approval requests and
+  supports both approved retry and denied safe-fallback paths.
 
 ### 7. Provider Fidelity and Compatibility
 

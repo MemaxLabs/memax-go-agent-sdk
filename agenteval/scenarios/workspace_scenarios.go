@@ -15,6 +15,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/planner"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/agentpolicy"
+	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/approvaltools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/tasktools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/verifytools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/workspacetools"
@@ -632,6 +633,186 @@ func WorkspaceVerifyBeforeFinalPolicyRecovery() agenteval.Case {
 					}
 					if content != "status: fixed" {
 						return fmt.Errorf("README.md = %q, want fixed content", content)
+					}
+					return nil
+				},
+			},
+		},
+	}
+}
+
+// WorkspaceApprovalPolicyRecovery returns a single-use scenario where a
+// sensitive workspace patch is denied until the model requests host approval.
+func WorkspaceApprovalPolicyRecovery() agenteval.Case {
+	store := workspace.NewMemoryStore(map[string]string{
+		"README.md": "status: old",
+	})
+	workspaceTools, toolsErr := workspacetools.NewTools(store)
+	policy := agentpolicy.RequireApprovalBeforeTools(workspacetools.ApplyPatchToolName)
+	approvalTool := approvaltools.NewTool(approvaltools.Config{
+		Approver: approvaltools.StaticApprover{Decision: approvaltools.Decision{
+			Approved: true,
+			Reason:   "approved README patch",
+		}},
+	})
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "patch-1",
+				Name: workspacetools.ApplyPatchToolName,
+				Input: json.RawMessage(`{"operations":[
+					{"path":"README.md","old_content":"status: old","new_content":"status: new"}
+				]}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "approval-1",
+				Name:  approvaltools.ToolName,
+				Input: json.RawMessage(`{"action":"workspace_apply_patch","reason":"README.md status update needs host approval","details":"README.md old to new","risk":"low"}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "patch-2",
+				Name: workspacetools.ApplyPatchToolName,
+				Input: json.RawMessage(`{"operations":[
+					{"path":"README.md","old_content":"status: old","new_content":"status: new"}
+				]}`),
+			},
+		}},
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "Patched after approval."}},
+	)
+
+	return agenteval.Case{
+		Name:   "workspace_approval_policy_recovery",
+		Prompt: "Patch README.md, requesting approval if required.",
+		Options: memaxagent.Options{
+			Model: modelClient,
+			Tools: tool.NewRegistry(append(workspaceTools, approvalTool)...),
+			Hooks: hook.NewRunner(policy.Options()...),
+		},
+		Assertions: []agenteval.Assertion{
+			toolConstructionSucceeded(toolsErr),
+			agenteval.ToolUsed(workspacetools.ApplyPatchToolName),
+			agenteval.ToolUsed(approvaltools.ToolName),
+			agenteval.FinalEquals("Patched after approval."),
+			requestCountEquals(modelClient, 4),
+			{
+				Name: "approval drives patch recovery",
+				Check: func(result agenteval.Result) error {
+					results := result.ToolResults()
+					if len(results) < 3 {
+						return fmt.Errorf("tool results = %#v, want denied patch approval patch", results)
+					}
+					if !results[0].IsError || !strings.Contains(results[0].Content, agentpolicy.ApprovalBeforeToolReason(workspacetools.ApplyPatchToolName)) {
+						return fmt.Errorf("first patch result = %#v, want approval denial", results[0])
+					}
+					if results[1].IsError || results[1].Metadata[approvaltools.MetadataApprovalApproved] != true {
+						return fmt.Errorf("approval result = %#v, want approval granted", results[1])
+					}
+					if results[2].IsError || !strings.Contains(results[2].Content, "modified README.md") {
+						return fmt.Errorf("second patch result = %#v, want patch success", results[2])
+					}
+					content, err := store.ReadFile(context.Background(), "README.md")
+					if err != nil {
+						return err
+					}
+					if content != "status: new" {
+						return fmt.Errorf("README.md = %q, want approved patch applied", content)
+					}
+					return nil
+				},
+			},
+		},
+	}
+}
+
+// WorkspaceApprovalDeniedFallback returns a single-use scenario where approval
+// is denied and the model chooses a safe read-only fallback instead of forcing
+// the patch.
+func WorkspaceApprovalDeniedFallback() agenteval.Case {
+	store := workspace.NewMemoryStore(map[string]string{
+		"README.md": "status: old",
+	})
+	workspaceTools, toolsErr := workspacetools.NewTools(store)
+	policy := agentpolicy.RequireApprovalBeforeTools(workspacetools.ApplyPatchToolName)
+	approvalTool := approvaltools.NewTool(approvaltools.Config{
+		Approver: approvaltools.StaticApprover{Decision: approvaltools.Decision{
+			Approved: false,
+			Reason:   "README changes are frozen",
+		}},
+	})
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "patch-1",
+				Name: workspacetools.ApplyPatchToolName,
+				Input: json.RawMessage(`{"operations":[
+					{"path":"README.md","old_content":"status: old","new_content":"status: new"}
+				]}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "approval-1",
+				Name:  approvaltools.ToolName,
+				Input: json.RawMessage(`{"action":"workspace_apply_patch","reason":"README.md status update needs host approval"}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "read-1",
+				Name:  workspacetools.ReadToolName,
+				Input: json.RawMessage(`{"path":"README.md"}`),
+			},
+		}},
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "Approval denied; left README.md unchanged."}},
+	)
+
+	return agenteval.Case{
+		Name:   "workspace_approval_denied_fallback",
+		Prompt: "Patch README.md only if the host approves.",
+		Options: memaxagent.Options{
+			Model: modelClient,
+			Tools: tool.NewRegistry(append(workspaceTools, approvalTool)...),
+			Hooks: hook.NewRunner(policy.Options()...),
+		},
+		Assertions: []agenteval.Assertion{
+			toolConstructionSucceeded(toolsErr),
+			agenteval.ToolUsed(workspacetools.ApplyPatchToolName),
+			agenteval.ToolUsed(approvaltools.ToolName),
+			agenteval.ToolUsed(workspacetools.ReadToolName),
+			agenteval.FinalEquals("Approval denied; left README.md unchanged."),
+			requestCountEquals(modelClient, 4),
+			{
+				Name: "approval denial leads to safe fallback",
+				Check: func(result agenteval.Result) error {
+					results := result.ToolResults()
+					if len(results) < 3 {
+						return fmt.Errorf("tool results = %#v, want denied patch approval read", results)
+					}
+					if !results[0].IsError || !strings.Contains(results[0].Content, agentpolicy.ApprovalBeforeToolReason(workspacetools.ApplyPatchToolName)) {
+						return fmt.Errorf("first patch result = %#v, want approval policy denial", results[0])
+					}
+					if !results[1].IsError || results[1].Metadata[approvaltools.MetadataApprovalApproved] != false || !strings.Contains(results[1].Content, "README changes are frozen") {
+						return fmt.Errorf("approval result = %#v, want approval denied", results[1])
+					}
+					if results[2].IsError || results[2].Content != "status: old" {
+						return fmt.Errorf("read result = %#v, want unchanged README", results[2])
+					}
+					content, err := store.ReadFile(context.Background(), "README.md")
+					if err != nil {
+						return err
+					}
+					if content != "status: old" {
+						return fmt.Errorf("README.md = %q, want unchanged after approval denial", content)
 					}
 					return nil
 				},

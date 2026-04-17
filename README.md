@@ -462,6 +462,13 @@ denial as a normal user repair prompt so the model can recover by calling tools.
 Use `Options.MaxFinalDenials` to cap these repair turns; zero uses the SDK
 default and negative disables before-final retries.
 
+For human or host approval flows, expose `approvaltools.NewTool` and combine it
+with `agentpolicy.RequireApprovalBeforeTools(...)`. The policy denies configured
+tools until the model calls `request_approval` for the tool name and the host
+approver grants it. Denials and approvals are normal tool results, so the model
+can either retry after approval or choose a safe fallback when approval is
+denied.
+
 To bound an agent run across model calls, tool calls, tokens, turns, and wall
 time, set `Options.Budget`:
 

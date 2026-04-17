@@ -8,6 +8,7 @@ import (
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/hook"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
+	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/approvaltools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/verifytools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/workspacetools"
 )
@@ -218,6 +219,63 @@ func TestRollbackOnFailedVerificationSessionEndedResetsState(t *testing.T) {
 	}
 }
 
+func TestApprovalBeforeToolDeniesUntilApprovalGranted(t *testing.T) {
+	policy := RequireApprovalBeforeTools(workspacetools.ApplyPatchToolName)
+	denied, err := policy.BeforeToolUse(context.Background(), patchInput("session-1"))
+	if err != nil {
+		t.Fatalf("BeforeToolUse returned error: %v", err)
+	}
+	if denied.DenyReason != ApprovalBeforeToolReason(workspacetools.ApplyPatchToolName) {
+		t.Fatalf("DenyReason = %q, want approval denial", denied.DenyReason)
+	}
+	if err := policy.AfterToolUse(context.Background(), approvalInput("session-1", workspacetools.ApplyPatchToolName, true)); err != nil {
+		t.Fatalf("AfterToolUse returned error: %v", err)
+	}
+	allowed, err := policy.BeforeToolUse(context.Background(), patchInput("session-1"))
+	if err != nil {
+		t.Fatalf("BeforeToolUse after approval returned error: %v", err)
+	}
+	if allowed.DenyReason != "" {
+		t.Fatalf("DenyReason = %q, want allowed after approval", allowed.DenyReason)
+	}
+}
+
+func TestApprovalBeforeToolIgnoresDeniedApprovalAndOtherActions(t *testing.T) {
+	policy := RequireApprovalBeforeTools(workspacetools.ApplyPatchToolName)
+	for _, input := range []hook.AfterToolUseInput{
+		approvalInput("session-1", workspacetools.ApplyPatchToolName, false),
+		approvalInput("session-1", workspacetools.ReadToolName, true),
+	} {
+		if err := policy.AfterToolUse(context.Background(), input); err != nil {
+			t.Fatalf("AfterToolUse returned error: %v", err)
+		}
+	}
+	result, err := policy.BeforeToolUse(context.Background(), patchInput("session-1"))
+	if err != nil {
+		t.Fatalf("BeforeToolUse returned error: %v", err)
+	}
+	if result.DenyReason == "" {
+		t.Fatalf("DenyReason empty, want denied approval and other action ignored")
+	}
+}
+
+func TestApprovalBeforeToolSessionEndedResetsState(t *testing.T) {
+	policy := RequireApprovalBeforeTools(workspacetools.ApplyPatchToolName)
+	if err := policy.AfterToolUse(context.Background(), approvalInput("session-1", workspacetools.ApplyPatchToolName, true)); err != nil {
+		t.Fatalf("AfterToolUse returned error: %v", err)
+	}
+	if err := policy.SessionEnded(context.Background(), hook.SessionEndedInput{SessionID: "session-1", Reason: hook.StopReasonResult}); err != nil {
+		t.Fatalf("SessionEnded returned error: %v", err)
+	}
+	result, err := policy.BeforeToolUse(context.Background(), patchInput("session-1"))
+	if err != nil {
+		t.Fatalf("BeforeToolUse returned error: %v", err)
+	}
+	if result.DenyReason == "" {
+		t.Fatalf("DenyReason empty, want approval state cleaned up")
+	}
+}
+
 func TestVerifyBeforeFinalDeniesUntilVerificationPasses(t *testing.T) {
 	policy := RequireVerificationBeforeFinal()
 	if err := policy.AfterToolUse(context.Background(), workspacePatchResult("session-1", false)); err != nil {
@@ -323,6 +381,21 @@ func verificationResult(sessionID string, passed bool) hook.AfterToolUseInput {
 			model.MetadataVerificationOperation: "verify",
 			model.MetadataVerificationPassed:    passed,
 		}},
+	}
+}
+
+func approvalInput(sessionID, action string, approved bool) hook.AfterToolUseInput {
+	return hook.AfterToolUseInput{
+		SessionID: sessionID,
+		Use:       model.ToolUse{Name: approvaltools.ToolName},
+		Result: model.ToolResult{
+			IsError: !approved,
+			Metadata: map[string]any{
+				approvaltools.MetadataApprovalOperation: "request",
+				approvaltools.MetadataApprovalAction:    action,
+				approvaltools.MetadataApprovalApproved:  approved,
+			},
+		},
 	}
 }
 

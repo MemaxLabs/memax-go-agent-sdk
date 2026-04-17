@@ -8,10 +8,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/hook"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
+	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/approvaltools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/verifytools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/workspacetools"
 )
@@ -143,6 +145,14 @@ type RollbackOnFailedVerification struct {
 	checkpoints map[string]string
 }
 
+// ApprovalBeforeTool denies configured tools until the model obtains approval
+// for the tool name through approvaltools.ToolName in the same session.
+type ApprovalBeforeTool struct {
+	mu       sync.RWMutex
+	required map[string]struct{}
+	approved map[string]map[string]bool
+}
+
 // VerifyBeforeFinal tracks workspace changes and denies final answers until a
 // successful verification result has been observed after the latest mutation.
 // It is recommendation-free and execution-free: the model must call the
@@ -150,6 +160,114 @@ type RollbackOnFailedVerification struct {
 type VerifyBeforeFinal struct {
 	mu    sync.RWMutex
 	dirty map[string]bool
+}
+
+// RequireApprovalBeforeTools returns a policy that gates the given tool names
+// behind explicit request_approval results. Empty tool names are ignored.
+func RequireApprovalBeforeTools(toolNames ...string) *ApprovalBeforeTool {
+	p := &ApprovalBeforeTool{
+		required: map[string]struct{}{},
+		approved: map[string]map[string]bool{},
+	}
+	for _, name := range toolNames {
+		name = strings.TrimSpace(name)
+		if name != "" {
+			p.required[name] = struct{}{}
+		}
+	}
+	return p
+}
+
+// Options returns hook options for approval-before-tool gating.
+func (p *ApprovalBeforeTool) Options() []hook.Option {
+	return []hook.Option{
+		hook.WithBeforeToolUse(p.BeforeToolUse),
+		hook.WithAfterToolUse(p.AfterToolUse),
+		hook.WithSessionEnded(p.SessionEnded),
+	}
+}
+
+// BeforeToolUse denies configured tools until approval has been observed for
+// the same session and tool name.
+func (p *ApprovalBeforeTool) BeforeToolUse(ctx context.Context, input hook.BeforeToolUseInput) (hook.BeforeToolUseResult, error) {
+	if err := ctx.Err(); err != nil {
+		return hook.BeforeToolUseResult{}, err
+	}
+	if !p.requires(input.Use.Name) || p.isApproved(input.SessionID, input.Use.Name) {
+		return hook.BeforeToolUseResult{}, nil
+	}
+	return hook.BeforeToolUseResult{DenyReason: ApprovalBeforeToolReason(input.Use.Name)}, nil
+}
+
+// AfterToolUse records granted approvals from approvaltools tool results.
+func (p *ApprovalBeforeTool) AfterToolUse(ctx context.Context, input hook.AfterToolUseInput) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if input.SessionID == "" || input.Result.IsError || input.Use.Name != approvaltools.ToolName {
+		return nil
+	}
+	if operation, _ := input.Result.Metadata[approvaltools.MetadataApprovalOperation].(string); operation != "request" {
+		return nil
+	}
+	approved, _ := input.Result.Metadata[approvaltools.MetadataApprovalApproved].(bool)
+	action, _ := input.Result.Metadata[approvaltools.MetadataApprovalAction].(string)
+	action = strings.TrimSpace(action)
+	if !approved || !p.requires(action) {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.approved == nil {
+		p.approved = map[string]map[string]bool{}
+	}
+	if p.approved[input.SessionID] == nil {
+		p.approved[input.SessionID] = map[string]bool{}
+	}
+	p.approved[input.SessionID][action] = true
+	return nil
+}
+
+// SessionEnded removes approval state for the completed session.
+func (p *ApprovalBeforeTool) SessionEnded(_ context.Context, input hook.SessionEndedInput) error {
+	p.Reset(input.SessionID)
+	return nil
+}
+
+// Reset removes approval state for sessionID. It is safe to call on a nil
+// policy or with an empty session ID.
+func (p *ApprovalBeforeTool) Reset(sessionID string) {
+	if p == nil || sessionID == "" {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	delete(p.approved, sessionID)
+}
+
+func (p *ApprovalBeforeTool) requires(toolName string) bool {
+	if p == nil || toolName == "" {
+		return false
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	_, ok := p.required[toolName]
+	return ok
+}
+
+func (p *ApprovalBeforeTool) isApproved(sessionID, toolName string) bool {
+	if p == nil || sessionID == "" || toolName == "" {
+		return false
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.approved[sessionID][toolName]
+}
+
+// ApprovalBeforeToolReason returns the model-visible denial reason used by
+// RequireApprovalBeforeTools.
+func ApprovalBeforeToolReason(toolName string) string {
+	return "request approval for " + strings.TrimSpace(toolName) + " before using it"
 }
 
 // RequireVerificationBeforeFinal returns a policy that can be installed into a
