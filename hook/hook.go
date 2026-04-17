@@ -136,6 +136,27 @@ func NewRunner(options ...Option) *Runner {
 	return r
 }
 
+// Clone returns a snapshot copy of r. Hook functions are shared; the runner's
+// internal slices are copied so later Add* calls on either runner do not mutate
+// the other.
+func (r *Runner) Clone() *Runner {
+	if r == nil {
+		return NewRunner()
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return &Runner{
+		before:         append([]BeforeToolUseFunc(nil), r.before...),
+		after:          append([]AfterToolUseFunc(nil), r.after...),
+		beforeFinal:    append([]BeforeFinalFunc(nil), r.beforeFinal...),
+		sessionStarted: append([]SessionStartedFunc(nil), r.sessionStarted...),
+		sessionEnded:   append([]SessionEndedFunc(nil), r.sessionEnded...),
+		userPrompt:     append([]UserPromptFunc(nil), r.userPrompt...),
+		stop:           append([]StopFunc(nil), r.stop...),
+		contextApplied: append([]ContextAppliedFunc(nil), r.contextApplied...),
+	}
+}
+
 type Option func(*Runner)
 
 // WithBeforeToolUse registers a before-tool hook.

@@ -156,3 +156,38 @@ func TestLifecycleObserverHooksRunAll(t *testing.T) {
 		}
 	}
 }
+
+func TestCloneReturnsIndependentRunner(t *testing.T) {
+	baseCalls := 0
+	clonedCalls := 0
+	original := NewRunner(
+		WithBeforeToolUse(func(context.Context, BeforeToolUseInput) (BeforeToolUseResult, error) {
+			baseCalls++
+			return BeforeToolUseResult{}, nil
+		}),
+	)
+	cloned := original.Clone()
+	cloned.AddBeforeToolUse(func(context.Context, BeforeToolUseInput) (BeforeToolUseResult, error) {
+		clonedCalls++
+		return BeforeToolUseResult{}, nil
+	})
+
+	if _, err := original.BeforeToolUse(context.Background(), BeforeToolUseInput{
+		Use:  model.ToolUse{ID: "1", Name: "read"},
+		Spec: model.ToolSpec{Name: "read"},
+	}); err != nil {
+		t.Fatalf("original BeforeToolUse returned error: %v", err)
+	}
+	if _, err := cloned.BeforeToolUse(context.Background(), BeforeToolUseInput{
+		Use:  model.ToolUse{ID: "1", Name: "read"},
+		Spec: model.ToolSpec{Name: "read"},
+	}); err != nil {
+		t.Fatalf("cloned BeforeToolUse returned error: %v", err)
+	}
+	if baseCalls != 2 {
+		t.Fatalf("baseCalls = %d, want 2", baseCalls)
+	}
+	if clonedCalls != 1 {
+		t.Fatalf("clonedCalls = %d, want 1", clonedCalls)
+	}
+}
