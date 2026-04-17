@@ -500,9 +500,11 @@ policy := agentpolicy.AllowCommands(
 For sensitive commands, combine `approvaltools.NewTool` with
 `agentpolicy.RequireApprovalBeforeCommands(...)`. The command approval policy
 denies matching `run_command` attempts until the model requests approval for
-the exact command operation. With `agentpolicy.WithInputBoundApprovals()` and
-`agentpolicy.WithSingleUseApprovals()`, approval applies only to the later
-matching JSON input and is consumed on first use.
+the command tool action. By default, a granted approval authorizes later
+commands matching the configured argv prefixes for that session. With
+`agentpolicy.WithCommandInputBoundApprovals()` and
+`agentpolicy.WithCommandSingleUseApprovals()`, approval applies only to the
+later matching JSON input and is consumed on first use.
 
 Commands that mutate generated files can also require verification before the
 final answer:

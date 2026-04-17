@@ -410,8 +410,8 @@ func TestCommandApprovalInputBoundSingleUse(t *testing.T) {
 	approvedInput := json.RawMessage(`{"command":["npm","test"],"purpose":"verify"}`)
 	policy := RequireApprovalBeforeCommands(
 		[]CommandMatcher{MatchCommandPrefix("npm", "test")},
-		WithInputBoundApprovals(),
-		WithSingleUseApprovals(),
+		WithCommandInputBoundApprovals(),
+		WithCommandSingleUseApprovals(),
 	)
 	if err := policy.AfterToolUse(context.Background(), hook.AfterToolUseInput{
 		SessionID: "session-1",

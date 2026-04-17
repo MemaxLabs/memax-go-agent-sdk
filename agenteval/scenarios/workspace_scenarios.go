@@ -256,8 +256,8 @@ func CommandApprovalPolicyRecovery() agenteval.Case {
 	})
 	policy := agentpolicy.RequireApprovalBeforeCommands(
 		[]agentpolicy.CommandMatcher{agentpolicy.MatchCommandPrefix("npm", "install")},
-		agentpolicy.WithInputBoundApprovals(),
-		agentpolicy.WithSingleUseApprovals(),
+		agentpolicy.WithCommandInputBoundApprovals(),
+		agentpolicy.WithCommandSingleUseApprovals(),
 	)
 	approvalTool := approvaltools.NewTool(approvaltools.Config{
 		Approver: approvaltools.StaticApprover{Decision: approvaltools.Decision{

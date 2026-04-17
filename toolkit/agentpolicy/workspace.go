@@ -248,10 +248,54 @@ func DenyCommandsWithOptions(matchers []CommandMatcher, options ...CommandPolicy
 	return p
 }
 
+// CommandApprovalPolicyOption configures command approval policy presets.
+type CommandApprovalPolicyOption func(*CommandApprovalPolicy)
+
+// WithCommandSingleUseApprovals makes each command approval grant permit one
+// matching command attempt. The grant is consumed when BeforeToolUse allows the
+// command.
+func WithCommandSingleUseApprovals() CommandApprovalPolicyOption {
+	return func(p *CommandApprovalPolicy) {
+		p.singleUse = true
+	}
+}
+
+// WithCommandInputBoundApprovals requires request_approval results to include
+// approvaltools.MetadataApprovalInputHash and only allows a later command call
+// whose input has the same canonical JSON hash. The request_approval tool
+// produces that hash when the model includes tool_input in its request.
+func WithCommandInputBoundApprovals() CommandApprovalPolicyOption {
+	return func(p *CommandApprovalPolicy) {
+		p.bindInput = true
+	}
+}
+
+// WithCommandApprovalToolName configures the approval tool name watched by this
+// command approval policy. It defaults to approvaltools.ToolName.
+func WithCommandApprovalToolName(name string) CommandApprovalPolicyOption {
+	return func(p *CommandApprovalPolicy) {
+		if name = strings.TrimSpace(name); name != "" {
+			p.approvalToolName = name
+		}
+	}
+}
+
+// WithCommandApprovalCommandToolName configures the command tool name gated by
+// this command approval policy. It defaults to commandtools.ToolName.
+func WithCommandApprovalCommandToolName(name string) CommandApprovalPolicyOption {
+	return func(p *CommandApprovalPolicy) {
+		if name = strings.TrimSpace(name); name != "" {
+			p.commandToolName = name
+		}
+	}
+}
+
 // RequireApprovalBeforeCommands denies matching run_command calls until the
 // model obtains approval for commandtools.ToolName through request_approval.
-// WithInputBoundApprovals binds approval to the exact later command input.
-func RequireApprovalBeforeCommands(matchers []CommandMatcher, options ...ApprovalBeforeToolOption) *CommandApprovalPolicy {
+// Without WithCommandInputBoundApprovals, a granted approval authorizes later
+// matching command argv prefixes for the session. WithCommandInputBoundApprovals
+// binds approval to the exact later command input.
+func RequireApprovalBeforeCommands(matchers []CommandMatcher, options ...CommandApprovalPolicyOption) *CommandApprovalPolicy {
 	p := &CommandApprovalPolicy{
 		matchers:         cloneCommandMatchers(matchers),
 		approved:         map[string][]approvalGrant{},
@@ -260,11 +304,7 @@ func RequireApprovalBeforeCommands(matchers []CommandMatcher, options ...Approva
 	}
 	for _, option := range options {
 		if option != nil {
-			adapter := &ApprovalBeforeTool{approvalToolName: p.approvalToolName, singleUse: p.singleUse, bindInput: p.bindInput}
-			option(adapter)
-			p.approvalToolName = adapter.approvalToolName
-			p.singleUse = adapter.singleUse
-			p.bindInput = adapter.bindInput
+			option(p)
 		}
 	}
 	return p

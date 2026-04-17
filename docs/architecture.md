@@ -503,9 +503,11 @@ making `run_command` special in the core loop. `AllowCommands` and
 `DenyCommands` match argv prefixes for `run_command` and return recoverable
 tool errors on policy denial. Matching is by argv element, not by shell string,
 because command execution is argv-only. `RequireApprovalBeforeCommands` gates
-selected argv prefixes behind `request_approval`; with input-bound and
-single-use options, the approval result must carry the canonical hash of the
-exact later `run_command` input and the grant is consumed on first use.
+selected argv prefixes behind `request_approval`. By default, approval is
+session-scoped for later commands matching the configured argv prefixes. With
+input-bound and single-use command approval options, the approval result must
+carry the canonical hash of the exact later `run_command` input and the grant
+is consumed on first use.
 
 `RequireVerificationAfterCommands` marks a session dirty after successful
 matching commands and denies finalization until a successful verification result
