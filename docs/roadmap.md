@@ -1,5 +1,31 @@
 # Roadmap
 
+## North Star
+
+Build a general autonomous agent runtime, not a narrow coding-agent SDK.
+
+The destination is a single Go-native foundation strong enough to support:
+
+- coding agents in the Claude Code / Codex class
+- personal intelligence agents in the OpenClaw / Hermes class
+- managed cloud-agent products in the Claude Managed Agents class
+
+That requires three cleanly separated layers:
+
+- a neutral **runtime kernel**
+- optional **capability adapters**
+- opinionated **stacks/presets** for specific workflows
+
+The roadmap therefore hardens the kernel first, pushes demanding coding-agent
+capabilities into explicit adapters, and then turns those primitives into
+reusable out-of-the-box stacks.
+
+Coding remains the first domain where the SDK is expected to become
+competitive. Personal intelligence and managed cloud-agent stacks are part of
+the intended product shape, but they should be described as follow-on stacks
+built from the same kernel and adapter seams rather than as domains already at
+parity today.
+
 ## Phase 0: Foundation
 
 - Establish public package shape.
@@ -111,7 +137,20 @@ system prompt.
   exist. Loaded-skill retention across aggressive trimming has initial
   context-policy and eval coverage. Next steps are larger catalog budget tests
   and resource adapters for common hosts.
-- Add more durable stores and workspace adapters, starting with production SQLite examples, object-store checkpoint managers, remote sandbox workspaces, and richer patch approval events.
+- Add more durable stores and workspace adapters, starting with production SQLite examples, object-store checkpoint managers, fuller remote sandbox backends on top of the initial `sandbox` adapters, and richer patch approval events.
 - Add MCP/tool bridge examples while keeping the core tool contract provider-neutral.
 - Add release automation, API compatibility checks, and generated reference docs.
 - Add security hardening guides for filesystem adapters, approval flows, credentials, and multi-tenant server embedding.
+
+## Phase 7: Opinionated Stacks
+
+- Add `stack/coding` as the first batteries-included runtime assembly with
+  workspace, command, verification, approvals, checkpointing, planner/task
+  policies, and eval suites tuned for coding workflows.
+- Add `stack/personal` over the same kernel for docs, notes, messaging,
+  scheduling, memory, and approval-aware personal intelligence workflows.
+- Add `stack/cloudmanaged` for multi-tenant, server-embedded, remote-execution
+  products with durable jobs, tenancy-aware policy, quotas, audit hooks, and
+  managed-agent DX.
+- Publish examples and reference embeddings that show how stacks are composed
+  from the neutral runtime rather than implemented as forks.

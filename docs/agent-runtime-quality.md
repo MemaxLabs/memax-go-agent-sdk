@@ -1,11 +1,17 @@
 # Agent Runtime Quality Plan
 
 This document is the standing gap analysis for evolving Memax Agent SDK from a
-solid orchestration SDK into a competitive agent runtime. The target is not to
-copy any one product. The target is to match or exceed the maturity of leading
-coding agents while preserving the SDK's core constraints: Go-native,
-provider-neutral, filesystem-neutral, host-owned tools, and embeddable server
-safety.
+solid orchestration SDK into a competitive autonomous agent runtime. The target
+is not to copy any one product. The target is to match or exceed the maturity
+of leading agent runtimes while preserving the SDK's core constraints:
+Go-native, provider-neutral, filesystem-neutral, host-owned tools, and
+embeddable server safety.
+
+Coding agents remain the first proving ground because they demand the strongest
+combination of planning, workspace mutation, execution, verification, policy,
+and long-horizon repair. But the architecture should also be strong enough to
+power coding-agent stacks, personal intelligence stacks, and managed
+cloud-agent stacks on the same foundation.
 
 Before changing any subsystem, compare against:
 
@@ -44,6 +50,7 @@ code or implementation text.
 | Budgets and usage | Competitive foundation | Competitive |
 | Evals | Strong foundation | Leading |
 | Observability | Competitive foundation | Competitive |
+| Domain stacks/presets | Foundation | Competitive |
 
 `Tool contract` targets Leading only in a narrow sense: the interface should
 stay minimal and host-owned while supporting production-grade lifecycle
@@ -51,6 +58,11 @@ behavior such as cancellation, streaming result visibility, result handles,
 schema safety, telemetry, and policy composition. It does not mean broadening
 the core SDK into a built-in filesystem, shell, browser, or operating
 environment.
+
+`Evals` can legitimately target Leading before every runtime subsystem does.
+The eval layer is the quality gate that catches regressions while other
+subsystems are still moving from Foundation to Competitive. Strong evals do not
+imply that the agent loop itself has already reached the same maturity.
 
 ## Core Principles
 
@@ -88,7 +100,37 @@ environment.
    such as `https://api.anthropic.com`. The full `Endpoint` option exists for
    custom gateway paths that do not follow those ecosystem conventions.
 
+7. **General kernel, domain adapters, opinionated stacks.**
+   The runtime kernel should stay domain-neutral. Domain-specific capability
+   bundles belong in adapters and stack packages, not in the core loop.
+
 ## Priority Execution Plan
+
+### 0. Runtime Shape and Product Layering
+
+**Current state:** the SDK has a strong neutral kernel and a growing set of
+optional coding-oriented capability adapters. It does not yet clearly package
+those pieces into broader runtime product layers.
+
+**Gap:** the docs and architecture need to hold two truths at once: the runtime
+is being shaped into a general foundation, and current maturity is still
+coding-first. The failure mode is either underselling the broader shape or
+overclaiming parity that the product has not earned yet.
+
+**Target behavior:**
+
+- Runtime kernel remains neutral and provider/tool mediated.
+- Capability adapters remain optional packages owned by the host.
+- Opinionated stacks become the place for domain defaults and batteries.
+- Coding remains the first competitive stack, but not the only target shape.
+- Public docs describe personal intelligence and managed cloud as intentional
+  follow-on stacks built from the same kernel, not as domains already at the
+  same maturity as coding.
+
+**Eval coverage:**
+
+- Not a behavior slice itself, but every stack-specific intelligence claim must
+  still land with deterministic evals in the relevant domain.
 
 ### 1. Progressive Skill Disclosure
 
@@ -219,7 +261,8 @@ structured patches, unified diffs, dry-run previews, patch review, diffs,
 checkpoints, restore, host-owned verification tools, host-owned command
 execution tools, initial managed command-session tools over host-owned session
 interfaces, lifecycle events, model-visible rollback guidance after failed
-verification, and eval coverage exist as optional packages.
+verification, initial host-owned sandbox substrate adapters for workspace and
+command backends, and eval coverage exist as optional packages.
 
 **Gap:** A serious coding agent needs a workspace abstraction with diffs,
 patches, snapshots, restore, reviewable mutations, and sandbox boundaries.
@@ -247,6 +290,9 @@ patches, snapshots, restore, reviewable mutations, and sandbox boundaries.
   support exists, including a reference OS-backed managed-session adapter with
   rooted cwd resolution, bounded buffered output, explicit PTY terminal
   geometry, live resize, and session cleanup hooks.
+- More isolated execution can stay outside the core loop through adapter seams
+  that let hosts wire related sandbox-backed workspace, one-shot command, and
+  managed command-session toolkits together.
 - Command governance is expressed as hook-based policy presets: argv-prefix
   allow/deny rules, exact-input approval for selected commands, and
   verify-before-final gates after successful mutating commands.
@@ -406,8 +452,8 @@ intelligence coverage is only starting to land.
 
 ## Immediate Next Milestones
 
-1. Add workspace adapters for git-backed and remote sandbox execution, reusing
-   the same source-neutral `workspace` contracts.
+1. Extend the initial sandbox adapters into fuller remote/container-backed
+   execution backends, reusing the same source-neutral `workspace` contracts.
 2. Add more workspace-oriented planner verification scenarios: patch,
    test/verify, repair, and checkpoint rollback across multiple files and
    longer horizons.

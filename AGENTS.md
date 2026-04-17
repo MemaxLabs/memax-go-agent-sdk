@@ -20,23 +20,36 @@ session, push it now.
 
 # Memax Agent SDK
 
-This repository is a Go SDK for building autonomous agents with application-owned tools. The goal is high-quality autonomous orchestration without hard-coding access to the real filesystem, shell, browser, network, or OS permission model.
+This repository is a Go SDK for building autonomous agents with
+application-owned tools. The goal is a high-quality autonomous runtime without
+hard-coding access to the real filesystem, shell, browser, network, inbox,
+calendar, or OS permission model.
 
 ## Project Direction
 
 - Build a Go-native SDK, not a TypeScript port.
 - Use `.reference/ts-source-code` and `.reference/codex` as read-only architecture reference.
 - Do not copy upstream source into SDK implementation files.
-- Keep the orchestration layer provider-neutral and filesystem-neutral.
+- Keep the runtime kernel provider-neutral, capability-neutral, and
+  filesystem-neutral.
 - Treat tools as the only capability boundary. If an agent can read, write, search, execute, browse, or ask a user, that capability must go through the tool interface.
 - Prefer small, composable packages over a large monolithic runtime.
+- Build the core so it can support coding agents, personal intelligence
+  agents, and managed cloud-agent products on the same foundation.
+- Keep a clean separation between the neutral runtime kernel, optional
+  capability adapters, and opinionated stack packages.
+- Keep the docs honest about maturity: coding is the first competitive target;
+  personal intelligence and managed cloud are intentional next stacks, not
+  claims of equal product maturity today.
 
 ## Market-Leading Agent Runtime Standard
 
 The goal is not to accumulate SDK features. The goal is to build an agent
-runtime that can stand head-to-head with market-leading coding agents represented
-by the local TypeScript reference and Codex reference while remaining Go-native,
-embeddable, provider-neutral, and host-controlled.
+runtime that can stand head-to-head with market-leading coding agents
+represented by the local TypeScript reference and Codex reference while also
+remaining broad enough to power personal intelligence and managed cloud-agent
+products. The runtime must stay Go-native, embeddable, provider-neutral, and
+host-controlled.
 
 For every meaningful feature, behavior, or architecture change:
 

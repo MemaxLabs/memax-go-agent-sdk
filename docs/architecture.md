@@ -2,9 +2,21 @@
 
 ## Product Goal
 
-Build a Go SDK that lets applications run highly autonomous agents while keeping every operational capability pluggable. The SDK owns the loop, context, session, tool scheduling, permissions, hooks, and observability. Applications own concrete tools and decide what "read file", "write file", "run command", or "search" actually means.
+Build a Go runtime that lets applications run highly autonomous agents while
+keeping every operational capability pluggable. The SDK owns the loop, context,
+session, tool scheduling, permissions, hooks, and observability. Applications
+own concrete tools and decide what "read file", "write file", "run command",
+"search", "read email", or "check calendar" actually means.
 
 This is deliberately different from a CLI-first agent. The SDK must be embeddable in servers, CI jobs, developer tools, web apps, and local experiments without assuming stdin/stdout, a terminal UI, or real system access.
+
+The target product is broader than a coding-agent SDK. Coding is the current
+proving ground, but the same foundation is being shaped so it can later
+support:
+
+- coding agents with workspaces, patches, verification, and execution
+- personal intelligence agents with docs, messaging, knowledge, and schedules
+- managed cloud agents with tenancy, approvals, quotas, and remote execution
 
 ## External Reference Points
 
@@ -30,7 +42,56 @@ Current agent SDKs commonly expose autonomous file reading, command execution, w
 - Conservative concurrency: only tools that explicitly opt into concurrency can run in parallel.
 - Session state is not workspace state: sessions store messages and metadata; virtual filesystem or checkpoint state belongs to tools or workspace services.
 
+## Runtime Layers
+
+The architecture separates three layers cleanly:
+
+### 1. Runtime Kernel
+
+The permanent core:
+
+- provider-neutral model protocol
+- turn loop and retries
+- tool protocol and scheduling
+- sessions and transcript durability
+- context policies and compaction
+- permissions, approvals, and hooks
+- planner, tasks, and subagents
+- memory injection and lifecycle proposals
+- observability, budgets, and eval contracts
+
+This layer should remain domain-neutral.
+
+### 2. Capability Adapters
+
+Optional packages that let hosts expose real powers to the model:
+
+- coding: workspace, patch, verify, command, managed sessions, sandbox backends
+- personal intelligence: browser, docs, email, calendar, notes, knowledge
+- managed cloud: remote execution, approval surfaces, tenancy-aware policy,
+  durable jobs, quotas, and audit integrations
+
+This layer defines what the agent can do, while keeping those capabilities
+explicit and tool-mediated.
+
+### 3. Opinionated Stacks
+
+Reusable, batteries-included assemblies built on the same kernel and adapter
+contracts. The near-term target stacks are:
+
+- `stack/coding`
+- `stack/personal`
+- `stack/cloudmanaged`
+
+Each stack should package prompt defaults, tool bundles, policies, evals, and
+embedding examples without introducing special-case logic into the kernel.
+`stack/coding` is the first stack expected to reach competitive maturity; the
+other stacks should reuse the same kernel and adapter seams rather than fork
+the architecture.
+
 ## Package Shape
+
+### Runtime Kernel Packages
 
 - `memaxagent`: public query/session convenience API.
 - `model`: provider-neutral messages, tool-use blocks, streamed events, and model client interface.
@@ -39,6 +100,21 @@ Current agent SDKs commonly expose autonomous file reading, command execution, w
 - `identity`: reusable agent identity profiles for role, mission, tone, autonomy, and constraints.
 - `permission`: reusable permission checkers and policy composition.
 - `prompt`: deterministic system prompt assembly from named parts, identity, tools, skills, and host guidance.
+- `session`: session persistence interface plus in-memory and append-only JSONL implementations.
+- `session/sqlitestore`: optional SQLite-backed session store for embedded durable agents.
+- `skill`: local skill manifests, loaders, and relevance selection.
+- `memory`: prompt-visible host memory loading, mutation contracts, and
+  distillation proposals.
+- `planner`: host-owned plan and task-source contracts for strategy injection.
+- `budget`: provider-neutral run-budget contracts and policies.
+- `output`: provider-neutral structured final-output contracts.
+- `resultstore`: host-owned storage for oversized tool results.
+- `checkpoint`: checkpoint metadata, manager interface, and in-memory checkpoint manager.
+- `contextwindow`: deterministic message-window policies used before model requests.
+- `telemetry`: minimal SDK tracing and metrics interfaces used by core packages.
+
+### Capability Adapter Packages
+
 - `providers/openai`: optional Responses API adapter for hosted model streaming and function calls. Supports constructor options, default hosted endpoints, OpenAI-style `OPENAI_BASE_URL` API-version bases such as `/v1`, and explicit full-endpoint overrides.
 - `providers/anthropic`: optional Messages API adapter for hosted model streaming and tool-use blocks. Supports constructor options, default hosted endpoints, Anthropic-style `ANTHROPIC_BASE_URL` service roots without `/v1`, and explicit full-endpoint overrides.
 
@@ -46,14 +122,8 @@ Provider base URL semantics intentionally follow each provider ecosystem rather
 than a single SDK-wide rule: OpenAI `BaseURL` is the API-version base and
 Anthropic `BaseURL` is the service root. Use the full `Endpoint` option when a
 gateway needs a nonstandard route.
-- `session`: session persistence interface plus in-memory and append-only JSONL implementations.
-- `session/sqlitestore`: optional SQLite-backed session store for embedded durable agents.
-- `skill`: local skill manifests, loaders, and relevance selection.
-- `checkpoint`: checkpoint metadata, manager interface, and in-memory checkpoint manager.
 - `workspace`: optional source-neutral workspace state, guarded patch, diff,
   checkpoint, and restore contracts for coding-agent toolkits.
-- `contextwindow`: deterministic message-window policies used before model requests.
-- `telemetry`: minimal SDK tracing and metrics interfaces used by core packages.
 - `otel`: OpenTelemetry adapter for SDK tracing and metrics.
 - `toolkit/filetools`: optional memory-backed file tools that demonstrate the tool contract without requiring real filesystem access.
 - `toolkit/checkpointtools`: optional checkpoint tools over a checkpoint manager.
@@ -70,10 +140,20 @@ gateway needs a nonstandard route.
 - `toolkit/agentpolicy`: optional hook-based policy presets for common agent
   safety workflows.
 
-Expected near-term packages:
+### Planned Stack Packages
+
+- `stack/coding`: batteries-included coding workflow assembly.
+- `stack/personal`: personal intelligence workflow assembly.
+- `stack/cloudmanaged`: multi-tenant managed-agent assembly.
+
+Expected near-term packages and expansions:
 
 - production workspace adapters for git-backed, database-backed, and remote
   sandbox-backed workspaces.
+- deeper stack packages that assemble the neutral runtime into coding,
+  personal intelligence, and managed cloud defaults once the underlying
+  primitives are stable enough. Coding is first; broader stacks follow once the
+  shared primitives are genuinely ready.
 
 ## Core Loop
 
@@ -149,6 +229,10 @@ mutating the same directory, and restore is best-effort if the underlying
 filesystem returns I/O errors mid-write. Production embedders can also
 implement the same interface over git worktrees, databases, object snapshots,
 or remote sandboxes.
+The optional `sandbox` package keeps those more isolated backends coherent
+across subsystems: hosts can adapt related sandbox-backed workspace, command,
+managed-session, and cleanup backends without teaching the core loop about
+transport, container, or VM details.
 The core agent loop does not import `workspace`; hosts expose workspace
 capabilities only by registering tools such as `toolkit/workspacetools`.
 `workspace.Store` is the convenience full-surface interface; individual
@@ -215,6 +299,10 @@ must wrap or replace it. Graceful stop is best-effort and platform dependent:
 Unix hosts usually get an interrupt-before-kill sequence, while Windows may
 fall back to forced termination immediately. `ScriptedSessionManager` continues to provide
 deterministic managed sessions for evals.
+The `sandbox` package complements these local adapters by adapting host-owned
+sandbox-backed command/session backends into the same commandtool interfaces
+plus hook cleanup, making remote or container-backed execution an adapter
+concern rather than a special case in orchestration.
 
 The optional `toolkit/checkpointtools` package provides `create_checkpoint`, `list_checkpoints`, `restore_checkpoint`, and `delete_checkpoint` over the `checkpoint.Manager` interface. The SDK's in-memory manager stores checkpoint metadata and is useful for tests; production managers should connect these operations to a virtual workspace, filesystem snapshot service, database branch, or remote sandbox. Checkpoints are not stored inside session transcripts, but checkpoint records carry session and parent-session IDs for correlation.
 
@@ -597,7 +685,7 @@ Hosts can provide custom governors for tenant quotas, hosted billing systems,
 or dynamic policies. The core package depends only on the provider-neutral
 `budget.Snapshot` and `model.Usage` types.
 
-## Observability
+## Telemetry and Durable Session Expectations
 
 Tracing is optional and uses a small SDK-owned `telemetry.Tracer` interface so the core can be tested without a real exporter. Metrics are optional and use a matching SDK-owned `telemetry.Meter` interface with counter and value-recording methods. The `otel` package adapts both interfaces to OpenTelemetry. Current spans cover full query runs, turns, context policy application, model streaming, and individual tool executions. Metrics cover query starts/completions/errors, turn starts and durations, model stream starts/errors/durations, context compaction events, skill discovery/search/load operations, approval request/decision/consumption operations, command completion/duration, tool executions and durations, and hook errors. Spans and metrics carry stable attributes for session IDs, turn numbers, message counts, tool IDs, tool names, skill names, approval actions, tool input/result byte counts, and tool policy flags.
 
@@ -609,17 +697,3 @@ Durable session stores should support:
 - fork from message ID. Initial implementations exist.
 - compact boundary records
 - parent tool-use ID for subagent messages
-
-## Autonomy Roadmap
-
-High-end agent autonomy is mostly orchestration quality, not any single tool. The highest-leverage capabilities are:
-
-- prompt and context assembly that teaches tool use clearly
-- reliable tool result normalization
-- safe parallel execution for read/search calls
-- serial execution for mutating calls
-- permission loops that the model can recover from
-- compaction before context failure and retry after context failure
-- subagents for bounded parallel investigation
-- todo/task state that the model can update
-- observability that explains why the agent made progress or got stuck

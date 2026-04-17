@@ -3,6 +3,11 @@
 The SDK is safe to embed in HTTP and WebSocket servers when each run is bounded
 with contexts, timeouts, and concurrency limits.
 
+This document describes the foundation for server-embedded agent products. The
+same patterns are intended to support coding workflows first, then broader
+personal-intelligence and managed cloud-agent products as those stacks mature
+on top of the same runtime kernel.
+
 Go does not have a single Node.js-style event loop thread. Each HTTP request is
 served in its own goroutine. A blocking model call, filesystem call, database
 query, or tool handler blocks that goroutine, not the whole process. Other HTTP

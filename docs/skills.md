@@ -13,6 +13,13 @@ type Source interface {
 Any application can implement this interface for databases, APIs, object
 storage, config services, embedded files, or generated skills.
 
+This makes skills usable across domains. Coding is the first concrete stack the
+SDK is optimizing for today, but the same contract is meant to scale to broader
+stacks later: a coding stack might expose review and migration skills, a
+personal intelligence stack might expose scheduling or briefing skills, and a
+managed cloud-agent stack might expose tenant- or workflow-specific operating
+procedures over the same runtime contract.
+
 ## Built-In Sources
 
 - `skill.StaticSource`: in-memory skills, useful for tests and programmatic configuration.

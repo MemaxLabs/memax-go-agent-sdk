@@ -1,14 +1,49 @@
 # Memax Agent SDK
 
-Memax Agent SDK is a Go-native agent orchestration library inspired by modern autonomous coding agents and agent SDKs, but designed around application-owned tools instead of hard-coded system tools.
+Memax Agent SDK is a Go-native autonomous agent runtime designed to grow into a
+shared foundation for coding agents, personal intelligence agents, and managed
+cloud agents. Today, the implementation is most mature on coding-agent
+orchestration; the broader product shape is the direction the runtime is being
+built toward. It is inspired by modern agent products and SDKs, but designed
+around application-owned tools instead of hard-coded system tools.
 
-The core SDK should not assume access to the real filesystem, shell, browser, network, or OS permissions. Those capabilities are modeled as tools, and the tool implementation decides whether it talks to real infrastructure, a virtual filesystem, an in-memory workspace, a remote service, or a test fake.
+The core SDK should not assume access to the real filesystem, shell, browser,
+network, inbox, calendar, or OS permissions. Those capabilities are modeled as
+tools, and the tool implementation decides whether it talks to real
+infrastructure, a virtual filesystem, an in-memory workspace, a remote service,
+or a test fake.
+
+## Product Shape
+
+The long-term product has three layers:
+
+- **Runtime kernel**: turn loop, sessions, context policies, tool scheduling,
+  hooks, permissions, planner/task state, memory, subagents, budgets, and
+  observability.
+- **Capability adapters**: optional workspace, command, verification, browser,
+  doc, email, calendar, remote execution, and other host-owned integrations.
+- **Opinionated stacks**: batteries-included configurations built on the same
+  kernel and adapters, starting with coding workflows and later expanding to
+  personal intelligence and managed cloud agents.
+
+The SDK is intentionally built so the same kernel can eventually support:
+
+- coding-agent experiences in the Claude Code / Codex class
+- personal intelligence experiences in the OpenClaw / Hermes class
+- managed cloud-agent products in the Claude Managed Agents class
+
+Those are target stack shapes, not claims that the SDK already ships personal
+or managed-cloud stacks at the same maturity as its coding-first runtime work.
 
 ## Current Status
 
-This repository is production-embeddable and moving through DX polish.
+This repository is embeddable today and is strongest at the neutral
+runtime-kernel layer plus coding-oriented adapters. It is now expanding from a
+coding-first focus into a broader agent-platform shape.
 
-Implemented foundation:
+Implemented capabilities
+
+Runtime kernel and orchestration primitives:
 
 - provider-neutral model streaming interfaces
 - typed tool registry and executor
@@ -19,8 +54,6 @@ Implemented foundation:
 - structured permission policies with host approval callbacks
 - in-memory and append-only JSONL session stores
 - resumable and forkable sessions
-- checkpoint manager interfaces and checkpoint tools
-- memory-backed, OS-backed, and `io/fs`-backed file tools for examples and tests
 - bounded subagent tool with parent/child session correlation
 - task state tools for agent planning and progress tracking
 - host-owned planner policies with deterministic prompt plan injection and task-state adapters
@@ -33,12 +66,24 @@ Implemented foundation:
 - provider-neutral model usage events and token telemetry
 - opt-in run budget governors for turns, model calls, tool calls, tokens, and duration
 - deterministic autonomy eval harness for scripted orchestration scenarios
-- skill discovery tools
 - OpenAI Responses API model adapter
 - Anthropic Messages API model adapter
 - context-window policies for recent-message limiting, token budgets, and summarizing compaction
 - optional OpenTelemetry tracing adapter
 - first autonomous query loop skeleton
+
+Coding-oriented adapters and toolkits:
+
+- memory-backed, OS-backed, and `io/fs`-backed file tools for examples and tests
+- checkpoint manager interfaces and checkpoint tools
+- workspace, patch, diff, restore, verification, and command toolkits over
+  host-owned backends
+- skill discovery tools
+
+The current implementation is strongest on coding-agent orchestration because
+that is the most demanding initial domain. The architecture is being hardened
+so those same runtime primitives can later power personal intelligence and
+managed cloud-agent stacks without forking the core.
 
 ## Try It
 
