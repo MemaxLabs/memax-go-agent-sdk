@@ -206,6 +206,8 @@ const (
 	// MetadataCommandPID carries the managed command process identifier when the
 	// host exposes one.
 	MetadataCommandPID = "command_pid"
+	// MetadataCommandTTY records whether the managed command session uses a PTY.
+	MetadataCommandTTY = "command_tty"
 	// MetadataCommandStartedAt carries the command session start time in
 	// RFC3339Nano format.
 	MetadataCommandStartedAt = "command_started_at"

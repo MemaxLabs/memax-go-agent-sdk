@@ -262,8 +262,9 @@ patches, snapshots, restore, reviewable mutations, and sandbox boundaries.
   and the command passes on rerun. Initial coverage exists.
 - Managed command session output can drive a repair loop across turns, and the
   model can either read buffered output or interact through stdin writes before
-  stopping or exiting the session explicitly after success. Initial coverage
-  exists.
+  stopping or exiting the session explicitly after success. PTY-backed starts
+  now cover shells and REPLs that require terminal behavior instead of plain
+  pipes. Initial coverage exists.
 - Command approval denial drives an exact-input `request_approval` call and a
   single-use approved retry. Initial coverage exists.
 - Command verification policy denial prevents finalization after a matching

@@ -84,8 +84,9 @@ system prompt.
   (`start_command`, `write_command_input`, `read_command_output`,
   `stop_command`, `list_commands`), command session cleanup hooks, scripted
   managed sessions, command session event coverage, buffered-read and
-  interactive-write repair eval coverage, and a reference OS-backed managed
-  session adapter now exist over host-owned lifecycle interfaces.
+  interactive-write repair eval coverage, PTY-backed terminal session support,
+  and a reference OS-backed managed session adapter now exist over host-owned
+  lifecycle interfaces.
 - Add context retention hardening. Initial `contextwindow.PreserveImportant`
   support keeps loaded skills, stored result handles, and tool errors with
   structurally valid tool-use groups under aggressive trimming.

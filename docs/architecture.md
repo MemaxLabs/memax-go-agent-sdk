@@ -202,8 +202,9 @@ adapts a `Cleaner` into a `SessionEnded` hook so host-managed processes can be
 cleaned up when the parent agent session finishes. `commandtools.OSSessionManager`
 is the reference local adapter for real managed processes: rooted cwd
 resolution, bounded buffered output with drop accounting, interactive stdin
-writes with optional short post-write waits, natural-exit and stop tracking,
-and session-scoped cleanup over local `os/exec` processes.
+writes with optional short post-write waits, optional PTY-backed terminal
+sessions for shells and REPLs, natural-exit and stop tracking, and session-
+scoped cleanup over local `os/exec` processes.
 `OSSessionManager` is not a sandbox and does not constrain filesystem, network,
 or process access beyond cwd resolution; hosts that need stronger isolation
 must wrap or replace it. Graceful stop is best-effort and platform dependent:

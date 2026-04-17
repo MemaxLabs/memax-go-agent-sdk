@@ -202,8 +202,9 @@ type ApprovalSummaryEvent struct {
 // CommandEvent describes one host-owned command lifecycle observation.
 // `run_command` uses Action "run" and populates process status fields.
 // Managed command sessions populate Action "start", "write", "read", or
-// "stop" plus CommandID, Status, PID, NextSeq, OutputChunks, DroppedChunks,
-// and DroppedBytes as appropriate. "write" additionally sets InputBytes.
+// "stop" plus CommandID, Status, PID, TTY, NextSeq, OutputChunks,
+// DroppedChunks, and DroppedBytes as appropriate. "write" additionally sets
+// InputBytes.
 // Command output text remains in the paired EventToolResult so
 // transcript-visible tool behavior stays explicit.
 type CommandEvent struct {
@@ -213,6 +214,7 @@ type CommandEvent struct {
 	CWD             string
 	Status          string
 	PID             int
+	TTY             bool
 	InputBytes      int
 	ExitCode        int
 	TimedOut        bool

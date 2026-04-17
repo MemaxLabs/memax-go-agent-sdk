@@ -1891,6 +1891,7 @@ func emitCommandToolEvent(ctx context.Context, emit func(Event) bool, opts Optio
 		CWD:             metadatavalues.String(result.Metadata, model.MetadataCommandCWD),
 		Status:          metadatavalues.String(result.Metadata, model.MetadataCommandStatus),
 		PID:             metadatavalues.Int(result.Metadata, model.MetadataCommandPID),
+		TTY:             metadatavalues.Bool(result.Metadata, model.MetadataCommandTTY),
 		InputBytes:      metadatavalues.Int(result.Metadata, model.MetadataCommandInputBytes),
 		ExitCode:        metadatavalues.Int(result.Metadata, model.MetadataCommandExitCode),
 		TimedOut:        metadatavalues.Bool(result.Metadata, model.MetadataCommandTimedOut),

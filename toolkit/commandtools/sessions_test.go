@@ -129,13 +129,14 @@ func TestStartReadStopToolsReturnMetadata(t *testing.T) {
 	manager := NewScriptedSessionManager(ScriptedCommand{
 		ID:  "dev-1",
 		PID: 1234,
+		TTY: true,
 		Pages: []ScriptedOutputPage{{
-			Chunks:  []OutputChunk{{Seq: 1, Stream: "stdout", Text: "listening on :3000\n"}},
+			Chunks:  []OutputChunk{{Seq: 1, Stream: "pty", Text: "listening on :3000\n"}},
 			Running: true,
 		}},
 		WritePages: []ScriptedWritePage{{
 			Page: ScriptedOutputPage{
-				Chunks:  []OutputChunk{{Seq: 2, Stream: "stdout", Text: "pong\n"}},
+				Chunks:  []OutputChunk{{Seq: 2, Stream: "pty", Text: "pong\n"}},
 				Running: true,
 			},
 		}},
@@ -151,14 +152,17 @@ func TestStartReadStopToolsReturnMetadata(t *testing.T) {
 		Runtime: runtime,
 		Use: model.ToolUse{
 			Name:  StartToolName,
-			Input: json.RawMessage(`{"command":["npm","run","dev"],"purpose":"start dev server"}`),
+			Input: json.RawMessage(`{"command":["npm","run","dev"],"purpose":"start dev server","tty":true}`),
 		},
 	})
 	if err != nil {
 		t.Fatalf("start handler returned error: %v", err)
 	}
-	if started.Metadata[MetadataCommandOperation] != "start" || started.Metadata[MetadataCommandSessionID] != "dev-1" {
+	if started.Metadata[MetadataCommandOperation] != "start" || started.Metadata[MetadataCommandSessionID] != "dev-1" || started.Metadata[MetadataCommandTTY] != true {
 		t.Fatalf("started metadata = %#v, want command start metadata", started.Metadata)
+	}
+	if !strings.Contains(started.Content, "tty: true") {
+		t.Fatalf("start content = %q, want tty indicator", started.Content)
 	}
 	read, err := readTool.(tool.Definition).Handler(context.Background(), tool.Call{
 		Runtime: runtime,
@@ -173,7 +177,7 @@ func TestStartReadStopToolsReturnMetadata(t *testing.T) {
 	if read.Metadata[MetadataCommandOperation] != "read" || read.Metadata[MetadataCommandOutputChunks] != 1 {
 		t.Fatalf("read metadata = %#v, want command read metadata", read.Metadata)
 	}
-	if !strings.Contains(read.Content, "listening on :3000") {
+	if !strings.Contains(read.Content, "[pty #1]") || !strings.Contains(read.Content, "listening on :3000") {
 		t.Fatalf("read content = %q, want output chunk", read.Content)
 	}
 	wrote, err := writeTool.(tool.Definition).Handler(context.Background(), tool.Call{
@@ -186,10 +190,10 @@ func TestStartReadStopToolsReturnMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("write handler returned error: %v", err)
 	}
-	if wrote.Metadata[MetadataCommandOperation] != "write" || wrote.Metadata[MetadataCommandInputBytes] != 5 || wrote.Metadata[MetadataCommandOutputChunks] != 1 {
+	if wrote.Metadata[MetadataCommandOperation] != "write" || wrote.Metadata[MetadataCommandInputBytes] != 5 || wrote.Metadata[MetadataCommandOutputChunks] != 1 || wrote.Metadata[MetadataCommandTTY] != true {
 		t.Fatalf("write metadata = %#v, want command write metadata", wrote.Metadata)
 	}
-	if !strings.Contains(wrote.Content, "pong") {
+	if !strings.Contains(wrote.Content, "[pty #2]") || !strings.Contains(wrote.Content, "pong") {
 		t.Fatalf("write content = %q, want write output chunk", wrote.Content)
 	}
 	stopped, err := stopTool.(tool.Definition).Handler(context.Background(), tool.Call{
@@ -202,7 +206,7 @@ func TestStartReadStopToolsReturnMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stop handler returned error: %v", err)
 	}
-	if stopped.Metadata[MetadataCommandOperation] != "stop" {
+	if stopped.Metadata[MetadataCommandOperation] != "stop" || stopped.Metadata[MetadataCommandTTY] != true {
 		t.Fatalf("stop metadata = %#v, want stop operation", stopped.Metadata)
 	}
 }
@@ -216,6 +220,16 @@ func TestApprovalSummaryFromStartInput(t *testing.T) {
 		summary.Description != "start local dev server" ||
 		summary.Changes != 1 {
 		t.Fatalf("summary = %#v, want start command approval summary", summary)
+	}
+}
+
+func TestApprovalSummaryFromTTYStartInput(t *testing.T) {
+	summary, err := ApprovalSummaryFromStartInput([]byte(`{"command":["python","-i"],"tty":true}`))
+	if err != nil {
+		t.Fatalf("ApprovalSummaryFromStartInput returned error: %v", err)
+	}
+	if !strings.Contains(summary.Risk, "PTY sessions") {
+		t.Fatalf("summary = %#v, want tty-specific risk text", summary)
 	}
 }
 

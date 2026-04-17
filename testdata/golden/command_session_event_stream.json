@@ -17,7 +17,7 @@
     "turn": 1,
     "tool_id": "start-1",
     "tool_name": "start_command",
-    "tool_result": "started command session server-1: npm run dev\nstatus: running\npid: 4242\npurpose: start local dev server"
+    "tool_result": "started command session server-1: npm run dev\nstatus: running\ntty: true\npid: 4242\npurpose: start local dev server"
   },
   {
     "kind": "command_started",
@@ -25,7 +25,8 @@
     "command_operation": "start",
     "command_id": "server-1",
     "command_status": "running",
-    "command_pid": 4242
+    "command_pid": 4242,
+    "command_tty": true
   },
   {
     "kind": "model_request",
@@ -42,7 +43,7 @@
     "turn": 2,
     "tool_id": "write-1",
     "tool_name": "write_command_input",
-    "tool_result": "wrote input to command session server-1: npm run dev\nstatus: running\ninput_bytes: 6\nnext_seq: 2\n[stdout #1]\necho:hello\n"
+    "tool_result": "wrote input to command session server-1: npm run dev\nstatus: running\ntty: true\ninput_bytes: 6\nnext_seq: 2\n[pty #1]\necho:hello\n"
   },
   {
     "kind": "command_input",
@@ -51,6 +52,7 @@
     "command_id": "server-1",
     "command_status": "running",
     "command_pid": 4242,
+    "command_tty": true,
     "command_input_bytes": 6,
     "command_next_seq": 2,
     "command_output_chunks": 1
@@ -70,7 +72,7 @@
     "turn": 3,
     "tool_id": "stop-1",
     "tool_name": "stop_command",
-    "tool_result": "stopped command session server-1: npm run dev\nstatus: stopped\nexit_code: 143"
+    "tool_result": "stopped command session server-1: npm run dev\nstatus: stopped\ntty: true\nexit_code: 143"
   },
   {
     "kind": "command_stopped",
@@ -79,6 +81,7 @@
     "command_id": "server-1",
     "command_status": "stopped",
     "command_pid": 4242,
+    "command_tty": true,
     "command_next_seq": 2
   },
   {

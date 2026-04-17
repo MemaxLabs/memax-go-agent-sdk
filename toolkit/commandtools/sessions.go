@@ -44,6 +44,7 @@ const (
 	MetadataCommandSessionID     = model.MetadataCommandSessionID
 	MetadataCommandStatus        = model.MetadataCommandStatus
 	MetadataCommandPID           = model.MetadataCommandPID
+	MetadataCommandTTY           = model.MetadataCommandTTY
 	MetadataCommandStartedAt     = model.MetadataCommandStartedAt
 	MetadataCommandFinishedAt    = model.MetadataCommandFinishedAt
 	MetadataCommandInputBytes    = model.MetadataCommandInputBytes
@@ -73,6 +74,7 @@ type CommandSession struct {
 	Purpose         string
 	Status          SessionStatus
 	PID             int
+	TTY             bool
 	StartedAt       time.Time
 	FinishedAt      *time.Time
 	ExitCode        *int
@@ -100,6 +102,7 @@ type StartRequest struct {
 	CWD             string
 	Env             map[string]string
 	Stdin           string
+	TTY             bool
 	Timeout         time.Duration
 	Purpose         string
 	Metadata        map[string]any
@@ -491,6 +494,7 @@ type startInput struct {
 	CWD       string            `json:"cwd"`
 	Env       map[string]string `json:"env"`
 	Stdin     string            `json:"stdin"`
+	TTY       bool              `json:"tty"`
 	TimeoutMS int               `json:"timeout_ms"`
 	Purpose   string            `json:"purpose"`
 	Metadata  map[string]any    `json:"metadata"`
@@ -552,6 +556,10 @@ func startInputSchema() map[string]any {
 			"stdin": map[string]any{
 				"type":        "string",
 				"description": "Optional initial stdin content.",
+			},
+			"tty": map[string]any{
+				"type":        "boolean",
+				"description": "Allocate a PTY-backed terminal session. Use for shells, REPLs, prompts, or tools that behave differently when attached to a terminal.",
 			},
 			"timeout_ms": map[string]any{
 				"type":        "integer",
@@ -622,9 +630,16 @@ func ApprovalSummaryFromStartInput(inputBytes []byte) (approvaltools.Summary, er
 	return approvaltools.Summary{
 		Title:       title,
 		Description: description,
-		Risk:        "May keep reading or mutating host-owned state until the session is stopped or times out.",
+		Risk:        startApprovalRisk(input.TTY),
 		Changes:     1,
 	}, nil
+}
+
+func startApprovalRisk(tty bool) string {
+	if tty {
+		return "May keep reading or mutating host-owned state until the terminal session is stopped or times out. PTY sessions can change command behavior compared with plain pipes."
+	}
+	return "May keep reading or mutating host-owned state until the session is stopped or times out."
 }
 
 func startRequestFromInput(input startInput) (StartRequest, error) {
@@ -642,6 +657,7 @@ func startRequestFromInput(input startInput) (StartRequest, error) {
 		CWD:      strings.TrimSpace(input.CWD),
 		Env:      cloneStringMap(input.Env),
 		Stdin:    input.Stdin,
+		TTY:      input.TTY,
 		Timeout:  timeout,
 		Purpose:  strings.TrimSpace(input.Purpose),
 		Metadata: model.CloneMetadata(input.Metadata),
@@ -702,6 +718,9 @@ func listResult(sessions []CommandSession) model.ToolResult {
 			b.WriteByte('\n')
 		}
 		fmt.Fprintf(&b, "%s\t%s\t%s", session.ID, session.Status, strings.Join(session.Argv, " "))
+		if session.TTY {
+			b.WriteString("\ttty=true")
+		}
 		if session.CWD != "" {
 			fmt.Fprintf(&b, "\tcwd=%s", session.CWD)
 		}
@@ -724,6 +743,7 @@ func sessionMetadata(session CommandSession) map[string]any {
 		MetadataCommandCWD:       session.CWD,
 		MetadataCommandStatus:    string(session.Status),
 		MetadataCommandPID:       session.PID,
+		MetadataCommandTTY:       session.TTY,
 		MetadataCommandStartedAt: session.StartedAt.UTC().Format(time.RFC3339Nano),
 		MetadataCommandTimedOut:  session.TimedOut,
 		MetadataCommandNextSeq:   session.NextSeq,
@@ -747,6 +767,9 @@ func formatSessionStart(session CommandSession) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "started command session %s: %s", session.ID, strings.Join(session.Argv, " "))
 	fmt.Fprintf(&b, "\nstatus: %s", session.Status)
+	if session.TTY {
+		b.WriteString("\ntty: true")
+	}
 	if session.CWD != "" {
 		fmt.Fprintf(&b, "\ncwd: %s", session.CWD)
 	}
@@ -763,6 +786,9 @@ func formatSessionRead(result ReadResult) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "command output for %s: %s", result.Session.ID, strings.Join(result.Session.Argv, " "))
 	fmt.Fprintf(&b, "\nstatus: %s", result.Session.Status)
+	if result.Session.TTY {
+		b.WriteString("\ntty: true")
+	}
 	fmt.Fprintf(&b, "\nnext_seq: %d", result.NextSeq)
 	if result.Session.DroppedChunks > 0 {
 		fmt.Fprintf(&b, "\ndropped_chunks: %d", result.Session.DroppedChunks)
@@ -781,6 +807,9 @@ func formatSessionWrite(result WriteResult) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "wrote input to command session %s: %s", result.Session.ID, strings.Join(result.Session.Argv, " "))
 	fmt.Fprintf(&b, "\nstatus: %s", result.Session.Status)
+	if result.Session.TTY {
+		b.WriteString("\ntty: true")
+	}
 	fmt.Fprintf(&b, "\ninput_bytes: %d", result.InputBytes)
 	fmt.Fprintf(&b, "\nnext_seq: %d", result.NextSeq)
 	if result.Session.DroppedChunks > 0 {
@@ -800,6 +829,9 @@ func formatSessionStop(session CommandSession) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "stopped command session %s: %s", session.ID, strings.Join(session.Argv, " "))
 	fmt.Fprintf(&b, "\nstatus: %s", session.Status)
+	if session.TTY {
+		b.WriteString("\ntty: true")
+	}
 	if session.ExitCode != nil {
 		fmt.Fprintf(&b, "\nexit_code: %d", *session.ExitCode)
 	}
@@ -830,6 +862,7 @@ type ScriptedWritePage struct {
 type ScriptedCommand struct {
 	ID           string
 	PID          int
+	TTY          bool
 	Pages        []ScriptedOutputPage
 	WritePages   []ScriptedWritePage
 	StopExitCode *int
@@ -901,6 +934,7 @@ func (m *ScriptedSessionManager) StartCommand(ctx context.Context, req StartRequ
 			Purpose:         req.Purpose,
 			Status:          SessionRunning,
 			PID:             cmd.PID,
+			TTY:             cmd.TTY || req.TTY,
 			StartedAt:       now,
 		},
 		pages:    cloneOutputPages(cmd.Pages),
@@ -1181,6 +1215,7 @@ func cloneScriptedCommands(commands []ScriptedCommand) []ScriptedCommand {
 		out[i] = ScriptedCommand{
 			ID:           command.ID,
 			PID:          command.PID,
+			TTY:          command.TTY,
 			Pages:        cloneOutputPages(command.Pages),
 			WritePages:   cloneWritePages(command.WritePages),
 			StopExitCode: cloneIntPtr(command.StopExitCode),

@@ -173,23 +173,9 @@ func (m *OSSessionManager) StartCommand(ctx context.Context, req StartRequest) (
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = cwd
 	cmd.Env = m.runner.env(req.Env)
-	stdin, err := cmd.StdinPipe()
+	stdin, readers, err := startSessionIO(cmd, req)
 	if err != nil {
-		return CommandSession{}, fmt.Errorf("commandtools: stdin pipe: %w", err)
-	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		_ = stdin.Close()
-		return CommandSession{}, fmt.Errorf("commandtools: stdout pipe: %w", err)
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		_ = stdin.Close()
-		return CommandSession{}, fmt.Errorf("commandtools: stderr pipe: %w", err)
-	}
-	if err := cmd.Start(); err != nil {
-		_ = stdin.Close()
-		return CommandSession{}, fmt.Errorf("commandtools: start command: %w", err)
+		return CommandSession{}, err
 	}
 
 	now := time.Now().UTC()
@@ -206,6 +192,7 @@ func (m *OSSessionManager) StartCommand(ctx context.Context, req StartRequest) (
 			Purpose:         strings.TrimSpace(req.Purpose),
 			Status:          SessionRunning,
 			PID:             cmd.Process.Pid,
+			TTY:             req.TTY,
 			StartedAt:       now,
 			NextSeq:         1,
 		},
@@ -246,14 +233,16 @@ func (m *OSSessionManager) StartCommand(ctx context.Context, req StartRequest) (
 		}
 	}
 
-	stdoutDone := make(chan struct{})
-	stderrDone := make(chan struct{})
-	go state.captureStream("stdout", stdout, stdoutDone)
-	go state.captureStream("stderr", stderr, stderrDone)
+	doneChans := make([]chan struct{}, len(readers))
+	for i, reader := range readers {
+		doneChans[i] = make(chan struct{})
+		go state.captureStream(reader.stream, reader.reader, reader.closer, doneChans[i])
+	}
 	go func() {
 		waitErr := cmd.Wait()
-		<-stdoutDone
-		<-stderrDone
+		for _, done := range doneChans {
+			<-done
+		}
 		state.finish(waitErr)
 	}()
 
@@ -389,6 +378,43 @@ func (m *OSSessionManager) lookupSession(sessionID, id string) (*osSessionState,
 	return state, nil
 }
 
+func startSessionIO(cmd *exec.Cmd, req StartRequest) (io.WriteCloser, []osSessionReader, error) {
+	if req.TTY {
+		file, err := startPTYCommand(cmd)
+		if err != nil {
+			return nil, nil, err
+		}
+		return file, []osSessionReader{{
+			stream: "pty",
+			reader: file,
+		}}, nil
+	}
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, nil, fmt.Errorf("commandtools: stdin pipe: %w", err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		_ = stdin.Close()
+		return nil, nil, fmt.Errorf("commandtools: stdout pipe: %w", err)
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		_ = stdin.Close()
+		return nil, nil, fmt.Errorf("commandtools: stderr pipe: %w", err)
+	}
+	if err := cmd.Start(); err != nil {
+		_ = stdin.Close()
+		_ = stdout.Close()
+		_ = stderr.Close()
+		return nil, nil, fmt.Errorf("commandtools: start command: %w", err)
+	}
+	return stdin, []osSessionReader{
+		{stream: "stdout", reader: stdout, closer: stdout},
+		{stream: "stderr", reader: stderr, closer: stderr},
+	}, nil
+}
+
 type osSessionState struct {
 	manager       *OSSessionManager
 	mu            sync.RWMutex
@@ -404,6 +430,12 @@ type osSessionState struct {
 	timer         *time.Timer
 	finishOnce    sync.Once
 	stdinMu       sync.Mutex
+}
+
+type osSessionReader struct {
+	stream string
+	reader io.Reader
+	closer io.Closer
 }
 
 func (s *osSessionState) snapshot() CommandSession {
@@ -627,9 +659,11 @@ func (s *osSessionState) timeout() {
 	_ = process.Kill()
 }
 
-func (s *osSessionState) captureStream(stream string, reader io.ReadCloser, done chan<- struct{}) {
+func (s *osSessionState) captureStream(stream string, reader io.Reader, closer io.Closer, done chan<- struct{}) {
 	defer close(done)
-	defer reader.Close()
+	if closer != nil {
+		defer closer.Close()
+	}
 	buf := make([]byte, defaultSessionReadChunkBytes)
 	for {
 		n, err := reader.Read(buf)
@@ -637,7 +671,7 @@ func (s *osSessionState) captureStream(stream string, reader io.ReadCloser, done
 			s.appendOutput(stream, string(buf[:n]))
 		}
 		if err != nil {
-			if errors.Is(err, io.EOF) {
+			if errors.Is(err, io.EOF) || (stream == "pty" && isPTYEOFError(err)) {
 				return
 			}
 			s.appendOutput("stderr", fmt.Sprintf("[commandtools] read %s error: %v\n", stream, err))

@@ -13,6 +13,7 @@ import (
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
+	"github.com/mattn/go-isatty"
 )
 
 func TestRunCommandToolReturnsProcessFailureAsToolError(t *testing.T) {
@@ -242,6 +243,25 @@ func TestHelperProcess(t *testing.T) {
 					os.Exit(0)
 				}
 				_, _ = os.Stdout.WriteString("echo:" + line + "\n")
+			}
+			if err := scanner.Err(); err != nil {
+				_, _ = os.Stderr.WriteString(err.Error())
+				os.Exit(1)
+			}
+		case "tty-echo":
+			if !isatty.IsTerminal(os.Stdin.Fd()) || !isatty.IsTerminal(os.Stdout.Fd()) {
+				_, _ = os.Stdout.WriteString("not-tty\n")
+				os.Exit(3)
+			}
+			_, _ = os.Stdout.WriteString("tty-ready\n")
+			scanner := bufio.NewScanner(os.Stdin)
+			for scanner.Scan() {
+				line := scanner.Text()
+				if line == "exit" {
+					_, _ = os.Stdout.WriteString("tty-bye\n")
+					os.Exit(0)
+				}
+				_, _ = os.Stdout.WriteString("tty:" + line + "\n")
 			}
 			if err := scanner.Err(); err != nil {
 				_, _ = os.Stderr.WriteString(err.Error())

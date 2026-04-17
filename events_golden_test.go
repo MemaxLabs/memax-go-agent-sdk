@@ -197,11 +197,12 @@ func TestQueryCommandSessionEventStreamGolden(t *testing.T) {
 	manager := commandtools.NewScriptedSessionManager(commandtools.ScriptedCommand{
 		ID:  "server-1",
 		PID: 4242,
+		TTY: true,
 		WritePages: []commandtools.ScriptedWritePage{{
 			Page: commandtools.ScriptedOutputPage{
 				Chunks: []commandtools.OutputChunk{{
 					Seq:    1,
-					Stream: "stdout",
+					Stream: "pty",
 					Text:   "echo:hello\n",
 				}},
 				Running: true,
@@ -216,7 +217,7 @@ func TestQueryCommandSessionEventStreamGolden(t *testing.T) {
 				ToolUse: model.ToolUse{
 					ID:    "start-1",
 					Name:  commandtools.StartToolName,
-					Input: json.RawMessage(`{"id":"server-1","command":["npm","run","dev"],"purpose":"start local dev server"}`),
+					Input: json.RawMessage(`{"id":"server-1","command":["npm","run","dev"],"purpose":"start local dev server","tty":true}`),
 				},
 			}},
 			{{
@@ -501,6 +502,7 @@ type goldenEvent struct {
 	CommandID            string    `json:"command_id,omitempty"`
 	CommandStatus        string    `json:"command_status,omitempty"`
 	CommandPID           int       `json:"command_pid,omitempty"`
+	CommandTTY           bool      `json:"command_tty,omitempty"`
 	CommandInputBytes    int       `json:"command_input_bytes,omitempty"`
 	CommandNextSeq       int       `json:"command_next_seq,omitempty"`
 	CommandOutputChunks  int       `json:"command_output_chunks,omitempty"`
@@ -605,6 +607,7 @@ func normalizeGoldenEvent(event Event) goldenEvent {
 			out.CommandID = event.Command.CommandID
 			out.CommandStatus = event.Command.Status
 			out.CommandPID = event.Command.PID
+			out.CommandTTY = event.Command.TTY
 			out.CommandInputBytes = event.Command.InputBytes
 			out.CommandNextSeq = event.Command.NextSeq
 			out.CommandOutputChunks = event.Command.OutputChunks

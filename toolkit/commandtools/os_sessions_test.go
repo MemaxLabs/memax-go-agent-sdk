@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -192,6 +193,66 @@ func TestOSSessionManagerWriteInputEchoesAndExits(t *testing.T) {
 	})
 	if final.Session.ExitCode == nil || *final.Session.ExitCode != 0 {
 		t.Fatalf("final = %#v, want exited session after exit input", final)
+	}
+}
+
+func TestOSSessionManagerTTYSessionUsesPTYStream(t *testing.T) {
+	manager, err := NewOSSessionManager(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewOSSessionManager returned error: %v", err)
+	}
+	started, err := manager.StartCommand(context.Background(), StartRequest{
+		SessionID: "session-1",
+		TTY:       true,
+		Argv: []string{
+			os.Args[0],
+			"-test.run=TestHelperProcess",
+			"--",
+			"session",
+			"tty-echo",
+		},
+		Env: map[string]string{"GO_WANT_HELPER_PROCESS": "1"},
+	})
+	if err != nil {
+		if strings.Contains(err.Error(), "PTY sessions are not supported") {
+			t.Skipf("pty unsupported on %s: %v", runtime.GOOS, err)
+		}
+		t.Fatalf("StartCommand returned error: %v", err)
+	}
+	if !started.TTY {
+		t.Fatalf("started = %#v, want tty session", started)
+	}
+	ready := waitForOutput(t, manager, ReadRequest{SessionID: "session-1", ID: started.ID}, func(result ReadResult) bool {
+		return strings.Contains(joinChunkText(result.Chunks), "tty-ready")
+	})
+	if len(ready.Chunks) == 0 || ready.Chunks[0].Stream != "pty" {
+		t.Fatalf("ready = %#v, want pty stream", ready)
+	}
+
+	wrote, err := manager.WriteCommandInput(context.Background(), WriteRequest{
+		SessionID: "session-1",
+		ID:        started.ID,
+		Input:     "hello\n",
+		Yield:     500 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("WriteCommandInput hello returned error: %v", err)
+	}
+	if !strings.Contains(joinChunkText(wrote.Chunks), "tty:hello") {
+		t.Fatalf("wrote = %#v, want tty echo output", wrote)
+	}
+
+	exited, err := manager.WriteCommandInput(context.Background(), WriteRequest{
+		SessionID: "session-1",
+		ID:        started.ID,
+		Input:     "exit\n",
+		Yield:     500 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("WriteCommandInput exit returned error: %v", err)
+	}
+	if !strings.Contains(joinChunkText(exited.Chunks), "tty-bye") {
+		t.Fatalf("exited = %#v, want tty exit output", exited)
 	}
 }
 

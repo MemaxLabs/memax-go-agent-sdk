@@ -397,12 +397,13 @@ func CommandSessionInteractiveRepairLoop() agenteval.Case {
 	manager := commandtools.NewScriptedSessionManager(commandtools.ScriptedCommand{
 		ID:  "watch-1",
 		PID: 5151,
+		TTY: true,
 		WritePages: []commandtools.ScriptedWritePage{
 			{
 				Page: commandtools.ScriptedOutputPage{
 					Chunks: []commandtools.OutputChunk{{
 						Seq:    1,
-						Stream: "stdout",
+						Stream: "pty",
 						Text:   "watch: README.md status must be fixed\n",
 					}},
 					Running: true,
@@ -412,7 +413,7 @@ func CommandSessionInteractiveRepairLoop() agenteval.Case {
 				Page: commandtools.ScriptedOutputPage{
 					Chunks: []commandtools.OutputChunk{{
 						Seq:    2,
-						Stream: "stdout",
+						Stream: "pty",
 						Text:   "watch: ok\n",
 					}},
 					Running: true,
@@ -422,7 +423,7 @@ func CommandSessionInteractiveRepairLoop() agenteval.Case {
 				Page: commandtools.ScriptedOutputPage{
 					Chunks: []commandtools.OutputChunk{{
 						Seq:    3,
-						Stream: "stdout",
+						Stream: "pty",
 						Text:   "watch: bye\n",
 					}},
 					Running:  false,
@@ -441,7 +442,7 @@ func CommandSessionInteractiveRepairLoop() agenteval.Case {
 			ToolUse: model.ToolUse{
 				ID:    "start-1",
 				Name:  commandtools.StartToolName,
-				Input: json.RawMessage(`{"id":"watch-1","command":["npm","run","test:watch"],"purpose":"start interactive watch mode"}`),
+				Input: json.RawMessage(`{"id":"watch-1","command":["npm","run","test:watch"],"purpose":"start interactive watch mode","tty":true}`),
 			},
 		}},
 		[]model.StreamEvent{{
@@ -515,10 +516,15 @@ func CommandSessionInteractiveRepairLoop() agenteval.Case {
 						writeRequests[2].Input != "exit\n" {
 						return fmt.Errorf("write requests = %#v, want check/check/exit with newline", writeRequests)
 					}
+					startRequests := manager.StartRequests()
+					if len(startRequests) != 1 || !startRequests[0].TTY {
+						return fmt.Errorf("start requests = %#v, want one tty start request", startRequests)
+					}
 					results := result.ToolResults()
 					sawFail := false
 					sawPass := false
 					sawExit := false
+					sawPTY := false
 					for _, toolResult := range results {
 						if toolResult.Name != commandtools.WriteInputToolName {
 							continue
@@ -529,12 +535,15 @@ func CommandSessionInteractiveRepairLoop() agenteval.Case {
 						if strings.Contains(toolResult.Content, "watch: ok") {
 							sawPass = true
 						}
+						if strings.Contains(toolResult.Content, "[pty #") && strings.Contains(toolResult.Content, "tty: true") {
+							sawPTY = true
+						}
 						if strings.Contains(toolResult.Content, "watch: bye") && strings.Contains(toolResult.Content, "status: exited") {
 							sawExit = true
 						}
 					}
-					if !sawFail || !sawPass || !sawExit {
-						return fmt.Errorf("tool results = %#v, want failing, passing, and exit write outputs", results)
+					if !sawFail || !sawPass || !sawExit || !sawPTY {
+						return fmt.Errorf("tool results = %#v, want PTY failing, passing, and exit write outputs", results)
 					}
 					return nil
 				},

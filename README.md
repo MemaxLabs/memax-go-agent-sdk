@@ -267,8 +267,10 @@ single opaque shell tool. `commandtools.OSSessionManager` is the reference
 local adapter: it launches argv directly, applies rooted cwd resolution,
 retains bounded stdout/stderr chunks with drop accounting, keeps stdin open for
 interactive writes, and supports start, write, read, stop, list, and cleanup
-over real local processes. Like `OSRunner`, it is not a sandbox and does not
-filter executables, arguments, or system access.
+over real local processes. When `start_command` sets `tty: true`, the adapter
+starts a PTY-backed terminal session and returns `pty` output chunks instead of
+pretending terminal-native output is plain stdout. Like `OSRunner`, it is not a
+sandbox and does not filter executables, arguments, or system access.
 Graceful stop is best-effort and platform dependent; on Unix it attempts an
 interrupt before forcing termination, while some Windows processes fall back to
 forced termination immediately.
