@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
 	"github.com/MemaxLabs/memax-go-agent-sdk/agenteval"
@@ -16,6 +17,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/agentpolicy"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/approvaltools"
+	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/commandtools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/tasktools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/verifytools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/workspacetools"
@@ -121,6 +123,117 @@ func WorkspacePatchCheckpointRollback() agenteval.Case {
 					}
 					if content != "version one" {
 						return fmt.Errorf("README.md = %q, want rollback to version one", content)
+					}
+					return nil
+				},
+			},
+		},
+	}
+}
+
+// CommandTestRepairLoop returns a single-use scenario where the model runs a
+// host-owned test command, repairs the workspace after a failing exit, reruns
+// the command, and only then finalizes.
+func CommandTestRepairLoop() agenteval.Case {
+	store := workspace.NewMemoryStore(map[string]string{
+		"README.md": "status: broken",
+	})
+	workspaceTools, workspaceErr := workspacetools.NewTools(store)
+	runner := commandtools.NewScriptedRunner(
+		commandtools.Result{
+			ExitCode: 1,
+			Stdout:   "go test ./...\n",
+			Stderr:   "README.md: status must be fixed\n",
+			Duration: 12 * time.Millisecond,
+		},
+		commandtools.Result{
+			ExitCode: 0,
+			Stdout:   "ok ./...\n",
+			Duration: 8 * time.Millisecond,
+		},
+	)
+	commandTool := commandtools.NewTool(commandtools.Config{
+		Runner:    runner,
+		MayMutate: false,
+	})
+	tools := append(workspaceTools, commandTool)
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "cmd-1",
+				Name:  commandtools.ToolName,
+				Input: json.RawMessage(`{"command":["go","test","./..."],"purpose":"verify current state"}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "patch-1",
+				Name: workspacetools.ApplyPatchToolName,
+				Input: json.RawMessage(`{"operations":[
+					{"path":"README.md","old_content":"status: broken","new_content":"status: fixed"}
+				]}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "cmd-2",
+				Name:  commandtools.ToolName,
+				Input: json.RawMessage(`{"command":["go","test","./..."],"purpose":"verify repaired state"}`),
+			},
+		}},
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "Tests pass after repair."}},
+	)
+
+	return agenteval.Case{
+		Name:   "command_test_repair_loop",
+		Prompt: "Run the tests, repair README.md if they fail, then rerun tests before finalizing.",
+		Options: memaxagent.Options{
+			Model: modelClient,
+			Tools: tool.NewRegistry(tools...),
+		},
+		Assertions: []agenteval.Assertion{
+			toolConstructionSucceeded(workspaceErr),
+			agenteval.ToolUsed(commandtools.ToolName),
+			agenteval.ToolUsed(workspacetools.ApplyPatchToolName),
+			agenteval.EventKindEmitted(memaxagent.EventCommandFinished),
+			agenteval.EventKindEmitted(memaxagent.EventWorkspacePatch),
+			agenteval.FinalEquals("Tests pass after repair."),
+			requestCountEquals(modelClient, 4),
+			{
+				Name: "command failure guides workspace repair and rerun",
+				Check: func(result agenteval.Result) error {
+					toolResults := result.ToolResults()
+					commandResults := 0
+					sawFail := false
+					sawPass := false
+					for _, toolResult := range toolResults {
+						if toolResult.Name != commandtools.ToolName {
+							continue
+						}
+						commandResults++
+						if toolResult.IsError && strings.Contains(toolResult.Content, "status must be fixed") {
+							sawFail = true
+						}
+						if !toolResult.IsError && strings.Contains(toolResult.Content, "ok ./...") {
+							sawPass = true
+						}
+					}
+					if commandResults != 2 || !sawFail || !sawPass {
+						return fmt.Errorf("command results = %#v, want fail then pass", toolResults)
+					}
+					content, err := store.ReadFile(context.Background(), "README.md")
+					if err != nil {
+						return err
+					}
+					if content != "status: fixed" {
+						return fmt.Errorf("README.md = %q, want repaired content", content)
+					}
+					requests := runner.Requests()
+					if len(requests) != 2 || requests[0].Purpose != "verify current state" || requests[1].Purpose != "verify repaired state" {
+						return fmt.Errorf("command requests = %#v", requests)
 					}
 					return nil
 				},

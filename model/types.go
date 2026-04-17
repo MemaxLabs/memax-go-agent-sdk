@@ -174,6 +174,29 @@ const (
 	// MetadataApprovalSingleUse marks whether the consumed approval grant was
 	// single-use.
 	MetadataApprovalSingleUse = "approval_single_use"
+	// MetadataCommandOperation identifies command tool results that should
+	// produce command lifecycle events.
+	MetadataCommandOperation = "command_operation"
+	// MetadataCommandArgv carries the executed argv vector.
+	MetadataCommandArgv = "command_argv"
+	// MetadataCommandCWD carries the command working directory.
+	MetadataCommandCWD = "command_cwd"
+	// MetadataCommandExitCode carries the process exit code. Runner
+	// implementations may use -1 when no process exit code exists.
+	MetadataCommandExitCode = "command_exit_code"
+	// MetadataCommandTimedOut records whether the command exceeded its timeout.
+	MetadataCommandTimedOut = "command_timed_out"
+	// MetadataCommandDurationMS carries command runtime in milliseconds.
+	MetadataCommandDurationMS = "command_duration_ms"
+	// MetadataCommandStdoutBytes carries the uncapped stdout byte count when
+	// known, or the retained stdout byte count otherwise.
+	MetadataCommandStdoutBytes = "command_stdout_bytes"
+	// MetadataCommandStderrBytes carries the uncapped stderr byte count when
+	// known, or the retained stderr byte count otherwise.
+	MetadataCommandStderrBytes = "command_stderr_bytes"
+	// MetadataCommandOutputTruncated records whether stdout or stderr was
+	// truncated before returning to the model.
+	MetadataCommandOutputTruncated = "command_output_truncated"
 	// MetadataTaskID identifies the task affected by a tool result or requested
 	// operation.
 	MetadataTaskID = "task_id"

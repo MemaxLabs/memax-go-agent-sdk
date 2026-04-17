@@ -29,6 +29,7 @@ configured:
    results can be followed by `EventApprovalRequested` and either
    `EventApprovalGranted` or `EventApprovalDenied`. A later tool result that
    consumes an approval grant can be followed by `EventApprovalConsumed`.
+   Command tool results can be followed by `EventCommandFinished`.
 7. If the assistant returns a final answer, before-final hooks can deny
    finalization. A denial appends a user repair prompt and starts the next turn;
    no `EventResult` or terminal `EventError` is emitted for that denial unless
@@ -98,6 +99,12 @@ diagnostic count, and affected paths. Failed verification should be a tool error
 result, not a terminal agent error, so the model can repair and retry or restore
 a checkpoint.
 
+Command events are metadata-derived from `run_command` and compatible custom
+command tools. `EventCommandFinished` carries argv, cwd, exit code, timeout
+status, duration, retained output byte counts, and truncation status. Command
+stdout/stderr remain in the paired `EventToolResult`, preserving the normal
+transcript-visible tool contract while giving hosts structured process status.
+
 Approval events are metadata-derived from `request_approval` results and from
 policy metadata attached to later tool results. Request events expose the action,
 decision, reason, optional input hash, and optional structured review summary
@@ -130,6 +137,7 @@ Important metric names include:
 - `memax.workspace.patch`, `memax.workspace.diff`,
   `memax.workspace.checkpoint`, `memax.workspace.restore`
 - `memax.verification.run`
+- `memax.command.finished`, `memax.command.duration_ms`
 - `memax.approval.requests`, `memax.approval.grants`,
   `memax.approval.denials`, `memax.approval.consumed`
 

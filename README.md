@@ -234,6 +234,28 @@ the core SDK shell access. Failed verification returns a model-visible tool
 error with diagnostics, so the agent can repair, re-run verification, or restore
 a checkpoint through normal tools.
 
+For general test/build/lint commands, use the optional `toolkit/commandtools`
+package. It exposes `run_command` over a host-owned `Runner`; the core SDK
+still does not execute shell commands itself. The reference `OSRunner` launches
+argv directly, applies cwd containment when rooted, enforces timeouts, and caps
+stdout/stderr. `OSRunner` is not a sandbox and does not filter commands or
+arguments; hosts that need an allowlist, container, network policy, or process
+sandbox should wrap or replace it. It does not inherit `os.Environ()` by
+default because environment variables often contain secrets:
+
+```go
+runner, err := commandtools.NewOSRunner("/path/to/repo")
+commandTool := commandtools.NewTool(commandtools.Config{
+    Runner:    runner,
+    MayMutate: false, // set true for generators, formatters, or scripts that write
+})
+registry.Register(commandTool)
+```
+
+Command results are normal tool results with exit code, timeout, duration, and
+output metadata. Non-zero exits are model-visible tool errors, enabling the
+agent to patch, rerun, or ask for approval through the normal loop.
+
 To require a machine-readable final answer, configure `Options.Output` with a
 JSON Schema. The default prompt builder includes the contract, and `Query`
 validates the final answer. If validation fails, the SDK appends a repair prompt

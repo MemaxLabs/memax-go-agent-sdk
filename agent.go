@@ -722,6 +722,10 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 					shouldStop = true
 					return false
 				}
+				if !emitCommandToolEvent(turnCtx, emit, opts, sessionID, turn, result) {
+					shouldStop = true
+					return false
+				}
 				if err := opts.Sessions.Append(turnCtx, sessionID, model.Message{
 					Role: model.RoleTool,
 					ToolResult: &model.ToolResult{
@@ -1873,6 +1877,46 @@ func approvalSummaryFromMetadata(metadata map[string]any) ApprovalSummaryEvent {
 		Deleted:     metadatavalues.Int(metadata, model.MetadataApprovalSummaryDeleted),
 		ByteDelta:   metadatavalues.Int(metadata, model.MetadataApprovalSummaryByteDelta),
 	}
+}
+
+func emitCommandToolEvent(ctx context.Context, emit func(Event) bool, opts Options, sessionID string, turn int, result model.ToolResult) bool {
+	operation := metadatavalues.String(result.Metadata, model.MetadataCommandOperation)
+	if operation == "" {
+		return true
+	}
+	if operation != "run" {
+		return true
+	}
+	commandEvent := &CommandEvent{
+		Operation:       operation,
+		Argv:            metadataStrings(result.Metadata, model.MetadataCommandArgv),
+		CWD:             metadatavalues.String(result.Metadata, model.MetadataCommandCWD),
+		ExitCode:        metadatavalues.Int(result.Metadata, model.MetadataCommandExitCode),
+		TimedOut:        metadatavalues.Bool(result.Metadata, model.MetadataCommandTimedOut),
+		DurationMS:      metadatavalues.Int(result.Metadata, model.MetadataCommandDurationMS),
+		StdoutBytes:     metadatavalues.Int(result.Metadata, model.MetadataCommandStdoutBytes),
+		StderrBytes:     metadatavalues.Int(result.Metadata, model.MetadataCommandStderrBytes),
+		OutputTruncated: metadatavalues.Bool(result.Metadata, model.MetadataCommandOutputTruncated),
+	}
+	event := newEvent(EventCommandFinished, sessionID, turn)
+	event.Command = commandEvent
+	if !emit(event) {
+		return false
+	}
+	opts.Meter.Add(ctx, "memax.command.finished", 1,
+		telemetry.String("memax.session_id", sessionID),
+		telemetry.Int("memax.turn", turn),
+		telemetry.Int("memax.command.exit_code", commandEvent.ExitCode),
+		telemetry.Bool("memax.command.timed_out", commandEvent.TimedOut),
+		telemetry.Bool("memax.command.output_truncated", commandEvent.OutputTruncated),
+	)
+	opts.Meter.Record(ctx, "memax.command.duration_ms", float64(commandEvent.DurationMS),
+		telemetry.String("memax.session_id", sessionID),
+		telemetry.Int("memax.turn", turn),
+		telemetry.Int("memax.command.exit_code", commandEvent.ExitCode),
+		telemetry.Bool("memax.command.timed_out", commandEvent.TimedOut),
+	)
+	return true
 }
 
 func metadataStrings(metadata map[string]any, key string) []string {

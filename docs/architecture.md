@@ -62,6 +62,9 @@ gateway needs a nonstandard route.
 - `toolkit/tasktools`: optional task-state tools for planning, progress tracking, and resumable work summaries.
 - `toolkit/skilltools`: optional skill discovery tools over `skill.Source`.
 - `toolkit/workspacetools`: optional workspace read/list/patch/diff/checkpoint/restore tools over `workspace.Store`.
+- `toolkit/commandtools`: optional command execution tools over a host-owned
+  runner. The reference OS runner launches argv directly without an implicit
+  shell and applies cwd containment, timeouts, and output caps.
 - `toolkit/approvaltools`: optional host approval request tool over an
   application-owned approver.
 - `toolkit/agentpolicy`: optional hook-based policy presets for common agent
@@ -172,6 +175,21 @@ through normal transcript-visible tool calls. Verification requests include the
 active session ID so opt-in policies can correlate failures with prior
 checkpoint, task, or approval state without coupling verification to the core
 agent loop.
+
+The optional `toolkit/commandtools` package provides `run_command` over a
+host-owned `Runner`. The tool accepts an argv vector rather than a shell string,
+so the model, approval layer, and audit logs all refer to the exact executable
+and arguments. `commandtools.OSRunner` is a reference local adapter with
+root-confined cwd resolution, direct `os/exec` launch, timeout enforcement, and
+bounded stdout/stderr capture; it is not an OS sandbox, does not filter
+executables or arguments, and should be installed only by hosts that explicitly
+want local process execution. Hosts that need command allowlists, containers,
+network policy, or OS sandboxing should wrap or replace the runner. OSRunner
+does not inherit the host environment by default because environment variables
+often contain credentials. `ScriptedRunner` supports deterministic evals.
+Command results carry exit code, timeout, duration, retained output byte counts,
+truncation status, and argv metadata, which drive `EventCommandFinished` and
+`memax.command.*` metrics.
 
 The optional `toolkit/checkpointtools` package provides `create_checkpoint`, `list_checkpoints`, `restore_checkpoint`, and `delete_checkpoint` over the `checkpoint.Manager` interface. The SDK's in-memory manager stores checkpoint metadata and is useful for tests; production managers should connect these operations to a virtual workspace, filesystem snapshot service, database branch, or remote sandbox. Checkpoints are not stored inside session transcripts, but checkpoint records carry session and parent-session IDs for correlation.
 
@@ -475,9 +493,10 @@ approval events and `memax.approval.*` counters so hosts can build review UI and
 audit logs without parsing generic tool-result text.
 The approval request schema includes an optional structured summary with title,
 description, risk, paths, change counts, and byte delta. Toolkit helpers such as
-`workspacetools.ApprovalSummaryFromPatchInput` can derive summaries from
-tool-specific inputs while keeping the core approval contract provider- and
-workspace-neutral.
+`workspacetools.ApprovalSummaryFromPatchInput` and
+`commandtools.ApprovalSummaryFromRunInput` can derive summaries from
+tool-specific inputs while keeping the core approval contract provider-,
+workspace-, and command-runner-neutral.
 
 ## Context Window
 
@@ -535,7 +554,7 @@ or dynamic policies. The core package depends only on the provider-neutral
 
 ## Observability
 
-Tracing is optional and uses a small SDK-owned `telemetry.Tracer` interface so the core can be tested without a real exporter. Metrics are optional and use a matching SDK-owned `telemetry.Meter` interface with counter and value-recording methods. The `otel` package adapts both interfaces to OpenTelemetry. Current spans cover full query runs, turns, context policy application, model streaming, and individual tool executions. Metrics cover query starts/completions/errors, turn starts and durations, model stream starts/errors/durations, context compaction events, skill discovery/search/load operations, approval request/decision/consumption operations, tool executions and durations, and hook errors. Spans and metrics carry stable attributes for session IDs, turn numbers, message counts, tool IDs, tool names, skill names, approval actions, tool input/result byte counts, and tool policy flags.
+Tracing is optional and uses a small SDK-owned `telemetry.Tracer` interface so the core can be tested without a real exporter. Metrics are optional and use a matching SDK-owned `telemetry.Meter` interface with counter and value-recording methods. The `otel` package adapts both interfaces to OpenTelemetry. Current spans cover full query runs, turns, context policy application, model streaming, and individual tool executions. Metrics cover query starts/completions/errors, turn starts and durations, model stream starts/errors/durations, context compaction events, skill discovery/search/load operations, approval request/decision/consumption operations, command completion/duration, tool executions and durations, and hook errors. Spans and metrics carry stable attributes for session IDs, turn numbers, message counts, tool IDs, tool names, skill names, approval actions, tool input/result byte counts, and tool policy flags.
 
 Durable session stores should support:
 

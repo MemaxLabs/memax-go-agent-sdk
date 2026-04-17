@@ -215,9 +215,9 @@ use blocks arrive while keeping mutating tools serialized.
 **Current state:** file tools, source-neutral workspace contracts, workspace
 tools, in-memory workspace state, root-confined OS-backed workspace state,
 guarded structured patches, unified diffs, dry-run previews, patch review,
-diffs, checkpoints, restore, host-owned verification tools, lifecycle events,
-model-visible rollback guidance after failed verification, and eval coverage
-exist as optional packages.
+diffs, checkpoints, restore, host-owned verification tools, host-owned command
+execution tools, lifecycle events, model-visible rollback guidance after failed
+verification, and eval coverage exist as optional packages.
 
 **Gap:** A serious coding agent needs a workspace abstraction with diffs,
 patches, snapshots, restore, reviewable mutations, and sandbox boundaries.
@@ -234,6 +234,9 @@ patches, snapshots, restore, reviewable mutations, and sandbox boundaries.
   workspace contract source-neutral.
 - Verification is an explicit host-owned tool capability, not hidden shell
   access or an implicit SDK side effect.
+- Command execution is an explicit host-owned runner capability with argv-only
+  inputs, timeout/output caps, structured status metadata, and approval-summary
+  support; the core SDK never gets implicit shell access.
 - File tools emit structured metadata for modified paths and checkpoint IDs.
 - CI/server examples use workspace adapters instead of raw OS assumptions.
 
@@ -247,6 +250,8 @@ patches, snapshots, restore, reviewable mutations, and sandbox boundaries.
 - Workspace diff is available after a run.
 - Verification failure returns diagnostics, the model repairs, and verification
   passes. Initial coverage exists.
+- Command failure returns process diagnostics, the model repairs workspace state,
+  and the command passes on rerun. Initial coverage exists.
 - Verification failure can drive checkpoint restore, including opt-in policy
   guidance that recommends the latest session checkpoint without restoring
   hiddenly. Initial coverage exists.

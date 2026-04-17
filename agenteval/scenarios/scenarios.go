@@ -59,6 +59,7 @@ func All() []agenteval.Case {
 		PlannerTaskProgressFromVerification(),
 		WorkspaceVerificationRepair(),
 		WorkspaceVerificationRollback(),
+		CommandTestRepairLoop(),
 		OpenAIProviderTextAndUsage(),
 		AnthropicProviderTextAndUsage(),
 		OpenAIProviderToolUseRoundTrip(),

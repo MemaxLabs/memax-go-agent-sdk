@@ -73,8 +73,11 @@ const (
 	// EventApprovalConsumed is emitted when a later tool result carries metadata
 	// showing that an approval grant was consumed for that attempt.
 	EventApprovalConsumed EventKind = "approval_consumed"
-	EventError            EventKind = "error"
-	EventResult           EventKind = "result"
+	// EventCommandFinished is emitted when a command tool returns process
+	// status and retained output metadata.
+	EventCommandFinished EventKind = "command_finished"
+	EventError           EventKind = "error"
+	EventResult          EventKind = "result"
 )
 
 // Event is emitted by Query as the orchestration loop progresses.
@@ -97,6 +100,7 @@ type Event struct {
 	Workspace    *WorkspaceEvent
 	Verification *VerificationEvent
 	Approval     *ApprovalEvent
+	Command      *CommandEvent
 	Result       string
 	Err          error
 }
@@ -181,6 +185,21 @@ type ApprovalSummaryEvent struct {
 	Modified    int
 	Deleted     int
 	ByteDelta   int
+}
+
+// CommandEvent describes one host-owned command execution. Command output is
+// exposed through the paired EventToolResult; this event carries process
+// status and accounting fields for UIs, audit logs, and metrics.
+type CommandEvent struct {
+	Operation       string
+	Argv            []string
+	CWD             string
+	ExitCode        int
+	TimedOut        bool
+	DurationMS      int
+	StdoutBytes     int
+	StderrBytes     int
+	OutputTruncated bool
 }
 
 func newEvent(kind EventKind, sessionID string, turn int) Event {
