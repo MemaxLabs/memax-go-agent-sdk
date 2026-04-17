@@ -24,7 +24,10 @@ The long-term product has three layers:
   doc, email, calendar, remote execution, and other host-owned integrations.
 - **Opinionated stacks**: batteries-included configurations built on the same
   kernel and adapters, starting with coding workflows and later expanding to
-  personal intelligence and managed cloud agents.
+  personal intelligence and managed cloud agents. An initial `stack/coding`
+  package now assembles the SDK's coding-oriented tools, planner wiring, and
+  common safety policies into one reusable runtime profile, including named
+  workflow presets such as `safe_local`, `ci_repair`, and `interactive_dev`.
 
 The SDK is intentionally built so the same kernel can eventually support:
 
@@ -78,7 +81,19 @@ Coding-oriented adapters and toolkits:
 - checkpoint manager interfaces and checkpoint tools
 - workspace, patch, diff, restore, verification, and command toolkits over
   host-owned backends
+- initial `stack/coding` assembly for batteries-included coding workflows
 - skill discovery tools
+
+`stack/coding` now exposes named presets so hosts can start from a workflow
+profile and then attach their own backends:
+
+```go
+cfg := coding.CIRepair()
+cfg.Workspace = workspaceStore
+cfg.Verifier.Verifier = verifier
+cfg.Command.Runner = runner
+stack, err := coding.New(cfg)
+```
 
 The current implementation is strongest on coding-agent orchestration because
 that is the most demanding initial domain. The architecture is being hardened
@@ -113,6 +128,7 @@ Additional deterministic examples:
 ```sh
 go run ./examples/session_resume
 go run ./examples/advanced_stack
+go run ./examples/coding_stack
 go run ./examples/ci_embedding
 go run ./examples/skills_identity
 go run ./examples/eval_scenarios

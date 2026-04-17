@@ -144,9 +144,11 @@ system prompt.
 
 ## Phase 7: Opinionated Stacks
 
-- Add `stack/coding` as the first batteries-included runtime assembly with
-  workspace, command, verification, approvals, checkpointing, planner/task
-  policies, and eval suites tuned for coding workflows.
+- Initial `stack/coding` assembly now exists with workspace, command,
+  verification, managed session, approval, checkpointing, and planner/task
+  wiring, plus named workflow presets (`safe_local`, `ci_repair`,
+  `interactive_dev`). Next steps are broader eval suites and reference
+  embeddings tuned for competitive coding workflows.
 - Add `stack/personal` over the same kernel for docs, notes, messaging,
   scheduling, memory, and approval-aware personal intelligence workflows.
 - Add `stack/cloudmanaged` for multi-tenant, server-embedded, remote-execution

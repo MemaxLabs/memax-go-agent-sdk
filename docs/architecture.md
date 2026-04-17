@@ -85,9 +85,13 @@ contracts. The near-term target stacks are:
 
 Each stack should package prompt defaults, tool bundles, policies, evals, and
 embedding examples without introducing special-case logic into the kernel.
-`stack/coding` is the first stack expected to reach competitive maturity; the
-other stacks should reuse the same kernel and adapter seams rather than fork
-the architecture.
+An initial `stack/coding` package now exists and assembles workspace, command,
+verification, approval, task/planner, and policy defaults into a reusable
+coding runtime profile. It now includes named workflow presets
+(`safe_local`, `ci_repair`, `interactive_dev`) so hosts can start from a
+workflow mode and then attach their own backends. `stack/coding` is the first
+stack expected to reach competitive maturity; the other stacks should reuse
+the same kernel and adapter seams rather than fork the architecture.
 
 ## Package Shape
 
