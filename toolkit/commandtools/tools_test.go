@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -210,6 +211,45 @@ func TestHelperProcess(t *testing.T) {
 			os.Exit(2)
 		}
 		_, _ = os.Stdout.WriteString(os.Getenv(args[2]))
+	case "session":
+		if len(args) < 3 {
+			os.Exit(2)
+		}
+		switch args[2] {
+		case "ready-then-finish":
+			delay := 200 * time.Millisecond
+			if len(args) >= 4 {
+				parsed, err := time.ParseDuration(args[3])
+				if err != nil {
+					os.Exit(2)
+				}
+				delay = parsed
+			}
+			_, _ = os.Stdout.WriteString("ready\n")
+			time.Sleep(delay)
+			_, _ = os.Stdout.WriteString("done\n")
+		case "linger":
+			_, _ = os.Stdout.WriteString("ready\n")
+			time.Sleep(30 * time.Second)
+		case "cwd":
+			wd, err := os.Getwd()
+			if err != nil {
+				_, _ = os.Stderr.WriteString(err.Error())
+				os.Exit(1)
+			}
+			_, _ = os.Stdout.WriteString(wd)
+		case "sleep-exit":
+			if len(args) < 4 {
+				os.Exit(2)
+			}
+			millis, err := strconv.Atoi(args[3])
+			if err != nil {
+				os.Exit(2)
+			}
+			time.Sleep(time.Duration(millis) * time.Millisecond)
+		default:
+			os.Exit(2)
+		}
 	default:
 		os.Exit(2)
 	}

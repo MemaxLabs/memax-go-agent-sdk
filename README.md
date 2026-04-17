@@ -262,11 +262,27 @@ For longer-lived commands such as dev servers or watch jobs, the same package
 also provides `start_command`, `read_command_output`, `stop_command`, and
 `list_commands` over host-owned session interfaces. This keeps background
 process lifecycle explicit and transcript-visible instead of hiding it behind a
-single opaque shell tool. `commandtools.ScriptedSessionManager` is included for
-deterministic tests and evals, and `commandtools.SessionCleanupOptions(...)`
-installs `SessionEnded` cleanup hooks so session-owned commands do not outlive
-the parent agent run. `commandtools.NewSessionTools(...)` builds the standard
-tool set for hosts that implement the full managed-session surface.
+single opaque shell tool. `commandtools.OSSessionManager` is the reference
+local adapter: it launches argv directly, applies rooted cwd resolution,
+retains bounded stdout/stderr chunks with drop accounting, and supports start,
+read, stop, list, and cleanup over real local processes. Like `OSRunner`, it
+is not a sandbox and does not filter executables, arguments, or system access.
+Graceful stop is best-effort and platform dependent; on Unix it attempts an
+interrupt before forcing termination, while some Windows processes fall back to
+forced termination immediately.
+`commandtools.ScriptedSessionManager` remains available for deterministic tests
+and evals. `commandtools.SessionCleanupOptions(...)` installs `SessionEnded`
+cleanup hooks so session-owned commands do not outlive the parent agent run;
+hosts using managed sessions should install it by default. `commandtools.NewSessionTools(...)`
+builds the standard tool set for hosts that implement the full managed-session
+surface:
+
+```go
+manager, err := commandtools.NewOSSessionManager("/path/to/repo")
+sessionTools, err := commandtools.NewSessionTools(manager)
+registry := tool.NewRegistry(sessionTools...)
+runner := hook.NewRunner(commandtools.SessionCleanupOptions(manager)...)
+```
 
 To require a machine-readable final answer, configure `Options.Output` with a
 JSON Schema. The default prompt builder includes the contract, and `Query`

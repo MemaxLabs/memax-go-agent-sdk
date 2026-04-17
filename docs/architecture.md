@@ -198,9 +198,16 @@ host-owned `Starter`, `Reader`, `Stopper`, and `Lister` interfaces. Session
 tools remain argv-only, transcript-visible, and metadata-driven. They do not
 introduce hidden shell state into the core loop. `commandtools.SessionCleanupOptions`
 adapts a `Cleaner` into a `SessionEnded` hook so host-managed processes can be
-cleaned up when the parent agent session finishes. `ScriptedSessionManager`
-provides deterministic managed sessions for evals; production OS-backed managed
-session adapters remain future work.
+cleaned up when the parent agent session finishes. `commandtools.OSSessionManager`
+is the reference local adapter for real managed processes: rooted cwd
+resolution, bounded buffered output with drop accounting, natural-exit and
+stop tracking, and session-scoped cleanup over local `os/exec` processes.
+`OSSessionManager` is not a sandbox and does not constrain filesystem, network,
+or process access beyond cwd resolution; hosts that need stronger isolation
+must wrap or replace it. Graceful stop is best-effort and platform dependent:
+Unix hosts usually get an interrupt-before-kill sequence, while Windows may
+fall back to forced termination immediately. `ScriptedSessionManager` continues to provide
+deterministic managed sessions for evals.
 
 The optional `toolkit/checkpointtools` package provides `create_checkpoint`, `list_checkpoints`, `restore_checkpoint`, and `delete_checkpoint` over the `checkpoint.Manager` interface. The SDK's in-memory manager stores checkpoint metadata and is useful for tests; production managers should connect these operations to a virtual workspace, filesystem snapshot service, database branch, or remote sandbox. Checkpoints are not stored inside session transcripts, but checkpoint records carry session and parent-session IDs for correlation.
 

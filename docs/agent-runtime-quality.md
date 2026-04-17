@@ -240,8 +240,8 @@ patches, snapshots, restore, reviewable mutations, and sandbox boundaries.
   support; the core SDK never gets implicit shell access.
 - Longer-lived command sessions are explicit tools over host-owned lifecycle
   interfaces rather than hidden background shell state. Initial start/read/stop
-  support exists; production OS-backed managed session adapters remain future
-  work.
+  support exists, including a reference OS-backed managed-session adapter with
+  rooted cwd resolution, bounded buffered output, and session cleanup hooks.
 - Command governance is expressed as hook-based policy presets: argv-prefix
   allow/deny rules, exact-input approval for selected commands, and
   verify-before-final gates after successful mutating commands.

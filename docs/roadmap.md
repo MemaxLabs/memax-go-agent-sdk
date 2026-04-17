@@ -83,9 +83,9 @@ system prompt.
 - Add managed command sessions. Initial `toolkit/commandtools` session tools
   (`start_command`, `read_command_output`, `stop_command`, `list_commands`),
   command session cleanup hooks, scripted managed sessions, command session
-  event coverage, and background command repair eval coverage exist over
-  host-owned lifecycle interfaces. Production OS-backed managed session
-  adapters remain future work.
+  event coverage, background command repair eval coverage, and a reference
+  OS-backed managed session adapter now exist over host-owned lifecycle
+  interfaces.
 - Add context retention hardening. Initial `contextwindow.PreserveImportant`
   support keeps loaded skills, stored result handles, and tool errors with
   structurally valid tool-use groups under aggressive trimming.
