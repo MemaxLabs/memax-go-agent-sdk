@@ -341,6 +341,23 @@ func TestApprovalBeforeToolInputBoundApproval(t *testing.T) {
 	}
 }
 
+func TestApprovalBeforeToolInputBoundApprovalWithoutToolInputDoesNotAuthorize(t *testing.T) {
+	policy := RequireApprovalBeforeToolsWithOptions(
+		[]string{workspacetools.ApplyPatchToolName},
+		WithInputBoundApprovals(),
+	)
+	if err := policy.AfterToolUse(context.Background(), approvalInput("session-1", workspacetools.ApplyPatchToolName, true)); err != nil {
+		t.Fatalf("AfterToolUse returned error: %v", err)
+	}
+	denied, err := policy.BeforeToolUse(context.Background(), patchInput("session-1"))
+	if err != nil {
+		t.Fatalf("BeforeToolUse returned error: %v", err)
+	}
+	if denied.DenyReason == "" {
+		t.Fatalf("DenyReason empty, want input-bound approval without tool input to be unusable")
+	}
+}
+
 func TestVerifyBeforeFinalDeniesUntilVerificationPasses(t *testing.T) {
 	policy := RequireVerificationBeforeFinal()
 	if err := policy.AfterToolUse(context.Background(), workspacePatchResult("session-1", false)); err != nil {
