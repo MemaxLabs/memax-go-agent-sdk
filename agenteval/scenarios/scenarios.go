@@ -60,6 +60,8 @@ func All() []agenteval.Case {
 		WorkspaceVerificationRepair(),
 		WorkspaceVerificationRollback(),
 		CommandTestRepairLoop(),
+		CommandApprovalPolicyRecovery(),
+		CommandVerifyBeforeFinalPolicyRecovery(),
 		OpenAIProviderTextAndUsage(),
 		AnthropicProviderTextAndUsage(),
 		OpenAIProviderToolUseRoundTrip(),

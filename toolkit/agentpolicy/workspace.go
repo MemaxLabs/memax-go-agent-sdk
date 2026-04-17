@@ -16,12 +16,14 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/hook"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/approvaltools"
+	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/commandtools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/verifytools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/workspacetools"
 )
 
 const checkpointBeforePatchReason = "create a workspace checkpoint before applying patches"
 const verifyBeforeFinalReason = "run workspace verification successfully after the latest workspace change before finalizing"
+const verifyBeforeFinalAfterCommandReason = "run workspace verification successfully after the latest command before finalizing"
 
 const (
 	// MetadataRollbackRecommended marks verification results where rollback
@@ -175,6 +177,117 @@ type ApprovalBeforeToolOption func(*ApprovalBeforeTool)
 type VerifyBeforeFinal struct {
 	mu    sync.RWMutex
 	dirty map[string]bool
+}
+
+// CommandMatcher matches argv vectors for command policy presets. Prefix
+// matching is exact by argv element, not shell text, because commandtools uses
+// argv-only execution.
+type CommandMatcher struct {
+	Prefix []string
+}
+
+// MatchCommandPrefix returns a matcher that matches commands whose argv starts
+// with prefix.
+func MatchCommandPrefix(prefix ...string) CommandMatcher {
+	return CommandMatcher{Prefix: normalizeCommandArgs(prefix)}
+}
+
+// CommandPolicy denies run_command calls according to an allowlist or denylist.
+type CommandPolicy struct {
+	toolName string
+	allow    []CommandMatcher
+	deny     []CommandMatcher
+}
+
+// CommandPolicyOption configures command policy presets.
+type CommandPolicyOption func(*CommandPolicy)
+
+// WithCommandToolName configures the command tool name watched by command
+// policies. It defaults to commandtools.ToolName.
+func WithCommandToolName(name string) CommandPolicyOption {
+	return func(p *CommandPolicy) {
+		if name = strings.TrimSpace(name); name != "" {
+			p.toolName = name
+		}
+	}
+}
+
+// AllowCommands returns a before-tool policy that allows only matching
+// run_command argv prefixes. Non-command tools are ignored.
+func AllowCommands(matchers ...CommandMatcher) *CommandPolicy {
+	return AllowCommandsWithOptions(matchers, nil)
+}
+
+// AllowCommandsWithOptions returns a before-tool policy that allows only
+// matching command argv prefixes, applying optional command policy settings.
+func AllowCommandsWithOptions(matchers []CommandMatcher, options ...CommandPolicyOption) *CommandPolicy {
+	p := &CommandPolicy{toolName: commandtools.ToolName, allow: cloneCommandMatchers(matchers)}
+	for _, option := range options {
+		if option != nil {
+			option(p)
+		}
+	}
+	return p
+}
+
+// DenyCommands returns a before-tool policy that denies matching run_command
+// argv prefixes. Non-command tools are ignored.
+func DenyCommands(matchers ...CommandMatcher) *CommandPolicy {
+	return DenyCommandsWithOptions(matchers, nil)
+}
+
+// DenyCommandsWithOptions returns a before-tool policy that denies matching
+// command argv prefixes, applying optional command policy settings.
+func DenyCommandsWithOptions(matchers []CommandMatcher, options ...CommandPolicyOption) *CommandPolicy {
+	p := &CommandPolicy{toolName: commandtools.ToolName, deny: cloneCommandMatchers(matchers)}
+	for _, option := range options {
+		if option != nil {
+			option(p)
+		}
+	}
+	return p
+}
+
+// RequireApprovalBeforeCommands denies matching run_command calls until the
+// model obtains approval for commandtools.ToolName through request_approval.
+// WithInputBoundApprovals binds approval to the exact later command input.
+func RequireApprovalBeforeCommands(matchers []CommandMatcher, options ...ApprovalBeforeToolOption) *CommandApprovalPolicy {
+	p := &CommandApprovalPolicy{
+		matchers:         cloneCommandMatchers(matchers),
+		approved:         map[string][]approvalGrant{},
+		commandToolName:  commandtools.ToolName,
+		approvalToolName: approvaltools.ToolName,
+	}
+	for _, option := range options {
+		if option != nil {
+			adapter := &ApprovalBeforeTool{approvalToolName: p.approvalToolName, singleUse: p.singleUse, bindInput: p.bindInput}
+			option(adapter)
+			p.approvalToolName = adapter.approvalToolName
+			p.singleUse = adapter.singleUse
+			p.bindInput = adapter.bindInput
+		}
+	}
+	return p
+}
+
+// CommandApprovalPolicy gates selected commands behind approval results.
+type CommandApprovalPolicy struct {
+	mu               sync.RWMutex
+	matchers         []CommandMatcher
+	approved         map[string][]approvalGrant
+	commandToolName  string
+	approvalToolName string
+	singleUse        bool
+	bindInput        bool
+}
+
+// VerifyAfterCommands tracks successful matching commands and denies final
+// answers until successful workspace verification occurs in the same session.
+type VerifyAfterCommands struct {
+	mu              sync.RWMutex
+	dirty           map[string]bool
+	matchers        []CommandMatcher
+	commandToolName string
 }
 
 // WithSingleUseApprovals makes each approval grant permit one matching tool
@@ -378,6 +491,182 @@ func ApprovalBeforeToolReason(toolName string) string {
 	return "request approval for " + strings.TrimSpace(toolName) + " before using it"
 }
 
+// Options returns hook options for command allow/deny gating.
+func (p *CommandPolicy) Options() []hook.Option {
+	return []hook.Option{hook.WithBeforeToolUse(p.BeforeToolUse)}
+}
+
+// BeforeToolUse applies command allow/deny rules to run_command calls.
+func (p *CommandPolicy) BeforeToolUse(ctx context.Context, input hook.BeforeToolUseInput) (hook.BeforeToolUseResult, error) {
+	if err := ctx.Err(); err != nil {
+		return hook.BeforeToolUseResult{}, err
+	}
+	if p == nil || input.Use.Name != p.commandToolName() {
+		return hook.BeforeToolUseResult{}, nil
+	}
+	argv := commandArgv(input.Use.Input)
+	if len(argv) == 0 {
+		return hook.BeforeToolUseResult{DenyReason: "command input must include command argv"}, nil
+	}
+	if commandMatchesAny(argv, p.deny) {
+		return hook.BeforeToolUseResult{DenyReason: CommandDeniedReason(argv)}, nil
+	}
+	if len(p.allow) > 0 && !commandMatchesAny(argv, p.allow) {
+		return hook.BeforeToolUseResult{DenyReason: CommandNotAllowedReason(argv)}, nil
+	}
+	return hook.BeforeToolUseResult{}, nil
+}
+
+func (p *CommandPolicy) commandToolName() string {
+	if p == nil || strings.TrimSpace(p.toolName) == "" {
+		return commandtools.ToolName
+	}
+	return p.toolName
+}
+
+// CommandDeniedReason returns the model-visible reason used by DenyCommands.
+func CommandDeniedReason(argv []string) string {
+	return "command is denied by policy: " + strings.Join(normalizeCommandArgs(argv), " ")
+}
+
+// CommandNotAllowedReason returns the model-visible reason used by AllowCommands.
+func CommandNotAllowedReason(argv []string) string {
+	return "command is not in the allowed command policy: " + strings.Join(normalizeCommandArgs(argv), " ")
+}
+
+// Options returns hook options for command approval gating.
+func (p *CommandApprovalPolicy) Options() []hook.Option {
+	return []hook.Option{
+		hook.WithBeforeToolUse(p.BeforeToolUse),
+		hook.WithAfterToolUse(p.AfterToolUse),
+		hook.WithSessionEnded(p.SessionEnded),
+	}
+}
+
+// BeforeToolUse denies matching commands until approval has been observed.
+func (p *CommandApprovalPolicy) BeforeToolUse(ctx context.Context, input hook.BeforeToolUseInput) (hook.BeforeToolUseResult, error) {
+	if err := ctx.Err(); err != nil {
+		return hook.BeforeToolUseResult{}, err
+	}
+	if p == nil || input.Use.Name != p.commandName() {
+		return hook.BeforeToolUseResult{}, nil
+	}
+	argv := commandArgv(input.Use.Input)
+	if len(argv) == 0 || !commandMatchesAny(argv, p.matchers) {
+		return hook.BeforeToolUseResult{}, nil
+	}
+	if consumed, metadata := p.consumeApproval(input.SessionID, input.Use); consumed {
+		return hook.BeforeToolUseResult{Metadata: metadata}, nil
+	}
+	return hook.BeforeToolUseResult{DenyReason: ApprovalBeforeCommandReason(argv)}, nil
+}
+
+// AfterToolUse records granted command approvals from approval tool results.
+func (p *CommandApprovalPolicy) AfterToolUse(ctx context.Context, input hook.AfterToolUseInput) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if p == nil || input.SessionID == "" || input.Result.IsError || input.Use.Name != p.approvalName() {
+		return nil
+	}
+	if operation, _ := input.Result.Metadata[approvaltools.MetadataApprovalOperation].(string); operation != "request" {
+		return nil
+	}
+	approved, _ := input.Result.Metadata[approvaltools.MetadataApprovalApproved].(bool)
+	action, _ := input.Result.Metadata[approvaltools.MetadataApprovalAction].(string)
+	if !approved || strings.TrimSpace(action) != p.commandName() {
+		return nil
+	}
+	inputHash, _ := input.Result.Metadata[approvaltools.MetadataApprovalInputHash].(string)
+	inputHash = strings.TrimSpace(inputHash)
+	if p.bindInput && inputHash == "" {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.approved == nil {
+		p.approved = map[string][]approvalGrant{}
+	}
+	p.approved[input.SessionID] = append(p.approved[input.SessionID], approvalGrant{InputHash: inputHash})
+	return nil
+}
+
+// SessionEnded removes command approval state for the completed session.
+func (p *CommandApprovalPolicy) SessionEnded(_ context.Context, input hook.SessionEndedInput) error {
+	p.Reset(input.SessionID)
+	return nil
+}
+
+// Reset removes command approval state for sessionID.
+func (p *CommandApprovalPolicy) Reset(sessionID string) {
+	if p == nil || sessionID == "" {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	delete(p.approved, sessionID)
+}
+
+func (p *CommandApprovalPolicy) consumeApproval(sessionID string, use model.ToolUse) (bool, map[string]any) {
+	if p == nil || sessionID == "" {
+		return false, nil
+	}
+	inputHash := ""
+	if p.bindInput {
+		var err error
+		inputHash, err = hashToolInput(use.Input)
+		if err != nil {
+			return false, nil
+		}
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	grants := p.approved[sessionID]
+	for i, grant := range grants {
+		if p.bindInput && grant.InputHash != inputHash {
+			continue
+		}
+		if p.singleUse {
+			grants = append(grants[:i], grants[i+1:]...)
+			if len(grants) == 0 {
+				delete(p.approved, sessionID)
+			} else {
+				p.approved[sessionID] = grants
+			}
+		}
+		metadata := map[string]any{
+			model.MetadataApprovalConsumed:  true,
+			model.MetadataApprovalAction:    p.commandName(),
+			model.MetadataApprovalSingleUse: p.singleUse,
+		}
+		if grant.InputHash != "" {
+			metadata[model.MetadataApprovalInputHash] = grant.InputHash
+		}
+		return true, metadata
+	}
+	return false, nil
+}
+
+func (p *CommandApprovalPolicy) commandName() string {
+	if p == nil || strings.TrimSpace(p.commandToolName) == "" {
+		return commandtools.ToolName
+	}
+	return p.commandToolName
+}
+
+func (p *CommandApprovalPolicy) approvalName() string {
+	if p == nil || strings.TrimSpace(p.approvalToolName) == "" {
+		return approvaltools.ToolName
+	}
+	return p.approvalToolName
+}
+
+// ApprovalBeforeCommandReason returns the model-visible denial reason used by
+// RequireApprovalBeforeCommands.
+func ApprovalBeforeCommandReason(argv []string) string {
+	return "request approval before running command: " + strings.Join(normalizeCommandArgs(argv), " ")
+}
+
 func hashToolInput(input json.RawMessage) (string, error) {
 	if len(input) == 0 {
 		input = json.RawMessage(`{}`)
@@ -498,10 +787,198 @@ func isVerificationRequiredWorkspaceOperation(operation string, metadata map[str
 	}
 }
 
+func commandArgv(input json.RawMessage) []string {
+	var value struct {
+		Command []string `json:"command"`
+	}
+	if err := json.Unmarshal(input, &value); err != nil {
+		return nil
+	}
+	return normalizeCommandArgs(value.Command)
+}
+
+func metadataCommandArgv(metadata map[string]any) []string {
+	switch values := metadata[model.MetadataCommandArgv].(type) {
+	case []string:
+		return normalizeCommandArgs(values)
+	case []any:
+		out := make([]string, 0, len(values))
+		for _, value := range values {
+			if str, ok := value.(string); ok {
+				out = append(out, str)
+			}
+		}
+		return normalizeCommandArgs(out)
+	default:
+		return nil
+	}
+}
+
+func normalizeCommandArgs(argv []string) []string {
+	out := make([]string, 0, len(argv))
+	for _, arg := range argv {
+		arg = strings.TrimSpace(arg)
+		if arg != "" {
+			out = append(out, arg)
+		}
+	}
+	return out
+}
+
+func cloneCommandMatchers(matchers []CommandMatcher) []CommandMatcher {
+	if len(matchers) == 0 {
+		return nil
+	}
+	out := make([]CommandMatcher, 0, len(matchers))
+	for _, matcher := range matchers {
+		matcher.Prefix = normalizeCommandArgs(matcher.Prefix)
+		if len(matcher.Prefix) == 0 {
+			continue
+		}
+		out = append(out, matcher)
+	}
+	return out
+}
+
+func commandMatchesAny(argv []string, matchers []CommandMatcher) bool {
+	if len(matchers) == 0 {
+		return false
+	}
+	for _, matcher := range matchers {
+		if commandMatches(argv, matcher) {
+			return true
+		}
+	}
+	return false
+}
+
+func commandMatches(argv []string, matcher CommandMatcher) bool {
+	argv = normalizeCommandArgs(argv)
+	prefix := normalizeCommandArgs(matcher.Prefix)
+	if len(prefix) == 0 || len(argv) < len(prefix) {
+		return false
+	}
+	for i := range prefix {
+		if argv[i] != prefix[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // VerifyBeforeFinalReason returns the model-visible denial reason used by
 // RequireVerificationBeforeFinal. It is exported for tests and host UI copy.
 func VerifyBeforeFinalReason() string {
 	return verifyBeforeFinalReason
+}
+
+// RequireVerificationAfterCommands returns a policy that marks the session
+// dirty after successful matching commands and denies finalization until a
+// successful workspace verification result is observed.
+func RequireVerificationAfterCommands(matchers ...CommandMatcher) *VerifyAfterCommands {
+	return &VerifyAfterCommands{
+		dirty:           map[string]bool{},
+		matchers:        cloneCommandMatchers(matchers),
+		commandToolName: commandtools.ToolName,
+	}
+}
+
+// Options returns hook options for command verification readiness.
+func (p *VerifyAfterCommands) Options() []hook.Option {
+	return []hook.Option{
+		hook.WithAfterToolUse(p.AfterToolUse),
+		hook.WithBeforeFinal(p.BeforeFinal),
+		hook.WithSessionEnded(p.SessionEnded),
+	}
+}
+
+// AfterToolUse records successful matching commands and verification results.
+func (p *VerifyAfterCommands) AfterToolUse(ctx context.Context, input hook.AfterToolUseInput) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if p == nil || input.SessionID == "" {
+		return nil
+	}
+	if input.Use.Name == p.commandName() && !input.Result.IsError {
+		argv := metadataCommandArgv(input.Result.Metadata)
+		if commandMatchesAny(argv, p.matchers) {
+			p.setDirty(input.SessionID, true)
+		}
+		return nil
+	}
+	if operation, _ := input.Result.Metadata[model.MetadataVerificationOperation].(string); operation == "verify" {
+		if passed, _ := input.Result.Metadata[model.MetadataVerificationPassed].(bool); passed {
+			p.setDirty(input.SessionID, false)
+		}
+	}
+	return nil
+}
+
+// BeforeFinal denies finalization when matching commands have not been followed
+// by successful verification.
+func (p *VerifyAfterCommands) BeforeFinal(ctx context.Context, input hook.BeforeFinalInput) (hook.BeforeFinalResult, error) {
+	if err := ctx.Err(); err != nil {
+		return hook.BeforeFinalResult{}, err
+	}
+	if p.isDirty(input.SessionID) {
+		return hook.BeforeFinalResult{DenyReason: verifyBeforeFinalAfterCommandReason}, nil
+	}
+	return hook.BeforeFinalResult{}, nil
+}
+
+// SessionEnded removes command verification state for the completed session.
+func (p *VerifyAfterCommands) SessionEnded(_ context.Context, input hook.SessionEndedInput) error {
+	p.Reset(input.SessionID)
+	return nil
+}
+
+// Reset removes command verification state for sessionID.
+func (p *VerifyAfterCommands) Reset(sessionID string) {
+	if p == nil || sessionID == "" {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	delete(p.dirty, sessionID)
+}
+
+func (p *VerifyAfterCommands) setDirty(sessionID string, dirty bool) {
+	if p == nil || sessionID == "" {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.dirty == nil {
+		p.dirty = map[string]bool{}
+	}
+	if dirty {
+		p.dirty[sessionID] = true
+		return
+	}
+	delete(p.dirty, sessionID)
+}
+
+func (p *VerifyAfterCommands) isDirty(sessionID string) bool {
+	if p == nil || sessionID == "" {
+		return false
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.dirty[sessionID]
+}
+
+func (p *VerifyAfterCommands) commandName() string {
+	if p == nil || strings.TrimSpace(p.commandToolName) == "" {
+		return commandtools.ToolName
+	}
+	return p.commandToolName
+}
+
+// VerifyAfterCommandReason returns the model-visible denial reason used by
+// RequireVerificationAfterCommands.
+func VerifyAfterCommandReason() string {
+	return verifyBeforeFinalAfterCommandReason
 }
 
 // RecommendRollbackOnFailedVerification returns a rollback recommendation

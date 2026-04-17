@@ -237,6 +237,9 @@ patches, snapshots, restore, reviewable mutations, and sandbox boundaries.
 - Command execution is an explicit host-owned runner capability with argv-only
   inputs, timeout/output caps, structured status metadata, and approval-summary
   support; the core SDK never gets implicit shell access.
+- Command governance is expressed as hook-based policy presets: argv-prefix
+  allow/deny rules, exact-input approval for selected commands, and
+  verify-before-final gates after successful mutating commands.
 - File tools emit structured metadata for modified paths and checkpoint IDs.
 - CI/server examples use workspace adapters instead of raw OS assumptions.
 
@@ -252,6 +255,10 @@ patches, snapshots, restore, reviewable mutations, and sandbox boundaries.
   passes. Initial coverage exists.
 - Command failure returns process diagnostics, the model repairs workspace state,
   and the command passes on rerun. Initial coverage exists.
+- Command approval denial drives an exact-input `request_approval` call and a
+  single-use approved retry. Initial coverage exists.
+- Command verification policy denial prevents finalization after a matching
+  command until host verification passes. Initial coverage exists.
 - Verification failure can drive checkpoint restore, including opt-in policy
   guidance that recommends the latest session checkpoint without restoring
   hiddenly. Initial coverage exists.
@@ -329,6 +336,9 @@ verify, ask the user, or stop.
   rather than only session-wide tool grants, with first-class approval events
   and metrics for audit/UI integration. Approval requests can carry structured
   host-facing summaries, including workspace patch summaries.
+- Command policy presets add argv-prefix allow/deny rules, exact-input approval
+  for selected commands, and verify-before-final gates for commands that mutate
+  generated or dependency state.
 
 ### 7. Provider Fidelity and Compatibility
 

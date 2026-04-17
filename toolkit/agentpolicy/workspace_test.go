@@ -9,6 +9,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/hook"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/approvaltools"
+	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/commandtools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/verifytools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/workspacetools"
 )
@@ -358,6 +359,145 @@ func TestApprovalBeforeToolInputBoundApprovalWithoutToolInputDoesNotAuthorize(t 
 	}
 }
 
+func TestCommandPolicyAllowAndDeny(t *testing.T) {
+	deny := DenyCommands(MatchCommandPrefix("rm"))
+	denied, err := deny.BeforeToolUse(context.Background(), commandInput("session-1", []string{"rm", "-rf", "/"}))
+	if err != nil {
+		t.Fatalf("BeforeToolUse deny returned error: %v", err)
+	}
+	if !strings.Contains(denied.DenyReason, "denied by policy") {
+		t.Fatalf("DenyReason = %q, want denied command", denied.DenyReason)
+	}
+	allow := AllowCommands(MatchCommandPrefix("go", "test"))
+	allowed, err := allow.BeforeToolUse(context.Background(), commandInput("session-1", []string{"go", "test", "./..."}))
+	if err != nil {
+		t.Fatalf("BeforeToolUse allow returned error: %v", err)
+	}
+	if allowed.DenyReason != "" {
+		t.Fatalf("DenyReason = %q, want go test allowed", allowed.DenyReason)
+	}
+	blocked, err := allow.BeforeToolUse(context.Background(), commandInput("session-1", []string{"go", "env"}))
+	if err != nil {
+		t.Fatalf("BeforeToolUse block returned error: %v", err)
+	}
+	if !strings.Contains(blocked.DenyReason, "not in the allowed") {
+		t.Fatalf("DenyReason = %q, want allowlist denial", blocked.DenyReason)
+	}
+
+	custom := AllowCommandsWithOptions(
+		[]CommandMatcher{MatchCommandPrefix("npm", "test")},
+		WithCommandToolName("custom_command"),
+	)
+	ignored, err := custom.BeforeToolUse(context.Background(), commandInput("session-1", []string{"go", "env"}))
+	if err != nil {
+		t.Fatalf("BeforeToolUse ignored custom-name mismatch returned error: %v", err)
+	}
+	if ignored.DenyReason != "" {
+		t.Fatalf("DenyReason = %q, want default command tool ignored", ignored.DenyReason)
+	}
+	input := commandInput("session-1", []string{"npm", "install"})
+	input.Use.Name = "custom_command"
+	customDenied, err := custom.BeforeToolUse(context.Background(), input)
+	if err != nil {
+		t.Fatalf("BeforeToolUse custom command returned error: %v", err)
+	}
+	if customDenied.DenyReason == "" {
+		t.Fatalf("DenyReason empty, want custom command allowlist denial")
+	}
+}
+
+func TestCommandApprovalInputBoundSingleUse(t *testing.T) {
+	approvedInput := json.RawMessage(`{"command":["npm","test"],"purpose":"verify"}`)
+	policy := RequireApprovalBeforeCommands(
+		[]CommandMatcher{MatchCommandPrefix("npm", "test")},
+		WithInputBoundApprovals(),
+		WithSingleUseApprovals(),
+	)
+	if err := policy.AfterToolUse(context.Background(), hook.AfterToolUseInput{
+		SessionID: "session-1",
+		Use:       model.ToolUse{Name: approvaltools.ToolName},
+		Result: model.ToolResult{
+			Metadata: map[string]any{
+				approvaltools.MetadataApprovalOperation: "request",
+				approvaltools.MetadataApprovalApproved:  true,
+				approvaltools.MetadataApprovalAction:    commandtools.ToolName,
+				approvaltools.MetadataApprovalInputHash: mustHashToolInput(t, approvedInput),
+			},
+		},
+	}); err != nil {
+		t.Fatalf("AfterToolUse returned error: %v", err)
+	}
+	mismatched, err := policy.BeforeToolUse(context.Background(), hook.BeforeToolUseInput{
+		SessionID: "session-1",
+		Use: model.ToolUse{
+			Name:  commandtools.ToolName,
+			Input: json.RawMessage(`{"command":["npm","test"],"purpose":"different"}`),
+		},
+	})
+	if err != nil {
+		t.Fatalf("BeforeToolUse mismatch returned error: %v", err)
+	}
+	if mismatched.DenyReason == "" {
+		t.Fatalf("DenyReason empty, want input-bound mismatch denied")
+	}
+	allowed, err := policy.BeforeToolUse(context.Background(), hook.BeforeToolUseInput{
+		SessionID: "session-1",
+		Use:       model.ToolUse{Name: commandtools.ToolName, Input: approvedInput},
+	})
+	if err != nil {
+		t.Fatalf("BeforeToolUse allowed returned error: %v", err)
+	}
+	if allowed.DenyReason != "" || allowed.Metadata[model.MetadataApprovalConsumed] != true {
+		t.Fatalf("allowed = %#v, want consumed approval metadata", allowed)
+	}
+	again, err := policy.BeforeToolUse(context.Background(), hook.BeforeToolUseInput{
+		SessionID: "session-1",
+		Use:       model.ToolUse{Name: commandtools.ToolName, Input: approvedInput},
+	})
+	if err != nil {
+		t.Fatalf("BeforeToolUse again returned error: %v", err)
+	}
+	if again.DenyReason == "" {
+		t.Fatalf("DenyReason empty, want single-use grant consumed")
+	}
+}
+
+func TestVerifyAfterCommandsDeniesUntilVerificationPasses(t *testing.T) {
+	policy := RequireVerificationAfterCommands(MatchCommandPrefix("go", "generate"))
+	if err := policy.AfterToolUse(context.Background(), hook.AfterToolUseInput{
+		SessionID: "session-1",
+		Use:       model.ToolUse{Name: commandtools.ToolName},
+		Result: model.ToolResult{
+			Metadata: map[string]any{
+				model.MetadataCommandOperation:  "run",
+				model.MetadataCommandArgv:       []string{"go", "generate", "./..."},
+				model.MetadataCommandExitCode:   0,
+				model.MetadataCommandTimedOut:   false,
+				model.MetadataCommandDurationMS: 1,
+			},
+		},
+	}); err != nil {
+		t.Fatalf("AfterToolUse command returned error: %v", err)
+	}
+	denied, err := policy.BeforeFinal(context.Background(), hook.BeforeFinalInput{SessionID: "session-1"})
+	if err != nil {
+		t.Fatalf("BeforeFinal returned error: %v", err)
+	}
+	if denied.DenyReason != VerifyAfterCommandReason() {
+		t.Fatalf("DenyReason = %q, want verify-after-command reason", denied.DenyReason)
+	}
+	if err := policy.AfterToolUse(context.Background(), verificationResult("session-1", true)); err != nil {
+		t.Fatalf("AfterToolUse verify returned error: %v", err)
+	}
+	allowed, err := policy.BeforeFinal(context.Background(), hook.BeforeFinalInput{SessionID: "session-1"})
+	if err != nil {
+		t.Fatalf("BeforeFinal allowed returned error: %v", err)
+	}
+	if allowed.DenyReason != "" {
+		t.Fatalf("DenyReason = %q, want final allowed after verification", allowed.DenyReason)
+	}
+}
+
 func TestVerifyBeforeFinalDeniesUntilVerificationPasses(t *testing.T) {
 	policy := RequireVerificationBeforeFinal()
 	if err := policy.AfterToolUse(context.Background(), workspacePatchResult("session-1", false)); err != nil {
@@ -497,4 +637,24 @@ func patchInput(sessionID string) hook.BeforeToolUseInput {
 			Input: json.RawMessage(`{"operations":[{"path":"README.md","new_content":"next"}]}`),
 		},
 	}
+}
+
+func commandInput(sessionID string, argv []string) hook.BeforeToolUseInput {
+	data, _ := json.Marshal(map[string]any{"command": argv})
+	return hook.BeforeToolUseInput{
+		SessionID: sessionID,
+		Use: model.ToolUse{
+			Name:  commandtools.ToolName,
+			Input: data,
+		},
+	}
+}
+
+func mustHashToolInput(t *testing.T, input json.RawMessage) string {
+	t.Helper()
+	hash, err := hashToolInput(input)
+	if err != nil {
+		t.Fatalf("hashToolInput returned error: %v", err)
+	}
+	return hash
 }

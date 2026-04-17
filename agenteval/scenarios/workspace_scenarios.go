@@ -242,6 +242,178 @@ func CommandTestRepairLoop() agenteval.Case {
 	}
 }
 
+// CommandApprovalPolicyRecovery returns a single-use scenario where a command
+// is denied until the model obtains input-bound host approval.
+func CommandApprovalPolicyRecovery() agenteval.Case {
+	runner := commandtools.NewScriptedRunner(commandtools.Result{
+		ExitCode: 0,
+		Stdout:   "installed\n",
+		Duration: 5 * time.Millisecond,
+	})
+	commandTool := commandtools.NewTool(commandtools.Config{
+		Runner:    runner,
+		MayMutate: true,
+	})
+	policy := agentpolicy.RequireApprovalBeforeCommands(
+		[]agentpolicy.CommandMatcher{agentpolicy.MatchCommandPrefix("npm", "install")},
+		agentpolicy.WithInputBoundApprovals(),
+		agentpolicy.WithSingleUseApprovals(),
+	)
+	approvalTool := approvaltools.NewTool(approvaltools.Config{
+		Approver: approvaltools.StaticApprover{Decision: approvaltools.Decision{
+			Approved: true,
+			Reason:   "approved dependency install",
+		}},
+	})
+	toolInput := `{"command":["npm","install"],"purpose":"install dependencies"}`
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "cmd-1",
+				Name:  commandtools.ToolName,
+				Input: json.RawMessage(toolInput),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "approval-1",
+				Name:  approvaltools.ToolName,
+				Input: json.RawMessage(`{"action":"run_command","reason":"dependency install changes workspace state","summary":{"title":"Run command: npm install","description":"Install dependencies","risk":"mutates dependency tree","changes":1},"tool_input":` + toolInput + `}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "cmd-2",
+				Name:  commandtools.ToolName,
+				Input: json.RawMessage(toolInput),
+			},
+		}},
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "Command ran after approval."}},
+	)
+
+	return agenteval.Case{
+		Name:   "command_approval_policy_recovery",
+		Prompt: "Run npm install only after approval.",
+		Options: memaxagent.Options{
+			Model: modelClient,
+			Tools: tool.NewRegistry(commandTool, approvalTool),
+			Hooks: hook.NewRunner(policy.Options()...),
+		},
+		Assertions: []agenteval.Assertion{
+			agenteval.ToolUsed(commandtools.ToolName),
+			agenteval.ToolUsed(approvaltools.ToolName),
+			agenteval.EventKindEmitted(memaxagent.EventApprovalRequested),
+			agenteval.EventKindEmitted(memaxagent.EventApprovalGranted),
+			agenteval.EventKindEmitted(memaxagent.EventApprovalConsumed),
+			agenteval.EventKindEmitted(memaxagent.EventCommandFinished),
+			agenteval.FinalEquals("Command ran after approval."),
+			requestCountEquals(modelClient, 4),
+			{
+				Name: "command approval is input-bound and consumed",
+				Check: func(result agenteval.Result) error {
+					results := result.ToolResults()
+					if len(results) < 3 {
+						return fmt.Errorf("tool results = %#v, want denied command approval command", results)
+					}
+					if !results[0].IsError || !strings.Contains(results[0].Content, "request approval before running command") {
+						return fmt.Errorf("first command result = %#v, want approval denial", results[0])
+					}
+					if results[1].IsError || results[1].Metadata[approvaltools.MetadataApprovalApproved] != true {
+						return fmt.Errorf("approval result = %#v, want granted approval", results[1])
+					}
+					if results[2].IsError || !strings.Contains(results[2].Content, "installed") {
+						return fmt.Errorf("second command result = %#v, want command success", results[2])
+					}
+					requests := runner.Requests()
+					if len(requests) != 1 || strings.Join(requests[0].Argv, " ") != "npm install" {
+						return fmt.Errorf("runner requests = %#v, want only approved npm install", requests)
+					}
+					return nil
+				},
+			},
+		},
+	}
+}
+
+// CommandVerifyBeforeFinalPolicyRecovery returns a single-use scenario where a
+// command marks the session dirty and the model must verify before finalizing.
+func CommandVerifyBeforeFinalPolicyRecovery() agenteval.Case {
+	runner := commandtools.NewScriptedRunner(commandtools.Result{
+		ExitCode: 0,
+		Stdout:   "generated\n",
+		Duration: 5 * time.Millisecond,
+	})
+	commandTool := commandtools.NewTool(commandtools.Config{
+		Runner:    runner,
+		MayMutate: true,
+	})
+	verifier := verifytools.VerifierFunc(func(_ context.Context, req verifytools.Request) (verifytools.Result, error) {
+		return verifytools.Result{Name: req.Name, Passed: true, Output: "generated files verified"}, nil
+	})
+	verifyTool := verifytools.NewTool(verifytools.Config{Verifier: verifier})
+	policy := agentpolicy.RequireVerificationAfterCommands(agentpolicy.MatchCommandPrefix("go", "generate"))
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "cmd-1",
+				Name:  commandtools.ToolName,
+				Input: json.RawMessage(`{"command":["go","generate","./..."],"purpose":"regenerate code"}`),
+			},
+		}},
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "Generated code."}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "verify-1",
+				Name:  verifytools.ToolName,
+				Input: json.RawMessage(`{"name":"test"}`),
+			},
+		}},
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "Generated code verified."}},
+	)
+
+	return agenteval.Case{
+		Name:   "command_verify_before_final_policy_recovery",
+		Prompt: "Run go generate, verify, then final.",
+		Options: memaxagent.Options{
+			Model: modelClient,
+			Tools: tool.NewRegistry(commandTool, verifyTool),
+			Hooks: hook.NewRunner(policy.Options()...),
+		},
+		Assertions: []agenteval.Assertion{
+			agenteval.ToolUsed(commandtools.ToolName),
+			agenteval.ToolUsed(verifytools.ToolName),
+			agenteval.EventKindEmitted(memaxagent.EventCommandFinished),
+			agenteval.EventKindEmitted(memaxagent.EventVerification),
+			agenteval.FinalEquals("Generated code verified."),
+			requestCountEquals(modelClient, 4),
+			{
+				Name: "command finalization waits for verification",
+				Check: func(result agenteval.Result) error {
+					results := result.ToolResults()
+					if len(results) < 2 {
+						return fmt.Errorf("tool results = %#v, want command and verification", results)
+					}
+					if results[0].Name != commandtools.ToolName || results[0].IsError {
+						return fmt.Errorf("command result = %#v, want command success", results[0])
+					}
+					if results[1].Name != verifytools.ToolName || results[1].IsError {
+						return fmt.Errorf("verify result = %#v, want verification success", results[1])
+					}
+					if len(runner.Requests()) != 1 {
+						return fmt.Errorf("runner requests = %#v, want one command", runner.Requests())
+					}
+					return nil
+				},
+			},
+		},
+	}
+}
+
 // WorkspaceUnifiedDiffRecovery returns a single-use scenario where a unified
 // diff conflicts, the model receives actionable diagnostics, and a corrected
 // diff succeeds on the next turn.

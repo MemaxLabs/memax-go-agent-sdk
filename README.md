@@ -255,6 +255,8 @@ registry.Register(commandTool)
 Command results are normal tool results with exit code, timeout, duration, and
 output metadata. Non-zero exits are model-visible tool errors, enabling the
 agent to patch, rerun, or ask for approval through the normal loop.
+Use `toolkit/agentpolicy` to add argv-prefix allowlists, denylists,
+input-bound approvals, or verify-before-final gates for selected commands.
 
 To require a machine-readable final answer, configure `Options.Output` with a
 JSON Schema. The default prompt builder includes the contract, and `Query`
@@ -483,6 +485,36 @@ mutating workspace patches and restores, denies finalization until a successful
 denial as a normal user repair prompt so the model can recover by calling tools.
 Use `Options.MaxFinalDenials` to cap these repair turns; zero uses the SDK
 default and negative disables before-final retries.
+
+Command execution can use the same policy surface. `agentpolicy.DenyCommands`
+and `agentpolicy.AllowCommands` match argv prefixes, not shell text, so hosts
+can block dangerous executables or expose a narrow command set:
+
+```go
+policy := agentpolicy.AllowCommands(
+    agentpolicy.MatchCommandPrefix("go", "test"),
+    agentpolicy.MatchCommandPrefix("go", "vet"),
+)
+```
+
+For sensitive commands, combine `approvaltools.NewTool` with
+`agentpolicy.RequireApprovalBeforeCommands(...)`. The command approval policy
+denies matching `run_command` attempts until the model requests approval for
+the exact command operation. With `agentpolicy.WithInputBoundApprovals()` and
+`agentpolicy.WithSingleUseApprovals()`, approval applies only to the later
+matching JSON input and is consumed on first use.
+
+Commands that mutate generated files can also require verification before the
+final answer:
+
+```go
+policy := agentpolicy.RequireVerificationAfterCommands(
+    agentpolicy.MatchCommandPrefix("go", "generate"),
+)
+```
+
+After a matching command succeeds, finalization is denied until
+`workspace_verify` succeeds in the same session.
 
 For human or host approval flows, expose `approvaltools.NewTool` and combine it
 with `agentpolicy.RequireApprovalBeforeTools(...)`. The policy denies configured

@@ -68,8 +68,10 @@ system prompt.
   for checkpoint-before-patch recovery and model-mediated rollback guidance
   after failed verification, plus bounded verify-before-final gating after
   workspace mutations and explicit approval-before-tool gating with optional
-  single-use and input-bound grants, without hard-coding policy into the core
-  loop.
+  single-use and input-bound grants. Command policy presets add argv-prefix
+  allow/deny rules, exact-input approval for selected commands, and
+  verify-before-final gates after matching commands, without hard-coding policy
+  into the core loop.
 - Add streaming tool execution. Initial provider tool-use lifecycle events
   (`tool_use_start`, `tool_use_delta`, complete `tool_use`) exist for OpenAI
   and Anthropic streams, and the agent loop can start read-only,
@@ -77,7 +79,7 @@ system prompt.
   preserving durable transcript order. Eval coverage exists for safe overlap,
   mutating-tool ordering, permission-denial recovery, stream-failure cleanup,
   and cancellation.
-- Add autonomy eval harness. Initial `agenteval` runner, scripted model, result capture, expected-error assertions, reusable assertions, and `agenteval/scenarios` package exist for deterministic tool recovery, structured-output repair, memory search/save, memory distillation candidates, memory candidate handler persistence, session resume, context retry, subagent delegation, subagent scoped plan progress, planner-guided tool use, planner verification repair, planner/task progress from verification, planner/task-state updates, progressive skill disclosure, httptest-backed provider usage mapping, provider tool-use round trips, permission/hook denial recovery, checkpoint-before-patch policy recovery, rollback-policy recovery, verify-before-final policy recovery, approval-policy recovery and denial fallback, finalization-policy exhaustion, large-result storage recovery, budget-stop enforcement, and deferred tool discovery. Live evals remain future work.
+- Add autonomy eval harness. Initial `agenteval` runner, scripted model, result capture, expected-error assertions, reusable assertions, and `agenteval/scenarios` package exist for deterministic tool recovery, structured-output repair, memory search/save, memory distillation candidates, memory candidate handler persistence, session resume, context retry, subagent delegation, subagent scoped plan progress, planner-guided tool use, planner verification repair, planner/task progress from verification, planner/task-state updates, progressive skill disclosure, httptest-backed provider usage mapping, provider tool-use round trips, permission/hook denial recovery, checkpoint-before-patch policy recovery, rollback-policy recovery, verify-before-final policy recovery, approval-policy recovery and denial fallback, command approval and command verify-before-final policy recovery, finalization-policy exhaustion, large-result storage recovery, budget-stop enforcement, and deferred tool discovery. Live evals remain future work.
 - Add context retention hardening. Initial `contextwindow.PreserveImportant`
   support keeps loaded skills, stored result handles, and tool errors with
   structurally valid tool-use groups under aggressive trimming.

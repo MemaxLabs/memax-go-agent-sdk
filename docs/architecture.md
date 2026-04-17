@@ -498,6 +498,23 @@ description, risk, paths, change counts, and byte delta. Toolkit helpers such as
 tool-specific inputs while keeping the core approval contract provider-,
 workspace-, and command-runner-neutral.
 
+Command governance presets reuse the same hook and approval primitives without
+making `run_command` special in the core loop. `AllowCommands` and
+`DenyCommands` match argv prefixes for `run_command` and return recoverable
+tool errors on policy denial. Matching is by argv element, not by shell string,
+because command execution is argv-only. `RequireApprovalBeforeCommands` gates
+selected argv prefixes behind `request_approval`; with input-bound and
+single-use options, the approval result must carry the canonical hash of the
+exact later `run_command` input and the grant is consumed on first use.
+
+`RequireVerificationAfterCommands` marks a session dirty after successful
+matching commands and denies finalization until a successful verification result
+is observed. This is intended for commands such as generators, formatters, or
+dependency installers whose effects should be checked before the agent claims
+completion. The policy does not run verification itself; the model must call a
+host-owned verification tool, preserving transcript visibility, permissions,
+hooks, telemetry, and host control.
+
 ## Context Window
 
 Context-window policies transform session messages before each model request without mutating the durable session transcript. `RecentMessages` keeps a bounded suffix. `TokenBudget` keeps the newest messages under a caller-defined estimate budget. Both drop leading orphan tool-result messages after trimming.
