@@ -463,6 +463,14 @@ observed in the same session. This mirrors production approval systems while
 staying SDK-neutral: the approver is host-owned, and both granted and denied
 decisions are normal transcript-visible tool results.
 
+Approvals are scoped to tool names because the SDK does not assume a universal
+capability taxonomy across host-defined tools. Hosts that rename tools or expose
+custom wrappers must configure those names explicitly. The default grant is
+session-scoped and reusable for the approved action. For higher-risk operations,
+`WithSingleUseApprovals` consumes a grant on the next matching attempt, and
+`WithInputBoundApprovals` requires the approval result to carry the canonical
+hash of the proposed `tool_input`, allowing only an exact later input match.
+
 ## Context Window
 
 Context-window policies transform session messages before each model request without mutating the durable session transcript. `RecentMessages` keeps a bounded suffix. `TokenBudget` keeps the newest messages under a caller-defined estimate budget. Both drop leading orphan tool-result messages after trimming.

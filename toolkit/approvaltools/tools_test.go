@@ -23,7 +23,7 @@ func TestApprovalToolGranted(t *testing.T) {
 		Use: model.ToolUse{
 			ID:    "approval-1",
 			Name:  ToolName,
-			Input: json.RawMessage(`{"action":"workspace_apply_patch","reason":"edit README","details":"README.md","risk":"low","metadata":{"path":"README.md"}}`),
+			Input: json.RawMessage(`{"action":"workspace_apply_patch","reason":"edit README","details":"README.md","risk":"low","tool_input":{"operations":[{"path":"README.md","new_content":"next"}]},"metadata":{"path":"README.md"}}`),
 		},
 		Runtime: tool.Runtime{
 			SessionID:       "session-1",
@@ -37,15 +37,37 @@ func TestApprovalToolGranted(t *testing.T) {
 	if result.IsError || !strings.Contains(result.Content, "approval approved for workspace_apply_patch") {
 		t.Fatalf("result = %#v, want approved result", result)
 	}
-	if got.SessionID != "session-1" || got.ParentSessionID != "parent-1" || got.Identity.Name != "Zoe" || got.Action != "workspace_apply_patch" || got.Reason != "edit README" || got.Details != "README.md" || got.Risk != "low" {
+	if got.SessionID != "session-1" || got.ParentSessionID != "parent-1" || got.Identity.Name != "Zoe" || got.Action != "workspace_apply_patch" || got.Reason != "edit README" || got.Details != "README.md" || got.Risk != "low" || got.ToolInputHash == "" {
 		t.Fatalf("request = %#v, want runtime and input context", got)
 	}
 	if result.Metadata[MetadataApprovalOperation] != "request" ||
 		result.Metadata[MetadataApprovalAction] != "workspace_apply_patch" ||
 		result.Metadata[MetadataApprovalApproved] != true ||
 		result.Metadata[MetadataApprovalReason] != "approved for tests" ||
+		result.Metadata[MetadataApprovalInputHash] != got.ToolInputHash ||
 		result.Metadata["ticket"] != "A-1" {
 		t.Fatalf("metadata = %#v, want approval metadata", result.Metadata)
+	}
+}
+
+func TestApprovalToolHashesToolInputCanonically(t *testing.T) {
+	var hashes []string
+	approvalTool := NewTool(Config{
+		Approver: ApproverFunc(func(_ context.Context, req Request) (Decision, error) {
+			hashes = append(hashes, req.ToolInputHash)
+			return Decision{Approved: true}, nil
+		}),
+	})
+	for _, raw := range []string{
+		`{"action":"tool","reason":"x","tool_input":{"b":2,"a":1}}`,
+		`{"action":"tool","reason":"x","tool_input":{"a":1,"b":2}}`,
+	} {
+		if _, err := approvalTool.Execute(context.Background(), tool.Call{Use: model.ToolUse{Name: ToolName, Input: json.RawMessage(raw)}}); err != nil {
+			t.Fatalf("Execute returned error: %v", err)
+		}
+	}
+	if len(hashes) != 2 || hashes[0] == "" || hashes[0] != hashes[1] {
+		t.Fatalf("hashes = %#v, want equal canonical input hashes", hashes)
 	}
 }
 

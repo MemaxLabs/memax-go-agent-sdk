@@ -648,7 +648,11 @@ func WorkspaceApprovalPolicyRecovery() agenteval.Case {
 		"README.md": "status: old",
 	})
 	workspaceTools, toolsErr := workspacetools.NewTools(store)
-	policy := agentpolicy.RequireApprovalBeforeTools(workspacetools.ApplyPatchToolName)
+	policy := agentpolicy.RequireApprovalBeforeToolsWithOptions(
+		[]string{workspacetools.ApplyPatchToolName},
+		agentpolicy.WithInputBoundApprovals(),
+		agentpolicy.WithSingleUseApprovals(),
+	)
 	approvalTool := approvaltools.NewTool(approvaltools.Config{
 		Approver: approvaltools.StaticApprover{Decision: approvaltools.Decision{
 			Approved: true,
@@ -669,9 +673,11 @@ func WorkspaceApprovalPolicyRecovery() agenteval.Case {
 		[]model.StreamEvent{{
 			Kind: model.StreamToolUse,
 			ToolUse: model.ToolUse{
-				ID:    "approval-1",
-				Name:  approvaltools.ToolName,
-				Input: json.RawMessage(`{"action":"workspace_apply_patch","reason":"README.md status update needs host approval","details":"README.md old to new","risk":"low"}`),
+				ID:   "approval-1",
+				Name: approvaltools.ToolName,
+				Input: json.RawMessage(`{"action":"workspace_apply_patch","reason":"README.md status update needs host approval","details":"README.md old to new","risk":"low","tool_input":{"operations":[
+					{"path":"README.md","old_content":"status: old","new_content":"status: new"}
+				]}}`),
 			},
 		}},
 		[]model.StreamEvent{{

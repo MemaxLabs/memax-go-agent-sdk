@@ -67,8 +67,9 @@ system prompt.
 - Add agent policy presets. Initial `toolkit/agentpolicy` hook preset exists
   for checkpoint-before-patch recovery and model-mediated rollback guidance
   after failed verification, plus bounded verify-before-final gating after
-  workspace mutations and explicit approval-before-tool gating, without
-  hard-coding policy into the core loop.
+  workspace mutations and explicit approval-before-tool gating with optional
+  single-use and input-bound grants, without hard-coding policy into the core
+  loop.
 - Add streaming tool execution. Initial provider tool-use lifecycle events
   (`tool_use_start`, `tool_use_delta`, complete `tool_use`) exist for OpenAI
   and Anthropic streams, and the agent loop can start read-only,

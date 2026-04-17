@@ -5,6 +5,9 @@ package approvaltools
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -26,6 +29,9 @@ const (
 	MetadataApprovalApproved = "approval_approved"
 	// MetadataApprovalReason carries a host-visible approval or denial reason.
 	MetadataApprovalReason = "approval_reason"
+	// MetadataApprovalInputHash carries the canonical JSON hash of the proposed
+	// tool input, when the approval request includes tool_input.
+	MetadataApprovalInputHash = "approval_input_hash"
 )
 
 // Request describes one approval request from the model to the host.
@@ -37,6 +43,8 @@ type Request struct {
 	Reason          string
 	Details         string
 	Risk            string
+	ToolInput       json.RawMessage
+	ToolInputHash   string
 	Metadata        map[string]any
 }
 
@@ -138,6 +146,10 @@ func NewTool(config Config) tool.Tool {
 						"type":        "string",
 						"description": "Optional risk level or risk description.",
 					},
+					"tool_input": map[string]any{
+						"type":        "object",
+						"description": "Optional exact proposed input for the approved tool call. Policies can bind approval to its canonical hash.",
+					},
 					"metadata": map[string]any{
 						"type":        "object",
 						"description": "Optional host-defined metadata for the approval request.",
@@ -166,6 +178,10 @@ func NewTool(config Config) tool.Tool {
 				ctx, cancel = context.WithTimeout(ctx, config.Timeout)
 				defer cancel()
 			}
+			toolInputHash, err := hashRawJSON(input.ToolInput)
+			if err != nil {
+				return model.ToolResult{}, fmt.Errorf("approvaltools: tool_input: %w", err)
+			}
 			decision, err := config.Approver.RequestApproval(ctx, Request{
 				SessionID:       call.Runtime.SessionID,
 				ParentSessionID: call.Runtime.ParentSessionID,
@@ -174,25 +190,28 @@ func NewTool(config Config) tool.Tool {
 				Reason:          reason,
 				Details:         strings.TrimSpace(input.Details),
 				Risk:            strings.TrimSpace(input.Risk),
+				ToolInput:       cloneRawMessage(input.ToolInput),
+				ToolInputHash:   toolInputHash,
 				Metadata:        model.CloneMetadata(input.Metadata),
 			})
 			if err != nil {
 				return model.ToolResult{}, err
 			}
-			return approvalResult(action, decision), nil
+			return approvalResult(action, toolInputHash, decision), nil
 		},
 	}
 }
 
 type input struct {
-	Action   string         `json:"action"`
-	Reason   string         `json:"reason"`
-	Details  string         `json:"details"`
-	Risk     string         `json:"risk"`
-	Metadata map[string]any `json:"metadata"`
+	Action    string          `json:"action"`
+	Reason    string          `json:"reason"`
+	Details   string          `json:"details"`
+	Risk      string          `json:"risk"`
+	ToolInput json.RawMessage `json:"tool_input"`
+	Metadata  map[string]any  `json:"metadata"`
 }
 
-func approvalResult(action string, decision Decision) model.ToolResult {
+func approvalResult(action, toolInputHash string, decision Decision) model.ToolResult {
 	metadata := model.CloneMetadata(decision.Metadata)
 	if metadata == nil {
 		metadata = map[string]any{}
@@ -201,6 +220,9 @@ func approvalResult(action string, decision Decision) model.ToolResult {
 	metadata[MetadataApprovalOperation] = "request"
 	metadata[MetadataApprovalAction] = action
 	metadata[MetadataApprovalApproved] = decision.Approved
+	if toolInputHash != "" {
+		metadata[MetadataApprovalInputHash] = toolInputHash
+	}
 	if reason != "" {
 		metadata[MetadataApprovalReason] = reason
 	}
@@ -222,4 +244,27 @@ func approvalResult(action string, decision Decision) model.ToolResult {
 func cloneDecision(decision Decision) Decision {
 	decision.Metadata = model.CloneMetadata(decision.Metadata)
 	return decision
+}
+
+func hashRawJSON(input json.RawMessage) (string, error) {
+	if len(input) == 0 {
+		return "", nil
+	}
+	var value any
+	if err := json.Unmarshal(input, &value); err != nil {
+		return "", err
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func cloneRawMessage(input json.RawMessage) json.RawMessage {
+	if input == nil {
+		return nil
+	}
+	return append(json.RawMessage(nil), input...)
 }

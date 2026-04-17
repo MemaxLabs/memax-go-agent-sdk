@@ -319,7 +319,9 @@ verify, ask the user, or stop.
   workspace mutation, drives verification through normal tool results, and
   stops with an expected error when the finalization denial budget is exhausted.
 - Approval-before-tool policy denial drives explicit host approval requests and
-  supports both approved retry and denied safe-fallback paths.
+  supports both approved retry and denied safe-fallback paths. Stricter
+  single-use and input-bound approval modes cover exact-operation approval
+  rather than only session-wide tool grants.
 
 ### 7. Provider Fidelity and Compatibility
 

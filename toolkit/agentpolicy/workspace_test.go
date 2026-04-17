@@ -276,6 +276,71 @@ func TestApprovalBeforeToolSessionEndedResetsState(t *testing.T) {
 	}
 }
 
+func TestApprovalBeforeToolSingleUseConsumesGrant(t *testing.T) {
+	policy := RequireApprovalBeforeToolsWithOptions(
+		[]string{workspacetools.ApplyPatchToolName},
+		WithSingleUseApprovals(),
+	)
+	if err := policy.AfterToolUse(context.Background(), approvalInput("session-1", workspacetools.ApplyPatchToolName, true)); err != nil {
+		t.Fatalf("AfterToolUse returned error: %v", err)
+	}
+	first, err := policy.BeforeToolUse(context.Background(), patchInput("session-1"))
+	if err != nil {
+		t.Fatalf("BeforeToolUse first returned error: %v", err)
+	}
+	if first.DenyReason != "" {
+		t.Fatalf("DenyReason = %q, want first use allowed", first.DenyReason)
+	}
+	second, err := policy.BeforeToolUse(context.Background(), patchInput("session-1"))
+	if err != nil {
+		t.Fatalf("BeforeToolUse second returned error: %v", err)
+	}
+	if second.DenyReason == "" {
+		t.Fatalf("DenyReason empty, want single-use approval consumed")
+	}
+}
+
+func TestApprovalBeforeToolInputBoundApproval(t *testing.T) {
+	policy := RequireApprovalBeforeToolsWithOptions(
+		[]string{workspacetools.ApplyPatchToolName},
+		WithInputBoundApprovals(),
+	)
+	approvedUse := model.ToolUse{
+		Name:  workspacetools.ApplyPatchToolName,
+		Input: json.RawMessage(`{"operations":[{"path":"README.md","new_content":"approved"}]}`),
+	}
+	approvedHash, err := hashToolInput(approvedUse.Input)
+	if err != nil {
+		t.Fatalf("hashToolInput returned error: %v", err)
+	}
+	if err := policy.AfterToolUse(context.Background(), approvalInputWithHash("session-1", workspacetools.ApplyPatchToolName, true, approvedHash)); err != nil {
+		t.Fatalf("AfterToolUse returned error: %v", err)
+	}
+	denied, err := policy.BeforeToolUse(context.Background(), hook.BeforeToolUseInput{
+		SessionID: "session-1",
+		Use: model.ToolUse{
+			Name:  workspacetools.ApplyPatchToolName,
+			Input: json.RawMessage(`{"operations":[{"path":"README.md","new_content":"different"}]}`),
+		},
+	})
+	if err != nil {
+		t.Fatalf("BeforeToolUse denied returned error: %v", err)
+	}
+	if denied.DenyReason == "" {
+		t.Fatalf("DenyReason empty, want mismatched input denied")
+	}
+	allowed, err := policy.BeforeToolUse(context.Background(), hook.BeforeToolUseInput{
+		SessionID: "session-1",
+		Use:       approvedUse,
+	})
+	if err != nil {
+		t.Fatalf("BeforeToolUse allowed returned error: %v", err)
+	}
+	if allowed.DenyReason != "" {
+		t.Fatalf("DenyReason = %q, want approved input allowed", allowed.DenyReason)
+	}
+}
+
 func TestVerifyBeforeFinalDeniesUntilVerificationPasses(t *testing.T) {
 	policy := RequireVerificationBeforeFinal()
 	if err := policy.AfterToolUse(context.Background(), workspacePatchResult("session-1", false)); err != nil {
@@ -385,16 +450,24 @@ func verificationResult(sessionID string, passed bool) hook.AfterToolUseInput {
 }
 
 func approvalInput(sessionID, action string, approved bool) hook.AfterToolUseInput {
+	return approvalInputWithHash(sessionID, action, approved, "")
+}
+
+func approvalInputWithHash(sessionID, action string, approved bool, inputHash string) hook.AfterToolUseInput {
+	metadata := map[string]any{
+		approvaltools.MetadataApprovalOperation: "request",
+		approvaltools.MetadataApprovalAction:    action,
+		approvaltools.MetadataApprovalApproved:  approved,
+	}
+	if inputHash != "" {
+		metadata[approvaltools.MetadataApprovalInputHash] = inputHash
+	}
 	return hook.AfterToolUseInput{
 		SessionID: sessionID,
 		Use:       model.ToolUse{Name: approvaltools.ToolName},
 		Result: model.ToolResult{
-			IsError: !approved,
-			Metadata: map[string]any{
-				approvaltools.MetadataApprovalOperation: "request",
-				approvaltools.MetadataApprovalAction:    action,
-				approvaltools.MetadataApprovalApproved:  approved,
-			},
+			IsError:  !approved,
+			Metadata: metadata,
 		},
 	}
 }

@@ -469,6 +469,16 @@ approver grants it. Denials and approvals are normal tool results, so the model
 can either retry after approval or choose a safe fallback when approval is
 denied.
 
+The approver is the security boundary. `approvaltools.StaticApprover` is useful
+for tests and trusted automation, but production hosts should connect the tool to
+their own human review, policy service, or approval queue. By default approvals
+are reusable for the named tool until the session ends. For stricter workflows,
+use `agentpolicy.RequireApprovalBeforeToolsWithOptions` with
+`agentpolicy.WithSingleUseApprovals()` and/or
+`agentpolicy.WithInputBoundApprovals()`. Input-bound approval requires the model
+to include the proposed `tool_input` in its `request_approval` call; the policy
+then allows only a later tool call whose canonical input hash matches.
+
 To bound an agent run across model calls, tool calls, tokens, turns, and wall
 time, set `Options.Budget`:
 

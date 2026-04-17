@@ -6,6 +6,8 @@ package agentpolicy
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -146,12 +148,25 @@ type RollbackOnFailedVerification struct {
 }
 
 // ApprovalBeforeTool denies configured tools until the model obtains approval
-// for the tool name through approvaltools.ToolName in the same session.
+// for the tool name through approvaltools.ToolName in the same session. By
+// default, approvals are reusable for that session and action. Use
+// WithSingleUseApprovals or WithInputBoundApprovals when a host needs stricter
+// per-attempt or exact-input approval semantics.
 type ApprovalBeforeTool struct {
-	mu       sync.RWMutex
-	required map[string]struct{}
-	approved map[string]map[string]bool
+	mu               sync.RWMutex
+	required         map[string]struct{}
+	approved         map[string]map[string][]approvalGrant
+	approvalToolName string
+	singleUse        bool
+	bindInput        bool
 }
+
+type approvalGrant struct {
+	InputHash string
+}
+
+// ApprovalBeforeToolOption configures RequireApprovalBeforeTools.
+type ApprovalBeforeToolOption func(*ApprovalBeforeTool)
 
 // VerifyBeforeFinal tracks workspace changes and denies final answers until a
 // successful verification result has been observed after the latest mutation.
@@ -162,17 +177,63 @@ type VerifyBeforeFinal struct {
 	dirty map[string]bool
 }
 
+// WithSingleUseApprovals makes each approval grant permit one matching tool
+// attempt. The grant is consumed when BeforeToolUse allows the attempt.
+func WithSingleUseApprovals() ApprovalBeforeToolOption {
+	return func(p *ApprovalBeforeTool) {
+		p.singleUse = true
+	}
+}
+
+// WithInputBoundApprovals requires request_approval results to include
+// approvaltools.MetadataApprovalInputHash and only allows a later tool call
+// whose input has the same canonical JSON hash. The request_approval tool
+// produces that hash when the model includes tool_input in its request.
+func WithInputBoundApprovals() ApprovalBeforeToolOption {
+	return func(p *ApprovalBeforeTool) {
+		p.bindInput = true
+	}
+}
+
+// WithApprovalToolName configures the approval tool name watched by this
+// policy. It defaults to approvaltools.ToolName.
+func WithApprovalToolName(name string) ApprovalBeforeToolOption {
+	return func(p *ApprovalBeforeTool) {
+		if name = strings.TrimSpace(name); name != "" {
+			p.approvalToolName = name
+		}
+	}
+}
+
 // RequireApprovalBeforeTools returns a policy that gates the given tool names
 // behind explicit request_approval results. Empty tool names are ignored.
+//
+// The Approver behind request_approval is the security boundary. Static
+// always-approve implementations are useful for tests and trusted automation,
+// but production hosts should connect the tool to their real approval workflow.
 func RequireApprovalBeforeTools(toolNames ...string) *ApprovalBeforeTool {
+	return RequireApprovalBeforeToolsWithOptions(toolNames, nil)
+}
+
+// RequireApprovalBeforeToolsWithOptions returns a policy that gates the given
+// tool names behind approval results and applies optional stricter grant
+// semantics. Passing nil options preserves the default reusable session grant
+// behavior.
+func RequireApprovalBeforeToolsWithOptions(toolNames []string, options ...ApprovalBeforeToolOption) *ApprovalBeforeTool {
 	p := &ApprovalBeforeTool{
-		required: map[string]struct{}{},
-		approved: map[string]map[string]bool{},
+		required:         map[string]struct{}{},
+		approved:         map[string]map[string][]approvalGrant{},
+		approvalToolName: approvaltools.ToolName,
 	}
 	for _, name := range toolNames {
 		name = strings.TrimSpace(name)
 		if name != "" {
 			p.required[name] = struct{}{}
+		}
+	}
+	for _, option := range options {
+		if option != nil {
+			option(p)
 		}
 	}
 	return p
@@ -193,7 +254,7 @@ func (p *ApprovalBeforeTool) BeforeToolUse(ctx context.Context, input hook.Befor
 	if err := ctx.Err(); err != nil {
 		return hook.BeforeToolUseResult{}, err
 	}
-	if !p.requires(input.Use.Name) || p.isApproved(input.SessionID, input.Use.Name) {
+	if !p.requires(input.Use.Name) || p.consumeApproval(input.SessionID, input.Use) {
 		return hook.BeforeToolUseResult{}, nil
 	}
 	return hook.BeforeToolUseResult{DenyReason: ApprovalBeforeToolReason(input.Use.Name)}, nil
@@ -204,7 +265,7 @@ func (p *ApprovalBeforeTool) AfterToolUse(ctx context.Context, input hook.AfterT
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if input.SessionID == "" || input.Result.IsError || input.Use.Name != approvaltools.ToolName {
+	if input.SessionID == "" || input.Result.IsError || input.Use.Name != p.approvalName() {
 		return nil
 	}
 	if operation, _ := input.Result.Metadata[approvaltools.MetadataApprovalOperation].(string); operation != "request" {
@@ -216,15 +277,20 @@ func (p *ApprovalBeforeTool) AfterToolUse(ctx context.Context, input hook.AfterT
 	if !approved || !p.requires(action) {
 		return nil
 	}
+	inputHash, _ := input.Result.Metadata[approvaltools.MetadataApprovalInputHash].(string)
+	inputHash = strings.TrimSpace(inputHash)
+	if p.bindInput && inputHash == "" {
+		return nil
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.approved == nil {
-		p.approved = map[string]map[string]bool{}
+		p.approved = map[string]map[string][]approvalGrant{}
 	}
 	if p.approved[input.SessionID] == nil {
-		p.approved[input.SessionID] = map[string]bool{}
+		p.approved[input.SessionID] = map[string][]approvalGrant{}
 	}
-	p.approved[input.SessionID][action] = true
+	p.approved[input.SessionID][action] = append(p.approved[input.SessionID][action], approvalGrant{InputHash: inputHash})
 	return nil
 }
 
@@ -255,19 +321,66 @@ func (p *ApprovalBeforeTool) requires(toolName string) bool {
 	return ok
 }
 
-func (p *ApprovalBeforeTool) isApproved(sessionID, toolName string) bool {
+func (p *ApprovalBeforeTool) consumeApproval(sessionID string, use model.ToolUse) bool {
+	toolName := use.Name
 	if p == nil || sessionID == "" || toolName == "" {
 		return false
 	}
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	return p.approved[sessionID][toolName]
+	inputHash := ""
+	if p.bindInput {
+		var err error
+		inputHash, err = hashToolInput(use.Input)
+		if err != nil {
+			return false
+		}
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	grants := p.approved[sessionID][toolName]
+	for i, grant := range grants {
+		if p.bindInput && grant.InputHash != inputHash {
+			continue
+		}
+		if p.singleUse {
+			grants = append(grants[:i], grants[i+1:]...)
+			if len(grants) == 0 {
+				delete(p.approved[sessionID], toolName)
+			} else {
+				p.approved[sessionID][toolName] = grants
+			}
+		}
+		return true
+	}
+	return false
+}
+
+func (p *ApprovalBeforeTool) approvalName() string {
+	if p == nil || strings.TrimSpace(p.approvalToolName) == "" {
+		return approvaltools.ToolName
+	}
+	return p.approvalToolName
 }
 
 // ApprovalBeforeToolReason returns the model-visible denial reason used by
 // RequireApprovalBeforeTools.
 func ApprovalBeforeToolReason(toolName string) string {
 	return "request approval for " + strings.TrimSpace(toolName) + " before using it"
+}
+
+func hashToolInput(input json.RawMessage) (string, error) {
+	if len(input) == 0 {
+		input = json.RawMessage(`{}`)
+	}
+	var value any
+	if err := json.Unmarshal(input, &value); err != nil {
+		return "", err
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 // RequireVerificationBeforeFinal returns a policy that can be installed into a
