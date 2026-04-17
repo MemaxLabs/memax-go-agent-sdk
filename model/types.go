@@ -143,6 +143,31 @@ const (
 	// MetadataApprovalInputHash carries the canonical JSON hash of the proposed
 	// tool input, when approval is bound to exact input.
 	MetadataApprovalInputHash = "approval_input_hash"
+	// MetadataApprovalSummaryTitle carries a short host-facing approval summary.
+	MetadataApprovalSummaryTitle = "approval_summary_title"
+	// MetadataApprovalSummaryDescription carries optional approval summary
+	// details.
+	MetadataApprovalSummaryDescription = "approval_summary_description"
+	// MetadataApprovalSummaryRisk carries optional approval summary risk text.
+	MetadataApprovalSummaryRisk = "approval_summary_risk"
+	// MetadataApprovalSummaryPaths carries paths affected by the proposed
+	// action.
+	MetadataApprovalSummaryPaths = "approval_summary_paths"
+	// MetadataApprovalSummaryChanges carries the number of file-level changes
+	// in the proposed action.
+	MetadataApprovalSummaryChanges = "approval_summary_changes"
+	// MetadataApprovalSummaryAdded carries the number of added files in the
+	// proposed action.
+	MetadataApprovalSummaryAdded = "approval_summary_added"
+	// MetadataApprovalSummaryModified carries the number of modified files in
+	// the proposed action.
+	MetadataApprovalSummaryModified = "approval_summary_modified"
+	// MetadataApprovalSummaryDeleted carries the number of deleted files in the
+	// proposed action.
+	MetadataApprovalSummaryDeleted = "approval_summary_deleted"
+	// MetadataApprovalSummaryByteDelta carries the estimated byte delta for the
+	// proposed action.
+	MetadataApprovalSummaryByteDelta = "approval_summary_byte_delta"
 	// MetadataApprovalConsumed marks a later tool result whose execution used an
 	// approval grant.
 	MetadataApprovalConsumed = "approval_consumed"

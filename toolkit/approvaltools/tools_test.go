@@ -23,7 +23,7 @@ func TestApprovalToolGranted(t *testing.T) {
 		Use: model.ToolUse{
 			ID:    "approval-1",
 			Name:  ToolName,
-			Input: json.RawMessage(`{"action":"workspace_apply_patch","reason":"edit README","details":"README.md","risk":"low","tool_input":{"operations":[{"path":"README.md","new_content":"next"}]},"metadata":{"path":"README.md"}}`),
+			Input: json.RawMessage(`{"action":"workspace_apply_patch","reason":"edit README","details":"README.md","risk":"low","summary":{"title":"Review README patch","description":"Update README status","risk":"low","paths":["README.md","README.md"],"changes":1,"modified":1,"byte_delta":4},"tool_input":{"operations":[{"path":"README.md","new_content":"next"}]},"metadata":{"path":"README.md"}}`),
 		},
 		Runtime: tool.Runtime{
 			SessionID:       "session-1",
@@ -40,11 +40,18 @@ func TestApprovalToolGranted(t *testing.T) {
 	if got.SessionID != "session-1" || got.ParentSessionID != "parent-1" || got.Identity.Name != "Zoe" || got.Action != "workspace_apply_patch" || got.Reason != "edit README" || got.Details != "README.md" || got.Risk != "low" || got.ToolInputHash == "" {
 		t.Fatalf("request = %#v, want runtime and input context", got)
 	}
+	if got.Summary.Title != "Review README patch" || got.Summary.Description != "Update README status" || got.Summary.Risk != "low" || len(got.Summary.Paths) != 1 || got.Summary.Paths[0] != "README.md" || got.Summary.Changes != 1 || got.Summary.Modified != 1 || got.Summary.ByteDelta != 4 {
+		t.Fatalf("summary = %#v, want normalized structured summary", got.Summary)
+	}
 	if result.Metadata[MetadataApprovalOperation] != "request" ||
 		result.Metadata[MetadataApprovalAction] != "workspace_apply_patch" ||
 		result.Metadata[MetadataApprovalApproved] != true ||
 		result.Metadata[MetadataApprovalReason] != "approved for tests" ||
 		result.Metadata[MetadataApprovalInputHash] != got.ToolInputHash ||
+		result.Metadata[MetadataApprovalSummaryTitle] != "Review README patch" ||
+		result.Metadata[MetadataApprovalSummaryPaths].([]string)[0] != "README.md" ||
+		result.Metadata[MetadataApprovalSummaryChanges] != 1 ||
+		result.Metadata[MetadataApprovalSummaryModified] != 1 ||
 		result.Metadata["ticket"] != "A-1" {
 		t.Fatalf("metadata = %#v, want approval metadata", result.Metadata)
 	}

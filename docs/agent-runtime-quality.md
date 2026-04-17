@@ -322,7 +322,8 @@ verify, ask the user, or stop.
   supports both approved retry and denied safe-fallback paths. Stricter
   single-use and input-bound approval modes cover exact-operation approval
   rather than only session-wide tool grants, with first-class approval events
-  and metrics for audit/UI integration.
+  and metrics for audit/UI integration. Approval requests can carry structured
+  host-facing summaries, including workspace patch summaries.
 
 ### 7. Provider Fidelity and Compatibility
 

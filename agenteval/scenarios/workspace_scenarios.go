@@ -675,7 +675,7 @@ func WorkspaceApprovalPolicyRecovery() agenteval.Case {
 			ToolUse: model.ToolUse{
 				ID:   "approval-1",
 				Name: approvaltools.ToolName,
-				Input: json.RawMessage(`{"action":"workspace_apply_patch","reason":"README.md status update needs host approval","details":"README.md old to new","risk":"low","tool_input":{"operations":[
+				Input: json.RawMessage(`{"action":"workspace_apply_patch","reason":"README.md status update needs host approval","details":"README.md old to new","risk":"low","summary":{"title":"Review README.md status patch","description":"Change README.md status from old to new","risk":"low","paths":["README.md"],"changes":1,"modified":1,"byte_delta":0},"tool_input":{"operations":[
 					{"path":"README.md","old_content":"status: old","new_content":"status: new"}
 				]}}`),
 			},
@@ -722,6 +722,9 @@ func WorkspaceApprovalPolicyRecovery() agenteval.Case {
 					}
 					if results[1].IsError || results[1].Metadata[approvaltools.MetadataApprovalApproved] != true {
 						return fmt.Errorf("approval result = %#v, want approval granted", results[1])
+					}
+					if results[1].Metadata[approvaltools.MetadataApprovalSummaryTitle] != "Review README.md status patch" {
+						return fmt.Errorf("approval metadata = %#v, want structured patch summary", results[1].Metadata)
 					}
 					if results[2].IsError || !strings.Contains(results[2].Content, "modified README.md") {
 						return fmt.Errorf("second patch result = %#v, want patch success", results[2])

@@ -2,11 +2,13 @@ package workspacetools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
+	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/approvaltools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/workspace"
 )
 
@@ -77,6 +79,20 @@ func (f PatchReviewerFunc) ReviewPatch(ctx context.Context, req PatchReviewReque
 		return PatchReviewDecision{Allow: true}, nil
 	}
 	return f(ctx, req)
+}
+
+// ApprovalSummaryFromPatchInput returns a host-facing approval summary for a
+// workspace_apply_patch tool input. It is intentionally input-only: it does not
+// read workspace state or validate guards. Hosts that need exact pre/post
+// content should use PatchReviewer or a dry-run preview before approval.
+func ApprovalSummaryFromPatchInput(input []byte) (approvaltools.Summary, error) {
+	var patch patchInput
+	if len(input) > 0 {
+		if err := json.Unmarshal(input, &patch); err != nil {
+			return approvaltools.Summary{}, fmt.Errorf("workspacetools: decode patch input: %w", err)
+		}
+	}
+	return approvalSummaryFromPatch(patch)
 }
 
 // Differ is the diff capability required by NewDiffTool.
@@ -456,6 +472,88 @@ func patchOperations(input []patchOperationInput) ([]workspace.PatchOperation, e
 		}
 	}
 	return out, nil
+}
+
+func approvalSummaryFromPatch(input patchInput) (approvaltools.Summary, error) {
+	hasOperations := len(input.Operations) > 0
+	hasUnifiedDiff := strings.TrimSpace(input.UnifiedDiff) != ""
+	switch {
+	case hasOperations == hasUnifiedDiff:
+		return approvaltools.Summary{}, fmt.Errorf("workspacetools: provide exactly one of operations or unified_diff")
+	case hasUnifiedDiff:
+		paths := pathsFromUnifiedDiff(input.UnifiedDiff)
+		return approvaltools.Summary{
+			Title:       "Review workspace patch",
+			Description: "Apply a unified diff to the workspace.",
+			Risk:        "workspace mutation",
+			Changes:     maxInt(1, len(paths)),
+			Paths:       paths,
+		}, nil
+	default:
+		summary := approvaltools.Summary{
+			Title:       "Review workspace patch",
+			Description: "Apply guarded workspace file edits.",
+			Risk:        "workspace mutation",
+			Changes:     len(input.Operations),
+			Paths:       make([]string, 0, len(input.Operations)),
+		}
+		seen := map[string]struct{}{}
+		for _, op := range input.Operations {
+			path := strings.TrimSpace(op.Path)
+			if path != "" {
+				if _, ok := seen[path]; !ok {
+					seen[path] = struct{}{}
+					summary.Paths = append(summary.Paths, path)
+				}
+			}
+			switch {
+			case op.Delete:
+				summary.Deleted++
+				if op.OldContent != nil {
+					summary.ByteDelta -= len(*op.OldContent)
+				}
+			case op.OldContent == nil:
+				summary.Added++
+				if op.NewContent != nil {
+					summary.ByteDelta += len(*op.NewContent)
+				}
+			default:
+				summary.Modified++
+				if op.NewContent != nil {
+					summary.ByteDelta += len(*op.NewContent) - len(*op.OldContent)
+				}
+			}
+		}
+		return summary, nil
+	}
+}
+
+func pathsFromUnifiedDiff(diff string) []string {
+	var paths []string
+	seen := map[string]struct{}{}
+	for _, line := range strings.Split(diff, "\n") {
+		if !strings.HasPrefix(line, "+++ ") {
+			continue
+		}
+		path := strings.TrimSpace(strings.TrimPrefix(line, "+++ "))
+		if path == "" || path == "/dev/null" {
+			continue
+		}
+		path = strings.TrimPrefix(path, "b/")
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		paths = append(paths, path)
+	}
+	return paths
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func applyPatchInput(ctx context.Context, store Patcher, use model.ToolUse, input patchInput, reviewer PatchReviewer) (workspace.PatchResult, error) {

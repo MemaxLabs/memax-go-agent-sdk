@@ -162,11 +162,25 @@ type ApprovalEvent struct {
 	Action     string
 	Reason     string
 	InputHash  string
+	Summary    ApprovalSummaryEvent
 	Requested  bool
 	Approved   bool
 	Consumed   bool
 	SingleUse  bool
 	InputBound bool
+}
+
+// ApprovalSummaryEvent is a compact host-facing summary of an approval request.
+type ApprovalSummaryEvent struct {
+	Title       string
+	Description string
+	Risk        string
+	Paths       []string
+	Changes     int
+	Added       int
+	Modified    int
+	Deleted     int
+	ByteDelta   int
 }
 
 func newEvent(kind EventKind, sessionID string, turn int) Event {

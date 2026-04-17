@@ -367,57 +367,60 @@ func TestQueryVerificationEventStreamGolden(t *testing.T) {
 }
 
 type goldenEvent struct {
-	Kind                EventKind `json:"kind"`
-	Turn                int       `json:"turn,omitempty"`
-	Text                string    `json:"text,omitempty"`
-	ToolID              string    `json:"tool_id,omitempty"`
-	ToolName            string    `json:"tool_name,omitempty"`
-	ToolUseDelta        string    `json:"tool_use_delta,omitempty"`
-	ToolResult          string    `json:"tool_result,omitempty"`
-	UsageInputTokens    int       `json:"usage_input_tokens,omitempty"`
-	UsageOutputTokens   int       `json:"usage_output_tokens,omitempty"`
-	UsageTotalTokens    int       `json:"usage_total_tokens,omitempty"`
-	UsageProvider       string    `json:"usage_provider,omitempty"`
-	UsageModel          string    `json:"usage_model,omitempty"`
-	ContextPolicy       string    `json:"context_policy,omitempty"`
-	ContextReason       string    `json:"context_reason,omitempty"`
-	ContextOriginal     int       `json:"context_original,omitempty"`
-	ContextSent         int       `json:"context_sent,omitempty"`
-	ContextSummaryHash  string    `json:"context_summary_hash,omitempty"`
-	SkillAction         string    `json:"skill_action,omitempty"`
-	SkillName           string    `json:"skill_name,omitempty"`
-	SkillResource       string    `json:"skill_resource,omitempty"`
-	SkillQuery          string    `json:"skill_query,omitempty"`
-	SkillSelectedNames  []string  `json:"skill_selected_names,omitempty"`
-	SkillSelected       int       `json:"skill_selected,omitempty"`
-	SkillOmitted        int       `json:"skill_omitted,omitempty"`
-	SkillMatches        int       `json:"skill_matches,omitempty"`
-	SkillMetadataOnly   bool      `json:"skill_metadata_only,omitempty"`
-	SkillPromptBytesSet bool      `json:"skill_prompt_bytes_set,omitempty"`
-	MemoryCandidates    []string  `json:"memory_candidates,omitempty"`
-	WorkspaceOperation  string    `json:"workspace_operation,omitempty"`
-	WorkspacePaths      []string  `json:"workspace_paths,omitempty"`
-	WorkspaceChanges    int       `json:"workspace_changes,omitempty"`
-	WorkspaceAdded      int       `json:"workspace_added,omitempty"`
-	WorkspaceModified   int       `json:"workspace_modified,omitempty"`
-	WorkspaceDeleted    int       `json:"workspace_deleted,omitempty"`
-	WorkspaceByteDelta  int       `json:"workspace_byte_delta,omitempty"`
-	WorkspaceCheckpoint string    `json:"workspace_checkpoint,omitempty"`
-	WorkspaceBase       string    `json:"workspace_base,omitempty"`
-	VerificationName    string    `json:"verification_name,omitempty"`
-	VerificationPassed  bool      `json:"verification_passed,omitempty"`
-	VerificationDiag    int       `json:"verification_diagnostics,omitempty"`
-	VerificationPaths   []string  `json:"verification_paths,omitempty"`
-	ApprovalAction      string    `json:"approval_action,omitempty"`
-	ApprovalReason      string    `json:"approval_reason,omitempty"`
-	ApprovalInputHash   string    `json:"approval_input_hash,omitempty"`
-	ApprovalRequested   bool      `json:"approval_requested,omitempty"`
-	ApprovalApproved    bool      `json:"approval_approved,omitempty"`
-	ApprovalConsumed    bool      `json:"approval_consumed,omitempty"`
-	ApprovalSingleUse   bool      `json:"approval_single_use,omitempty"`
-	ApprovalInputBound  bool      `json:"approval_input_bound,omitempty"`
-	Result              string    `json:"result,omitempty"`
-	Error               string    `json:"error,omitempty"`
+	Kind                 EventKind `json:"kind"`
+	Turn                 int       `json:"turn,omitempty"`
+	Text                 string    `json:"text,omitempty"`
+	ToolID               string    `json:"tool_id,omitempty"`
+	ToolName             string    `json:"tool_name,omitempty"`
+	ToolUseDelta         string    `json:"tool_use_delta,omitempty"`
+	ToolResult           string    `json:"tool_result,omitempty"`
+	UsageInputTokens     int       `json:"usage_input_tokens,omitempty"`
+	UsageOutputTokens    int       `json:"usage_output_tokens,omitempty"`
+	UsageTotalTokens     int       `json:"usage_total_tokens,omitempty"`
+	UsageProvider        string    `json:"usage_provider,omitempty"`
+	UsageModel           string    `json:"usage_model,omitempty"`
+	ContextPolicy        string    `json:"context_policy,omitempty"`
+	ContextReason        string    `json:"context_reason,omitempty"`
+	ContextOriginal      int       `json:"context_original,omitempty"`
+	ContextSent          int       `json:"context_sent,omitempty"`
+	ContextSummaryHash   string    `json:"context_summary_hash,omitempty"`
+	SkillAction          string    `json:"skill_action,omitempty"`
+	SkillName            string    `json:"skill_name,omitempty"`
+	SkillResource        string    `json:"skill_resource,omitempty"`
+	SkillQuery           string    `json:"skill_query,omitempty"`
+	SkillSelectedNames   []string  `json:"skill_selected_names,omitempty"`
+	SkillSelected        int       `json:"skill_selected,omitempty"`
+	SkillOmitted         int       `json:"skill_omitted,omitempty"`
+	SkillMatches         int       `json:"skill_matches,omitempty"`
+	SkillMetadataOnly    bool      `json:"skill_metadata_only,omitempty"`
+	SkillPromptBytesSet  bool      `json:"skill_prompt_bytes_set,omitempty"`
+	MemoryCandidates     []string  `json:"memory_candidates,omitempty"`
+	WorkspaceOperation   string    `json:"workspace_operation,omitempty"`
+	WorkspacePaths       []string  `json:"workspace_paths,omitempty"`
+	WorkspaceChanges     int       `json:"workspace_changes,omitempty"`
+	WorkspaceAdded       int       `json:"workspace_added,omitempty"`
+	WorkspaceModified    int       `json:"workspace_modified,omitempty"`
+	WorkspaceDeleted     int       `json:"workspace_deleted,omitempty"`
+	WorkspaceByteDelta   int       `json:"workspace_byte_delta,omitempty"`
+	WorkspaceCheckpoint  string    `json:"workspace_checkpoint,omitempty"`
+	WorkspaceBase        string    `json:"workspace_base,omitempty"`
+	VerificationName     string    `json:"verification_name,omitempty"`
+	VerificationPassed   bool      `json:"verification_passed,omitempty"`
+	VerificationDiag     int       `json:"verification_diagnostics,omitempty"`
+	VerificationPaths    []string  `json:"verification_paths,omitempty"`
+	ApprovalAction       string    `json:"approval_action,omitempty"`
+	ApprovalReason       string    `json:"approval_reason,omitempty"`
+	ApprovalInputHash    string    `json:"approval_input_hash,omitempty"`
+	ApprovalSummary      string    `json:"approval_summary,omitempty"`
+	ApprovalSummaryRisk  string    `json:"approval_summary_risk,omitempty"`
+	ApprovalSummaryPaths []string  `json:"approval_summary_paths,omitempty"`
+	ApprovalRequested    bool      `json:"approval_requested,omitempty"`
+	ApprovalApproved     bool      `json:"approval_approved,omitempty"`
+	ApprovalConsumed     bool      `json:"approval_consumed,omitempty"`
+	ApprovalSingleUse    bool      `json:"approval_single_use,omitempty"`
+	ApprovalInputBound   bool      `json:"approval_input_bound,omitempty"`
+	Result               string    `json:"result,omitempty"`
+	Error                string    `json:"error,omitempty"`
 }
 
 func normalizeGoldenEvent(event Event) goldenEvent {
@@ -500,6 +503,9 @@ func normalizeGoldenEvent(event Event) goldenEvent {
 			if event.Approval.InputHash != "" {
 				out.ApprovalInputHash = "set"
 			}
+			out.ApprovalSummary = event.Approval.Summary.Title
+			out.ApprovalSummaryRisk = event.Approval.Summary.Risk
+			out.ApprovalSummaryPaths = append([]string(nil), event.Approval.Summary.Paths...)
 			out.ApprovalRequested = event.Approval.Requested
 			out.ApprovalApproved = event.Approval.Approved
 			out.ApprovalConsumed = event.Approval.Consumed

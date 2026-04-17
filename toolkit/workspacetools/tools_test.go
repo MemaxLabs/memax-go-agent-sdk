@@ -237,6 +237,46 @@ func TestApplyPatchToolReviewerErrorBlocksMutation(t *testing.T) {
 	}
 }
 
+func TestApprovalSummaryFromPatchInput(t *testing.T) {
+	summary, err := ApprovalSummaryFromPatchInput([]byte(`{"operations":[
+		{"path":"README.md","old_content":"old","new_content":"newer"},
+		{"path":"docs/new.md","new_content":"new"},
+		{"path":"docs/old.md","old_content":"gone","delete":true}
+	]}`))
+	if err != nil {
+		t.Fatalf("ApprovalSummaryFromPatchInput returned error: %v", err)
+	}
+	if summary.Title != "Review workspace patch" || summary.Risk != "workspace mutation" || summary.Changes != 3 || summary.Modified != 1 || summary.Added != 1 || summary.Deleted != 1 {
+		t.Fatalf("summary = %#v, want change counts", summary)
+	}
+	if !sameStringSlice(summary.Paths, []string{"README.md", "docs/new.md", "docs/old.md"}) {
+		t.Fatalf("paths = %#v, want affected paths", summary.Paths)
+	}
+	if summary.ByteDelta != 1 {
+		t.Fatalf("byte delta = %d, want old->newer (+2), add new (+3), delete gone (-4)", summary.ByteDelta)
+	}
+
+	diffSummary, err := ApprovalSummaryFromPatchInput([]byte(`{"unified_diff":"--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-old\n+new"}`))
+	if err != nil {
+		t.Fatalf("ApprovalSummaryFromPatchInput diff returned error: %v", err)
+	}
+	if diffSummary.Changes != 1 || !sameStringSlice(diffSummary.Paths, []string{"README.md"}) {
+		t.Fatalf("diff summary = %#v, want README path", diffSummary)
+	}
+}
+
+func sameStringSlice(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func mustRun(t *testing.T, registry *tool.Registry, use model.ToolUse) model.ToolResult {
 	t.Helper()
 	impl, ok := registry.Get(use.Name)

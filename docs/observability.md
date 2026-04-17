@@ -100,7 +100,8 @@ a checkpoint.
 
 Approval events are metadata-derived from `request_approval` results and from
 policy metadata attached to later tool results. Request events expose the action,
-decision, reason, and optional input hash. Consumed events expose the action,
+decision, reason, optional input hash, and optional structured review summary
+such as title, risk, paths, and change counts. Consumed events expose the action,
 whether the grant was single-use, and whether it was input-bound. This keeps
 approval UI and audit logs out of generic tool-result parsing while preserving
 the transcript-visible approval contract.

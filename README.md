@@ -480,6 +480,10 @@ to include the proposed `tool_input` in its `request_approval` call; the policy
 then allows only a later tool call whose canonical input hash matches.
 Approval requests, grant/denial decisions, and consumed grants emit typed
 approval events plus `memax.approval.*` counters for audit and UI integration.
+Use the optional `summary` field on `request_approval` to provide host-facing
+review context such as title, risk, affected paths, change counts, and byte
+delta. `workspacetools.ApprovalSummaryFromPatchInput` derives that summary from
+a `workspace_apply_patch` input without reading workspace state.
 
 To bound an agent run across model calls, tool calls, tokens, turns, and wall
 time, set `Options.Budget`:

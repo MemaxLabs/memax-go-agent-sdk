@@ -1789,13 +1789,18 @@ func emitApprovalToolEvent(ctx context.Context, emit func(Event) bool, opts Opti
 	if result.Metadata == nil {
 		return true
 	}
+	inputHash := metadatavalues.String(result.Metadata, model.MetadataApprovalInputHash)
+	inputBound := inputHash != ""
+	// Consumed-grant metadata is normally attached to the later approved tool
+	// result, while request metadata is attached to the approval tool result.
+	// Keep the checks independent so custom tools can emit both if needed.
 	if metadatavalues.Bool(result.Metadata, model.MetadataApprovalConsumed) {
 		approvalEvent := &ApprovalEvent{
 			Action:     metadatavalues.String(result.Metadata, model.MetadataApprovalAction),
-			InputHash:  metadatavalues.String(result.Metadata, model.MetadataApprovalInputHash),
+			InputHash:  inputHash,
 			Consumed:   true,
 			SingleUse:  metadatavalues.Bool(result.Metadata, model.MetadataApprovalSingleUse),
-			InputBound: metadatavalues.String(result.Metadata, model.MetadataApprovalInputHash) != "",
+			InputBound: inputBound,
 		}
 		event := newEvent(EventApprovalConsumed, sessionID, turn)
 		event.Approval = approvalEvent
@@ -1807,7 +1812,7 @@ func emitApprovalToolEvent(ctx context.Context, emit func(Event) bool, opts Opti
 			telemetry.Int("memax.turn", turn),
 			telemetry.String("memax.approval.action", approvalEvent.Action),
 			telemetry.Bool("memax.approval.single_use", approvalEvent.SingleUse),
-			telemetry.Bool("memax.approval.input_bound", approvalEvent.InputBound),
+			telemetry.Bool("memax.approval.input_bound", inputBound),
 		)
 	}
 	if metadatavalues.String(result.Metadata, model.MetadataApprovalOperation) != "request" {
@@ -1816,9 +1821,10 @@ func emitApprovalToolEvent(ctx context.Context, emit func(Event) bool, opts Opti
 	approvalEvent := ApprovalEvent{
 		Action:     metadatavalues.String(result.Metadata, model.MetadataApprovalAction),
 		Reason:     metadatavalues.String(result.Metadata, model.MetadataApprovalReason),
-		InputHash:  metadatavalues.String(result.Metadata, model.MetadataApprovalInputHash),
+		InputHash:  inputHash,
+		Summary:    approvalSummaryFromMetadata(result.Metadata),
 		Approved:   metadatavalues.Bool(result.Metadata, model.MetadataApprovalApproved),
-		InputBound: metadatavalues.String(result.Metadata, model.MetadataApprovalInputHash) != "",
+		InputBound: inputBound,
 	}
 	requested := newEvent(EventApprovalRequested, sessionID, turn)
 	requestedPayload := approvalEvent
@@ -1831,7 +1837,7 @@ func emitApprovalToolEvent(ctx context.Context, emit func(Event) bool, opts Opti
 		telemetry.String("memax.session_id", sessionID),
 		telemetry.Int("memax.turn", turn),
 		telemetry.String("memax.approval.action", approvalEvent.Action),
-		telemetry.Bool("memax.approval.input_bound", approvalEvent.InputBound),
+		telemetry.Bool("memax.approval.input_bound", inputBound),
 	)
 	kind := EventApprovalDenied
 	meterName := "memax.approval.denials"
@@ -1850,9 +1856,23 @@ func emitApprovalToolEvent(ctx context.Context, emit func(Event) bool, opts Opti
 		telemetry.String("memax.session_id", sessionID),
 		telemetry.Int("memax.turn", turn),
 		telemetry.String("memax.approval.action", approvalEvent.Action),
-		telemetry.Bool("memax.approval.input_bound", approvalEvent.InputBound),
+		telemetry.Bool("memax.approval.input_bound", inputBound),
 	)
 	return true
+}
+
+func approvalSummaryFromMetadata(metadata map[string]any) ApprovalSummaryEvent {
+	return ApprovalSummaryEvent{
+		Title:       metadatavalues.String(metadata, model.MetadataApprovalSummaryTitle),
+		Description: metadatavalues.String(metadata, model.MetadataApprovalSummaryDescription),
+		Risk:        metadatavalues.String(metadata, model.MetadataApprovalSummaryRisk),
+		Paths:       metadataStrings(metadata, model.MetadataApprovalSummaryPaths),
+		Changes:     metadatavalues.Int(metadata, model.MetadataApprovalSummaryChanges),
+		Added:       metadatavalues.Int(metadata, model.MetadataApprovalSummaryAdded),
+		Modified:    metadatavalues.Int(metadata, model.MetadataApprovalSummaryModified),
+		Deleted:     metadatavalues.Int(metadata, model.MetadataApprovalSummaryDeleted),
+		ByteDelta:   metadatavalues.Int(metadata, model.MetadataApprovalSummaryByteDelta),
+	}
 }
 
 func metadataStrings(metadata map[string]any, key string) []string {

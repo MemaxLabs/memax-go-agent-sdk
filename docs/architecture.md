@@ -473,6 +473,11 @@ hash of the proposed `tool_input`, allowing only an exact later input match.
 Approval requests, grant/denial decisions, and consumed grants emit typed
 approval events and `memax.approval.*` counters so hosts can build review UI and
 audit logs without parsing generic tool-result text.
+The approval request schema includes an optional structured summary with title,
+description, risk, paths, change counts, and byte delta. Toolkit helpers such as
+`workspacetools.ApprovalSummaryFromPatchInput` can derive summaries from
+tool-specific inputs while keeping the core approval contract provider- and
+workspace-neutral.
 
 ## Context Window
 

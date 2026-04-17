@@ -32,7 +32,40 @@ const (
 	// MetadataApprovalInputHash carries the canonical JSON hash of the proposed
 	// tool input, when the approval request includes tool_input.
 	MetadataApprovalInputHash = model.MetadataApprovalInputHash
+	// MetadataApprovalSummaryTitle carries a short host-facing approval summary.
+	MetadataApprovalSummaryTitle = model.MetadataApprovalSummaryTitle
+	// MetadataApprovalSummaryDescription carries optional approval summary details.
+	MetadataApprovalSummaryDescription = model.MetadataApprovalSummaryDescription
+	// MetadataApprovalSummaryRisk carries optional approval summary risk text.
+	MetadataApprovalSummaryRisk = model.MetadataApprovalSummaryRisk
+	// MetadataApprovalSummaryPaths carries affected paths for the proposed action.
+	MetadataApprovalSummaryPaths = model.MetadataApprovalSummaryPaths
+	// MetadataApprovalSummaryChanges carries the number of proposed changes.
+	MetadataApprovalSummaryChanges = model.MetadataApprovalSummaryChanges
+	// MetadataApprovalSummaryAdded carries the number of proposed added files.
+	MetadataApprovalSummaryAdded = model.MetadataApprovalSummaryAdded
+	// MetadataApprovalSummaryModified carries the number of proposed modified files.
+	MetadataApprovalSummaryModified = model.MetadataApprovalSummaryModified
+	// MetadataApprovalSummaryDeleted carries the number of proposed deleted files.
+	MetadataApprovalSummaryDeleted = model.MetadataApprovalSummaryDeleted
+	// MetadataApprovalSummaryByteDelta carries the proposed byte delta.
+	MetadataApprovalSummaryByteDelta = model.MetadataApprovalSummaryByteDelta
 )
+
+// Summary is a compact host-facing description of a requested approval. It is
+// optional, but approval UIs and audit logs should prefer it over free-form
+// Details when present.
+type Summary struct {
+	Title       string   `json:"title"`
+	Description string   `json:"description"`
+	Risk        string   `json:"risk"`
+	Paths       []string `json:"paths"`
+	Changes     int      `json:"changes"`
+	Added       int      `json:"added"`
+	Modified    int      `json:"modified"`
+	Deleted     int      `json:"deleted"`
+	ByteDelta   int      `json:"byte_delta"`
+}
 
 // Request describes one approval request from the model to the host.
 type Request struct {
@@ -43,6 +76,7 @@ type Request struct {
 	Reason          string
 	Details         string
 	Risk            string
+	Summary         Summary
 	ToolInput       json.RawMessage
 	ToolInputHash   string
 	Metadata        map[string]any
@@ -146,6 +180,36 @@ func NewTool(config Config) tool.Tool {
 						"type":        "string",
 						"description": "Optional risk level or risk description.",
 					},
+					"summary": map[string]any{
+						"type":        "object",
+						"description": "Optional structured host-facing summary of the approval request.",
+						"properties": map[string]any{
+							"title": map[string]any{
+								"type":        "string",
+								"description": "Short approval title.",
+							},
+							"description": map[string]any{
+								"type":        "string",
+								"description": "Concrete description of the requested action.",
+							},
+							"risk": map[string]any{
+								"type":        "string",
+								"description": "Risk level or risk explanation.",
+							},
+							"paths": map[string]any{
+								"type":        "array",
+								"description": "Affected paths, if any.",
+								"items": map[string]any{
+									"type": "string",
+								},
+							},
+							"changes":    map[string]any{"type": "integer"},
+							"added":      map[string]any{"type": "integer"},
+							"modified":   map[string]any{"type": "integer"},
+							"deleted":    map[string]any{"type": "integer"},
+							"byte_delta": map[string]any{"type": "integer"},
+						},
+					},
 					"tool_input": map[string]any{
 						"type":        "object",
 						"description": "Optional exact proposed input for the approved tool call. Policies can bind approval to its canonical hash.",
@@ -190,6 +254,7 @@ func NewTool(config Config) tool.Tool {
 				Reason:          reason,
 				Details:         strings.TrimSpace(input.Details),
 				Risk:            strings.TrimSpace(input.Risk),
+				Summary:         normalizeSummary(input.Summary),
 				ToolInput:       cloneRawMessage(input.ToolInput),
 				ToolInputHash:   toolInputHash,
 				Metadata:        model.CloneMetadata(input.Metadata),
@@ -197,7 +262,7 @@ func NewTool(config Config) tool.Tool {
 			if err != nil {
 				return model.ToolResult{}, err
 			}
-			return approvalResult(action, toolInputHash, decision), nil
+			return approvalResult(action, toolInputHash, normalizeSummary(input.Summary), decision), nil
 		},
 	}
 }
@@ -207,11 +272,12 @@ type input struct {
 	Reason    string          `json:"reason"`
 	Details   string          `json:"details"`
 	Risk      string          `json:"risk"`
+	Summary   Summary         `json:"summary"`
 	ToolInput json.RawMessage `json:"tool_input"`
 	Metadata  map[string]any  `json:"metadata"`
 }
 
-func approvalResult(action, toolInputHash string, decision Decision) model.ToolResult {
+func approvalResult(action, toolInputHash string, summary Summary, decision Decision) model.ToolResult {
 	metadata := model.CloneMetadata(decision.Metadata)
 	if metadata == nil {
 		metadata = map[string]any{}
@@ -223,6 +289,7 @@ func approvalResult(action, toolInputHash string, decision Decision) model.ToolR
 	if toolInputHash != "" {
 		metadata[MetadataApprovalInputHash] = toolInputHash
 	}
+	addSummaryMetadata(metadata, summary)
 	if reason != "" {
 		metadata[MetadataApprovalReason] = reason
 	}
@@ -244,6 +311,59 @@ func approvalResult(action, toolInputHash string, decision Decision) model.ToolR
 func cloneDecision(decision Decision) Decision {
 	decision.Metadata = model.CloneMetadata(decision.Metadata)
 	return decision
+}
+
+func normalizeSummary(summary Summary) Summary {
+	summary.Title = strings.TrimSpace(summary.Title)
+	summary.Description = strings.TrimSpace(summary.Description)
+	summary.Risk = strings.TrimSpace(summary.Risk)
+	if len(summary.Paths) > 0 {
+		paths := make([]string, 0, len(summary.Paths))
+		seen := map[string]struct{}{}
+		for _, path := range summary.Paths {
+			path = strings.TrimSpace(path)
+			if path == "" {
+				continue
+			}
+			if _, ok := seen[path]; ok {
+				continue
+			}
+			seen[path] = struct{}{}
+			paths = append(paths, path)
+		}
+		summary.Paths = paths
+	}
+	return summary
+}
+
+func addSummaryMetadata(metadata map[string]any, summary Summary) {
+	if summary.Title != "" {
+		metadata[MetadataApprovalSummaryTitle] = summary.Title
+	}
+	if summary.Description != "" {
+		metadata[MetadataApprovalSummaryDescription] = summary.Description
+	}
+	if summary.Risk != "" {
+		metadata[MetadataApprovalSummaryRisk] = summary.Risk
+	}
+	if len(summary.Paths) > 0 {
+		metadata[MetadataApprovalSummaryPaths] = append([]string(nil), summary.Paths...)
+	}
+	if summary.Changes != 0 {
+		metadata[MetadataApprovalSummaryChanges] = summary.Changes
+	}
+	if summary.Added != 0 {
+		metadata[MetadataApprovalSummaryAdded] = summary.Added
+	}
+	if summary.Modified != 0 {
+		metadata[MetadataApprovalSummaryModified] = summary.Modified
+	}
+	if summary.Deleted != 0 {
+		metadata[MetadataApprovalSummaryDeleted] = summary.Deleted
+	}
+	if summary.ByteDelta != 0 {
+		metadata[MetadataApprovalSummaryByteDelta] = summary.ByteDelta
+	}
 }
 
 func hashRawJSON(input json.RawMessage) (string, error) {

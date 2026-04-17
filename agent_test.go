@@ -2075,7 +2075,7 @@ func TestQueryEmitsApprovalEventsAndMetrics(t *testing.T) {
 			ToolUse: model.ToolUse{
 				ID:    "approval-1",
 				Name:  approvaltools.ToolName,
-				Input: json.RawMessage(`{"action":"workspace_apply_patch","reason":"test patch","tool_input":{"operations":[{"path":"README.md","old_content":"old","new_content":"new"}]}}`),
+				Input: json.RawMessage(`{"action":"workspace_apply_patch","reason":"test patch","summary":{"title":"Review README patch","description":"Change README.md from old to new","risk":"low","paths":["README.md"],"changes":1,"modified":1,"byte_delta":0},"tool_input":{"operations":[{"path":"README.md","old_content":"old","new_content":"new"}]}}`),
 			},
 		}},
 		{{
@@ -2108,6 +2108,9 @@ func TestQueryEmitsApprovalEventsAndMetrics(t *testing.T) {
 	requested := findApprovalEvent(events, EventApprovalRequested)
 	if requested == nil || !requested.Requested || requested.Action != workspacetools.ApplyPatchToolName || requested.InputHash == "" {
 		t.Fatalf("approval requested event = %#v", requested)
+	}
+	if requested.Summary.Title != "Review README patch" || requested.Summary.Description != "Change README.md from old to new" || requested.Summary.Risk != "low" || requested.Summary.Changes != 1 || requested.Summary.Modified != 1 || !sameStrings(requested.Summary.Paths, []string{"README.md"}) {
+		t.Fatalf("approval requested summary = %#v, want structured patch summary", requested.Summary)
 	}
 	granted := findApprovalEvent(events, EventApprovalGranted)
 	if granted == nil || !granted.Approved || granted.Reason != "approved test patch" || granted.InputHash != requested.InputHash {
