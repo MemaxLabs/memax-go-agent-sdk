@@ -705,6 +705,9 @@ func WorkspaceApprovalPolicyRecovery() agenteval.Case {
 			toolConstructionSucceeded(toolsErr),
 			agenteval.ToolUsed(workspacetools.ApplyPatchToolName),
 			agenteval.ToolUsed(approvaltools.ToolName),
+			agenteval.EventKindEmitted(memaxagent.EventApprovalRequested),
+			agenteval.EventKindEmitted(memaxagent.EventApprovalGranted),
+			agenteval.EventKindEmitted(memaxagent.EventApprovalConsumed),
 			agenteval.FinalEquals("Patched after approval."),
 			requestCountEquals(modelClient, 4),
 			{
@@ -795,6 +798,8 @@ func WorkspaceApprovalDeniedFallback() agenteval.Case {
 			agenteval.ToolUsed(workspacetools.ApplyPatchToolName),
 			agenteval.ToolUsed(approvaltools.ToolName),
 			agenteval.ToolUsed(workspacetools.ReadToolName),
+			agenteval.EventKindEmitted(memaxagent.EventApprovalRequested),
+			agenteval.EventKindEmitted(memaxagent.EventApprovalDenied),
 			agenteval.FinalEquals("Approval denied; left README.md unchanged."),
 			requestCountEquals(modelClient, 4),
 			{

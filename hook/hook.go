@@ -18,6 +18,10 @@ type BeforeToolUseResult struct {
 	// DenyReason blocks execution when non-empty. The reason is returned to the
 	// model as a tool-result error so the agent can recover in a later turn.
 	DenyReason string
+	// Metadata is attached to the tool result when execution is allowed. Gate
+	// hooks can use it to expose policy decisions, such as an approval grant
+	// consumed for this attempt, without changing the tool handler contract.
+	Metadata map[string]any
 }
 
 // BeforeToolUseFunc runs after schema validation and before permission checks.
@@ -272,16 +276,26 @@ func (r *Runner) AddContextApplied(fn ContextAppliedFunc) {
 
 // BeforeToolUse runs before-tool hooks until one denies or fails.
 func (r *Runner) BeforeToolUse(ctx context.Context, input BeforeToolUseInput) (BeforeToolUseResult, error) {
+	var out BeforeToolUseResult
 	for _, fn := range r.beforeSnapshot() {
 		result, err := fn(ctx, input)
 		if err != nil {
 			return BeforeToolUseResult{}, err
 		}
+		if len(result.Metadata) > 0 {
+			if out.Metadata == nil {
+				out.Metadata = map[string]any{}
+			}
+			for key, value := range result.Metadata {
+				out.Metadata[key] = value
+			}
+		}
 		if result.DenyReason != "" {
+			result.Metadata = model.CloneMetadata(out.Metadata)
 			return result, nil
 		}
 	}
-	return BeforeToolUseResult{}, nil
+	return out, nil
 }
 
 // AfterToolUse runs all after-tool hooks and returns observer errors.

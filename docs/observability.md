@@ -25,7 +25,10 @@ configured:
    can be followed by `EventSkillSearch`, `EventSkillLoaded`, or
    `EventSkillResourceLoaded`. Workspace-related tool results can be followed
    by `EventWorkspacePatch`, `EventWorkspaceDiff`,
-   `EventWorkspaceCheckpoint`, or `EventWorkspaceRestore`.
+   `EventWorkspaceCheckpoint`, or `EventWorkspaceRestore`. Approval tool
+   results can be followed by `EventApprovalRequested` and either
+   `EventApprovalGranted` or `EventApprovalDenied`. A later tool result that
+   consumes an approval grant can be followed by `EventApprovalConsumed`.
 7. If the assistant returns a final answer, before-final hooks can deny
    finalization. A denial appends a user repair prompt and starts the next turn;
    no `EventResult` or terminal `EventError` is emitted for that denial unless
@@ -64,6 +67,8 @@ orphaned `EventToolUse`.
   `EventSkillResourceLoaded`: `Skill`
 - `EventWorkspacePatch`, `EventWorkspaceDiff`, `EventWorkspaceCheckpoint`,
   `EventWorkspaceRestore`: `Workspace`
+- `EventApprovalRequested`, `EventApprovalGranted`, `EventApprovalDenied`,
+  `EventApprovalConsumed`: `Approval`
 - `EventResult`: `Result` and optional aggregate `Usage`
 - `EventError` and `EventMemoryCandidateHandlerError`: `Err`
 
@@ -93,6 +98,13 @@ diagnostic count, and affected paths. Failed verification should be a tool error
 result, not a terminal agent error, so the model can repair and retry or restore
 a checkpoint.
 
+Approval events are metadata-derived from `request_approval` results and from
+policy metadata attached to later tool results. Request events expose the action,
+decision, reason, and optional input hash. Consumed events expose the action,
+whether the grant was single-use, and whether it was input-bound. This keeps
+approval UI and audit logs out of generic tool-result parsing while preserving
+the transcript-visible approval contract.
+
 ## Metrics And Spans
 
 The core loop records stable counters and histograms for query lifecycle, turn
@@ -117,6 +129,8 @@ Important metric names include:
 - `memax.workspace.patch`, `memax.workspace.diff`,
   `memax.workspace.checkpoint`, `memax.workspace.restore`
 - `memax.verification.run`
+- `memax.approval.requests`, `memax.approval.grants`,
+  `memax.approval.denials`, `memax.approval.consumed`
 
 Telemetry complements events; it should not be the only source of application
 state. Use events for ordered behavior and spans/metrics for aggregate

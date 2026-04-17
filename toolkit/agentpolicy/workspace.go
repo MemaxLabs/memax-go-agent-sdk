@@ -254,8 +254,11 @@ func (p *ApprovalBeforeTool) BeforeToolUse(ctx context.Context, input hook.Befor
 	if err := ctx.Err(); err != nil {
 		return hook.BeforeToolUseResult{}, err
 	}
-	if !p.requires(input.Use.Name) || p.consumeApproval(input.SessionID, input.Use) {
+	if !p.requires(input.Use.Name) {
 		return hook.BeforeToolUseResult{}, nil
+	}
+	if consumed, metadata := p.consumeApproval(input.SessionID, input.Use); consumed {
+		return hook.BeforeToolUseResult{Metadata: metadata}, nil
 	}
 	return hook.BeforeToolUseResult{DenyReason: ApprovalBeforeToolReason(input.Use.Name)}, nil
 }
@@ -321,17 +324,17 @@ func (p *ApprovalBeforeTool) requires(toolName string) bool {
 	return ok
 }
 
-func (p *ApprovalBeforeTool) consumeApproval(sessionID string, use model.ToolUse) bool {
+func (p *ApprovalBeforeTool) consumeApproval(sessionID string, use model.ToolUse) (bool, map[string]any) {
 	toolName := use.Name
 	if p == nil || sessionID == "" || toolName == "" {
-		return false
+		return false, nil
 	}
 	inputHash := ""
 	if p.bindInput {
 		var err error
 		inputHash, err = hashToolInput(use.Input)
 		if err != nil {
-			return false
+			return false, nil
 		}
 	}
 	p.mu.Lock()
@@ -349,9 +352,17 @@ func (p *ApprovalBeforeTool) consumeApproval(sessionID string, use model.ToolUse
 				p.approved[sessionID][toolName] = grants
 			}
 		}
-		return true
+		metadata := map[string]any{
+			model.MetadataApprovalConsumed:  true,
+			model.MetadataApprovalAction:    toolName,
+			model.MetadataApprovalSingleUse: p.singleUse,
+		}
+		if grant.InputHash != "" {
+			metadata[model.MetadataApprovalInputHash] = grant.InputHash
+		}
+		return true, metadata
 	}
-	return false
+	return false, nil
 }
 
 func (p *ApprovalBeforeTool) approvalName() string {

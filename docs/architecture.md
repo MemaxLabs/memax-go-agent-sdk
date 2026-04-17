@@ -470,6 +470,9 @@ session-scoped and reusable for the approved action. For higher-risk operations,
 `WithSingleUseApprovals` consumes a grant on the next matching attempt, and
 `WithInputBoundApprovals` requires the approval result to carry the canonical
 hash of the proposed `tool_input`, allowing only an exact later input match.
+Approval requests, grant/denial decisions, and consumed grants emit typed
+approval events and `memax.approval.*` counters so hosts can build review UI and
+audit logs without parsing generic tool-result text.
 
 ## Context Window
 
@@ -527,7 +530,7 @@ or dynamic policies. The core package depends only on the provider-neutral
 
 ## Observability
 
-Tracing is optional and uses a small SDK-owned `telemetry.Tracer` interface so the core can be tested without a real exporter. Metrics are optional and use a matching SDK-owned `telemetry.Meter` interface with counter and value-recording methods. The `otel` package adapts both interfaces to OpenTelemetry. Current spans cover full query runs, turns, context policy application, model streaming, and individual tool executions. Metrics cover query starts/completions/errors, turn starts and durations, model stream starts/errors/durations, context compaction events, skill discovery/search/load operations, tool executions and durations, and hook errors. Spans and metrics carry stable attributes for session IDs, turn numbers, message counts, tool IDs, tool names, skill names, tool input/result byte counts, and tool policy flags.
+Tracing is optional and uses a small SDK-owned `telemetry.Tracer` interface so the core can be tested without a real exporter. Metrics are optional and use a matching SDK-owned `telemetry.Meter` interface with counter and value-recording methods. The `otel` package adapts both interfaces to OpenTelemetry. Current spans cover full query runs, turns, context policy application, model streaming, and individual tool executions. Metrics cover query starts/completions/errors, turn starts and durations, model stream starts/errors/durations, context compaction events, skill discovery/search/load operations, approval request/decision/consumption operations, tool executions and durations, and hook errors. Spans and metrics carry stable attributes for session IDs, turn numbers, message counts, tool IDs, tool names, skill names, approval actions, tool input/result byte counts, and tool policy flags.
 
 Durable session stores should support:
 

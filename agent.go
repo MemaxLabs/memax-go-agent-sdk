@@ -718,6 +718,10 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 					shouldStop = true
 					return false
 				}
+				if !emitApprovalToolEvent(turnCtx, emit, opts, sessionID, turn, result) {
+					shouldStop = true
+					return false
+				}
 				if err := opts.Sessions.Append(turnCtx, sessionID, model.Message{
 					Role: model.RoleTool,
 					ToolResult: &model.ToolResult{
@@ -1777,6 +1781,76 @@ func emitVerificationToolEvent(ctx context.Context, emit func(Event) bool, opts 
 		telemetry.String("memax.verification.name", verificationEvent.Name),
 		telemetry.Bool("memax.verification.passed", verificationEvent.Passed),
 		telemetry.Int("memax.verification.diagnostics", verificationEvent.Diagnostics),
+	)
+	return true
+}
+
+func emitApprovalToolEvent(ctx context.Context, emit func(Event) bool, opts Options, sessionID string, turn int, result model.ToolResult) bool {
+	if result.Metadata == nil {
+		return true
+	}
+	if metadatavalues.Bool(result.Metadata, model.MetadataApprovalConsumed) {
+		approvalEvent := &ApprovalEvent{
+			Action:     metadatavalues.String(result.Metadata, model.MetadataApprovalAction),
+			InputHash:  metadatavalues.String(result.Metadata, model.MetadataApprovalInputHash),
+			Consumed:   true,
+			SingleUse:  metadatavalues.Bool(result.Metadata, model.MetadataApprovalSingleUse),
+			InputBound: metadatavalues.String(result.Metadata, model.MetadataApprovalInputHash) != "",
+		}
+		event := newEvent(EventApprovalConsumed, sessionID, turn)
+		event.Approval = approvalEvent
+		if !emit(event) {
+			return false
+		}
+		opts.Meter.Add(ctx, "memax.approval.consumed", 1,
+			telemetry.String("memax.session_id", sessionID),
+			telemetry.Int("memax.turn", turn),
+			telemetry.String("memax.approval.action", approvalEvent.Action),
+			telemetry.Bool("memax.approval.single_use", approvalEvent.SingleUse),
+			telemetry.Bool("memax.approval.input_bound", approvalEvent.InputBound),
+		)
+	}
+	if metadatavalues.String(result.Metadata, model.MetadataApprovalOperation) != "request" {
+		return true
+	}
+	approvalEvent := ApprovalEvent{
+		Action:     metadatavalues.String(result.Metadata, model.MetadataApprovalAction),
+		Reason:     metadatavalues.String(result.Metadata, model.MetadataApprovalReason),
+		InputHash:  metadatavalues.String(result.Metadata, model.MetadataApprovalInputHash),
+		Approved:   metadatavalues.Bool(result.Metadata, model.MetadataApprovalApproved),
+		InputBound: metadatavalues.String(result.Metadata, model.MetadataApprovalInputHash) != "",
+	}
+	requested := newEvent(EventApprovalRequested, sessionID, turn)
+	requestedPayload := approvalEvent
+	requestedPayload.Requested = true
+	requested.Approval = &requestedPayload
+	if !emit(requested) {
+		return false
+	}
+	opts.Meter.Add(ctx, "memax.approval.requests", 1,
+		telemetry.String("memax.session_id", sessionID),
+		telemetry.Int("memax.turn", turn),
+		telemetry.String("memax.approval.action", approvalEvent.Action),
+		telemetry.Bool("memax.approval.input_bound", approvalEvent.InputBound),
+	)
+	kind := EventApprovalDenied
+	meterName := "memax.approval.denials"
+	if approvalEvent.Approved {
+		kind = EventApprovalGranted
+		meterName = "memax.approval.grants"
+	}
+	decision := newEvent(kind, sessionID, turn)
+	decisionPayload := approvalEvent
+	decisionPayload.Approved = approvalEvent.Approved
+	decision.Approval = &decisionPayload
+	if !emit(decision) {
+		return false
+	}
+	opts.Meter.Add(ctx, meterName, 1,
+		telemetry.String("memax.session_id", sessionID),
+		telemetry.Int("memax.turn", turn),
+		telemetry.String("memax.approval.action", approvalEvent.Action),
+		telemetry.Bool("memax.approval.input_bound", approvalEvent.InputBound),
 	)
 	return true
 }

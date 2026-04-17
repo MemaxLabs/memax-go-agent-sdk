@@ -408,6 +408,14 @@ type goldenEvent struct {
 	VerificationPassed  bool      `json:"verification_passed,omitempty"`
 	VerificationDiag    int       `json:"verification_diagnostics,omitempty"`
 	VerificationPaths   []string  `json:"verification_paths,omitempty"`
+	ApprovalAction      string    `json:"approval_action,omitempty"`
+	ApprovalReason      string    `json:"approval_reason,omitempty"`
+	ApprovalInputHash   string    `json:"approval_input_hash,omitempty"`
+	ApprovalRequested   bool      `json:"approval_requested,omitempty"`
+	ApprovalApproved    bool      `json:"approval_approved,omitempty"`
+	ApprovalConsumed    bool      `json:"approval_consumed,omitempty"`
+	ApprovalSingleUse   bool      `json:"approval_single_use,omitempty"`
+	ApprovalInputBound  bool      `json:"approval_input_bound,omitempty"`
 	Result              string    `json:"result,omitempty"`
 	Error               string    `json:"error,omitempty"`
 }
@@ -484,6 +492,19 @@ func normalizeGoldenEvent(event Event) goldenEvent {
 			out.VerificationPassed = event.Verification.Passed
 			out.VerificationDiag = event.Verification.Diagnostics
 			out.VerificationPaths = append([]string(nil), event.Verification.Paths...)
+		}
+	case EventApprovalRequested, EventApprovalGranted, EventApprovalDenied, EventApprovalConsumed:
+		if event.Approval != nil {
+			out.ApprovalAction = event.Approval.Action
+			out.ApprovalReason = event.Approval.Reason
+			if event.Approval.InputHash != "" {
+				out.ApprovalInputHash = "set"
+			}
+			out.ApprovalRequested = event.Approval.Requested
+			out.ApprovalApproved = event.Approval.Approved
+			out.ApprovalConsumed = event.Approval.Consumed
+			out.ApprovalSingleUse = event.Approval.SingleUse
+			out.ApprovalInputBound = event.Approval.InputBound
 		}
 	case EventResult:
 		out.Result = event.Result

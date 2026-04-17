@@ -62,8 +62,19 @@ const (
 	// EventVerification is emitted when a verification tool reports pass/fail
 	// status for a host-owned check.
 	EventVerification EventKind = "verification"
-	EventError        EventKind = "error"
-	EventResult       EventKind = "result"
+	// EventApprovalRequested is emitted when an approval request tool result is
+	// observed. It is followed by EventApprovalGranted or EventApprovalDenied
+	// for the same result.
+	EventApprovalRequested EventKind = "approval_requested"
+	// EventApprovalGranted is emitted when an approval request was granted.
+	EventApprovalGranted EventKind = "approval_granted"
+	// EventApprovalDenied is emitted when an approval request was denied.
+	EventApprovalDenied EventKind = "approval_denied"
+	// EventApprovalConsumed is emitted when a later tool result carries metadata
+	// showing that an approval grant was consumed for that attempt.
+	EventApprovalConsumed EventKind = "approval_consumed"
+	EventError            EventKind = "error"
+	EventResult           EventKind = "result"
 )
 
 // Event is emitted by Query as the orchestration loop progresses.
@@ -85,6 +96,7 @@ type Event struct {
 	Skill        *SkillEvent
 	Workspace    *WorkspaceEvent
 	Verification *VerificationEvent
+	Approval     *ApprovalEvent
 	Result       string
 	Err          error
 }
@@ -141,6 +153,20 @@ type VerificationEvent struct {
 	Passed      bool
 	Diagnostics int
 	Paths       []string
+}
+
+// ApprovalEvent describes approval request, decision, and consumption events.
+// Action is the approved or requested action/tool name. Requested, Approved,
+// Consumed, SingleUse, and InputBound are set according to the event kind.
+type ApprovalEvent struct {
+	Action     string
+	Reason     string
+	InputHash  string
+	Requested  bool
+	Approved   bool
+	Consumed   bool
+	SingleUse  bool
+	InputBound bool
 }
 
 func newEvent(kind EventKind, sessionID string, turn int) Event {

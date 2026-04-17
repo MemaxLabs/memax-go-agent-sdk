@@ -22,16 +22,16 @@ const (
 	ToolName = "request_approval"
 
 	// MetadataApprovalOperation identifies approval tool results.
-	MetadataApprovalOperation = "approval_operation"
+	MetadataApprovalOperation = model.MetadataApprovalOperation
 	// MetadataApprovalAction carries the action or tool name being approved.
-	MetadataApprovalAction = "approval_action"
+	MetadataApprovalAction = model.MetadataApprovalAction
 	// MetadataApprovalApproved records whether approval was granted.
-	MetadataApprovalApproved = "approval_approved"
+	MetadataApprovalApproved = model.MetadataApprovalApproved
 	// MetadataApprovalReason carries a host-visible approval or denial reason.
-	MetadataApprovalReason = "approval_reason"
+	MetadataApprovalReason = model.MetadataApprovalReason
 	// MetadataApprovalInputHash carries the canonical JSON hash of the proposed
 	// tool input, when the approval request includes tool_input.
-	MetadataApprovalInputHash = "approval_input_hash"
+	MetadataApprovalInputHash = model.MetadataApprovalInputHash
 )
 
 // Request describes one approval request from the model to the host.

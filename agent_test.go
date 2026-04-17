@@ -22,6 +22,8 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/skill"
 	"github.com/MemaxLabs/memax-go-agent-sdk/telemetry"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
+	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/agentpolicy"
+	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/approvaltools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/skilltools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/verifytools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/workspacetools"
@@ -2050,6 +2052,82 @@ func TestQueryRunsContextAppliedHook(t *testing.T) {
 	}
 }
 
+func TestQueryEmitsApprovalEventsAndMetrics(t *testing.T) {
+	store := workspace.NewMemoryStore(map[string]string{"README.md": "old"})
+	workspaceTools, err := workspacetools.NewTools(store)
+	if err != nil {
+		t.Fatalf("NewTools returned error: %v", err)
+	}
+	policy := agentpolicy.RequireApprovalBeforeToolsWithOptions(
+		[]string{workspacetools.ApplyPatchToolName},
+		agentpolicy.WithInputBoundApprovals(),
+		agentpolicy.WithSingleUseApprovals(),
+	)
+	approvalTool := approvaltools.NewTool(approvaltools.Config{
+		Approver: approvaltools.StaticApprover{Decision: approvaltools.Decision{
+			Approved: true,
+			Reason:   "approved test patch",
+		}},
+	})
+	fake := &fakeModel{turns: [][]model.StreamEvent{
+		{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "approval-1",
+				Name:  approvaltools.ToolName,
+				Input: json.RawMessage(`{"action":"workspace_apply_patch","reason":"test patch","tool_input":{"operations":[{"path":"README.md","old_content":"old","new_content":"new"}]}}`),
+			},
+		}},
+		{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "patch-1",
+				Name:  workspacetools.ApplyPatchToolName,
+				Input: json.RawMessage(`{"operations":[{"path":"README.md","old_content":"old","new_content":"new"}]}`),
+			},
+		}},
+		{{Kind: model.StreamText, Text: "done"}},
+	}}
+	meter := &recordingMeter{}
+	stream, err := Query(context.Background(), "request approval then patch", Options{
+		Model: fake,
+		Tools: tool.NewRegistry(append(workspaceTools, approvalTool)...),
+		Hooks: hook.NewRunner(policy.Options()...),
+		Meter: meter,
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+	var events []Event
+	for event := range stream {
+		if event.Kind == EventError {
+			t.Fatalf("unexpected error event: %v", event.Err)
+		}
+		events = append(events, event)
+	}
+	requested := findApprovalEvent(events, EventApprovalRequested)
+	if requested == nil || !requested.Requested || requested.Action != workspacetools.ApplyPatchToolName || requested.InputHash == "" {
+		t.Fatalf("approval requested event = %#v", requested)
+	}
+	granted := findApprovalEvent(events, EventApprovalGranted)
+	if granted == nil || !granted.Approved || granted.Reason != "approved test patch" || granted.InputHash != requested.InputHash {
+		t.Fatalf("approval granted event = %#v, requested = %#v", granted, requested)
+	}
+	consumed := findApprovalEvent(events, EventApprovalConsumed)
+	if consumed == nil || !consumed.Consumed || !consumed.SingleUse || !consumed.InputBound || consumed.InputHash != requested.InputHash {
+		t.Fatalf("approval consumed event = %#v, requested = %#v", consumed, requested)
+	}
+	for _, counter := range []string{
+		"memax.approval.requests",
+		"memax.approval.grants",
+		"memax.approval.consumed",
+	} {
+		if !meter.hasCounter(counter) {
+			t.Fatalf("meter counters = %#v, missing %s", meter.counterNames(), counter)
+		}
+	}
+}
+
 func TestQueryPersistsStoredResultMetadataInSession(t *testing.T) {
 	store := session.NewMemoryStore()
 	results := resultstore.NewMemoryStore()
@@ -2488,6 +2566,15 @@ func findVerificationEvent(events []Event) *VerificationEvent {
 	for _, event := range events {
 		if event.Kind == EventVerification && event.Verification != nil {
 			return event.Verification
+		}
+	}
+	return nil
+}
+
+func findApprovalEvent(events []Event, kind EventKind) *ApprovalEvent {
+	for _, event := range events {
+		if event.Kind == kind && event.Approval != nil {
+			return event.Approval
 		}
 	}
 	return nil

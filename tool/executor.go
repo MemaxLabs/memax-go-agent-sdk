@@ -163,6 +163,7 @@ func (e Executor) runOne(ctx context.Context, use model.ToolUse) model.ToolResul
 		telemetry.Bool("memax.tool.destructive", spec.Destructive),
 		telemetry.Bool("memax.tool.concurrency_safe", spec.ConcurrencySafe),
 	)
+	var beforeMetadata map[string]any
 	if e.Hooks != nil {
 		result, err := e.Hooks.BeforeToolUse(ctx, hook.BeforeToolUseInput{
 			SessionID: e.Runtime.SessionID,
@@ -180,6 +181,7 @@ func (e Executor) runOne(ctx context.Context, use model.ToolUse) model.ToolResul
 		if result.DenyReason != "" {
 			return fail(fmt.Errorf("%s", result.DenyReason))
 		}
+		beforeMetadata = model.CloneMetadata(result.Metadata)
 	}
 
 	if e.Permissions != nil {
@@ -198,6 +200,7 @@ func (e Executor) runOne(ctx context.Context, use model.ToolUse) model.ToolResul
 	}
 	result.ToolUseID = use.ID
 	result.Name = use.Name
+	result = withMetadata(result, beforeMetadata)
 	result = e.enforceResultLimit(ctx, result, use, spec.MaxResultBytes)
 	span.Set(
 		telemetry.Bool("memax.tool.error", result.IsError),
@@ -323,6 +326,20 @@ func withHookErrors(result model.ToolResult, errs []error) model.ToolResult {
 		return result
 	}
 	result.Metadata["hook_errors"] = messages
+	return result
+}
+
+func withMetadata(result model.ToolResult, metadata map[string]any) model.ToolResult {
+	if len(metadata) == 0 {
+		return result
+	}
+	result.Metadata = model.CloneMetadata(result.Metadata)
+	if result.Metadata == nil {
+		result.Metadata = map[string]any{}
+	}
+	for key, value := range metadata {
+		result.Metadata[key] = value
+	}
 	return result
 }
 

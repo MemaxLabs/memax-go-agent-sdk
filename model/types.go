@@ -131,6 +131,24 @@ const (
 	// MetadataVerificationPaths carries workspace-relative paths mentioned by
 	// verification diagnostics.
 	MetadataVerificationPaths = "verification_paths"
+	// MetadataApprovalOperation identifies approval tool results that should
+	// produce approval lifecycle events.
+	MetadataApprovalOperation = "approval_operation"
+	// MetadataApprovalAction carries the action or tool name being approved.
+	MetadataApprovalAction = "approval_action"
+	// MetadataApprovalApproved records whether approval was granted.
+	MetadataApprovalApproved = "approval_approved"
+	// MetadataApprovalReason carries a host-visible approval or denial reason.
+	MetadataApprovalReason = "approval_reason"
+	// MetadataApprovalInputHash carries the canonical JSON hash of the proposed
+	// tool input, when approval is bound to exact input.
+	MetadataApprovalInputHash = "approval_input_hash"
+	// MetadataApprovalConsumed marks a later tool result whose execution used an
+	// approval grant.
+	MetadataApprovalConsumed = "approval_consumed"
+	// MetadataApprovalSingleUse marks whether the consumed approval grant was
+	// single-use.
+	MetadataApprovalSingleUse = "approval_single_use"
 	// MetadataTaskID identifies the task affected by a tool result or requested
 	// operation.
 	MetadataTaskID = "task_id"

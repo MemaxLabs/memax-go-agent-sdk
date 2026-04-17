@@ -321,7 +321,8 @@ verify, ask the user, or stop.
 - Approval-before-tool policy denial drives explicit host approval requests and
   supports both approved retry and denied safe-fallback paths. Stricter
   single-use and input-bound approval modes cover exact-operation approval
-  rather than only session-wide tool grants.
+  rather than only session-wide tool grants, with first-class approval events
+  and metrics for audit/UI integration.
 
 ### 7. Provider Fidelity and Compatibility
 
