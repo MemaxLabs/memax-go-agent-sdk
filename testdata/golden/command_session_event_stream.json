@@ -17,7 +17,7 @@
     "turn": 1,
     "tool_id": "start-1",
     "tool_name": "start_command",
-    "tool_result": "started command session server-1: npm run dev\nstatus: running\ntty: true\npid: 4242\npurpose: start local dev server"
+    "tool_result": "started command session server-1: npm run dev\nstatus: running\ntty: true\nsize: 100x30\npid: 4242\npurpose: start local dev server"
   },
   {
     "kind": "command_started",
@@ -26,7 +26,9 @@
     "command_id": "server-1",
     "command_status": "running",
     "command_pid": 4242,
-    "command_tty": true
+    "command_tty": true,
+    "command_cols": 100,
+    "command_rows": 30
   },
   {
     "kind": "model_request",
@@ -43,7 +45,7 @@
     "turn": 2,
     "tool_id": "write-1",
     "tool_name": "write_command_input",
-    "tool_result": "wrote input to command session server-1: npm run dev\nstatus: running\ntty: true\ninput_bytes: 6\nnext_seq: 2\n[pty #1]\necho:hello\n"
+    "tool_result": "wrote input to command session server-1: npm run dev\nstatus: running\ntty: true\nsize: 100x30\ninput_bytes: 6\nnext_seq: 2\n[pty #1]\necho:hello\n"
   },
   {
     "kind": "command_input",
@@ -53,6 +55,8 @@
     "command_status": "running",
     "command_pid": 4242,
     "command_tty": true,
+    "command_cols": 100,
+    "command_rows": 30,
     "command_input_bytes": 6,
     "command_next_seq": 2,
     "command_output_chunks": 1
@@ -64,24 +68,26 @@
   {
     "kind": "tool_use",
     "turn": 3,
-    "tool_id": "stop-1",
-    "tool_name": "stop_command"
+    "tool_id": "resize-1",
+    "tool_name": "resize_command_terminal"
   },
   {
     "kind": "tool_result",
     "turn": 3,
-    "tool_id": "stop-1",
-    "tool_name": "stop_command",
-    "tool_result": "stopped command session server-1: npm run dev\nstatus: stopped\ntty: true\nexit_code: 143"
+    "tool_id": "resize-1",
+    "tool_name": "resize_command_terminal",
+    "tool_result": "resized command session server-1: npm run dev\nstatus: running\ntty: true\nsize: 120x40"
   },
   {
-    "kind": "command_stopped",
+    "kind": "command_resized",
     "turn": 3,
-    "command_operation": "stop",
+    "command_operation": "resize",
     "command_id": "server-1",
-    "command_status": "stopped",
+    "command_status": "running",
     "command_pid": 4242,
     "command_tty": true,
+    "command_cols": 120,
+    "command_rows": 40,
     "command_next_seq": 2
   },
   {
@@ -89,13 +95,42 @@
     "turn": 4
   },
   {
-    "kind": "assistant",
+    "kind": "tool_use",
     "turn": 4,
+    "tool_id": "stop-1",
+    "tool_name": "stop_command"
+  },
+  {
+    "kind": "tool_result",
+    "turn": 4,
+    "tool_id": "stop-1",
+    "tool_name": "stop_command",
+    "tool_result": "stopped command session server-1: npm run dev\nstatus: stopped\ntty: true\nsize: 120x40\nexit_code: 143"
+  },
+  {
+    "kind": "command_stopped",
+    "turn": 4,
+    "command_operation": "stop",
+    "command_id": "server-1",
+    "command_status": "stopped",
+    "command_pid": 4242,
+    "command_tty": true,
+    "command_cols": 120,
+    "command_rows": 40,
+    "command_next_seq": 2
+  },
+  {
+    "kind": "model_request",
+    "turn": 5
+  },
+  {
+    "kind": "assistant",
+    "turn": 5,
     "text": "server lifecycle complete"
   },
   {
     "kind": "result",
-    "turn": 4,
+    "turn": 5,
     "result": "server lifecycle complete"
   }
 ]

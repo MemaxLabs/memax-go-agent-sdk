@@ -127,9 +127,11 @@ func TestScriptedSessionManagerWriteInput(t *testing.T) {
 
 func TestStartReadStopToolsReturnMetadata(t *testing.T) {
 	manager := NewScriptedSessionManager(ScriptedCommand{
-		ID:  "dev-1",
-		PID: 1234,
-		TTY: true,
+		ID:   "dev-1",
+		PID:  1234,
+		TTY:  true,
+		Cols: 120,
+		Rows: 40,
 		Pages: []ScriptedOutputPage{{
 			Chunks:  []OutputChunk{{Seq: 1, Stream: "pty", Text: "listening on :3000\n"}},
 			Running: true,
@@ -145,6 +147,7 @@ func TestStartReadStopToolsReturnMetadata(t *testing.T) {
 	startTool := NewStartTool(manager)
 	readTool := NewReadOutputTool(manager)
 	writeTool := NewWriteInputTool(manager)
+	resizeTool := NewResizeTool(manager)
 	stopTool := NewStopTool(manager)
 	runtime := tool.Runtime{SessionID: "session-1"}
 
@@ -152,16 +155,16 @@ func TestStartReadStopToolsReturnMetadata(t *testing.T) {
 		Runtime: runtime,
 		Use: model.ToolUse{
 			Name:  StartToolName,
-			Input: json.RawMessage(`{"command":["npm","run","dev"],"purpose":"start dev server","tty":true}`),
+			Input: json.RawMessage(`{"command":["npm","run","dev"],"purpose":"start dev server","tty":true,"cols":120,"rows":40}`),
 		},
 	})
 	if err != nil {
 		t.Fatalf("start handler returned error: %v", err)
 	}
-	if started.Metadata[MetadataCommandOperation] != "start" || started.Metadata[MetadataCommandSessionID] != "dev-1" || started.Metadata[MetadataCommandTTY] != true {
+	if started.Metadata[MetadataCommandOperation] != "start" || started.Metadata[MetadataCommandSessionID] != "dev-1" || started.Metadata[MetadataCommandTTY] != true || started.Metadata[MetadataCommandCols] != 120 || started.Metadata[MetadataCommandRows] != 40 {
 		t.Fatalf("started metadata = %#v, want command start metadata", started.Metadata)
 	}
-	if !strings.Contains(started.Content, "tty: true") {
+	if !strings.Contains(started.Content, "tty: true") || !strings.Contains(started.Content, "size: 120x40") {
 		t.Fatalf("start content = %q, want tty indicator", started.Content)
 	}
 	read, err := readTool.(tool.Definition).Handler(context.Background(), tool.Call{
@@ -196,6 +199,22 @@ func TestStartReadStopToolsReturnMetadata(t *testing.T) {
 	if !strings.Contains(wrote.Content, "[pty #2]") || !strings.Contains(wrote.Content, "pong") {
 		t.Fatalf("write content = %q, want write output chunk", wrote.Content)
 	}
+	resized, err := resizeTool.(tool.Definition).Handler(context.Background(), tool.Call{
+		Runtime: runtime,
+		Use: model.ToolUse{
+			Name:  ResizeToolName,
+			Input: json.RawMessage(`{"id":"dev-1","cols":140,"rows":50}`),
+		},
+	})
+	if err != nil {
+		t.Fatalf("resize handler returned error: %v", err)
+	}
+	if resized.Metadata[MetadataCommandOperation] != "resize" || resized.Metadata[MetadataCommandCols] != 140 || resized.Metadata[MetadataCommandRows] != 50 {
+		t.Fatalf("resize metadata = %#v, want resize operation with geometry", resized.Metadata)
+	}
+	if !strings.Contains(resized.Content, "size: 140x50") {
+		t.Fatalf("resize content = %q, want updated geometry", resized.Content)
+	}
 	stopped, err := stopTool.(tool.Definition).Handler(context.Background(), tool.Call{
 		Runtime: runtime,
 		Use: model.ToolUse{
@@ -206,7 +225,7 @@ func TestStartReadStopToolsReturnMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stop handler returned error: %v", err)
 	}
-	if stopped.Metadata[MetadataCommandOperation] != "stop" || stopped.Metadata[MetadataCommandTTY] != true {
+	if stopped.Metadata[MetadataCommandOperation] != "stop" || stopped.Metadata[MetadataCommandTTY] != true || stopped.Metadata[MetadataCommandCols] != 140 || stopped.Metadata[MetadataCommandRows] != 50 {
 		t.Fatalf("stop metadata = %#v, want stop operation", stopped.Metadata)
 	}
 }
@@ -270,6 +289,7 @@ func TestNewSessionToolsIncludesWriteWhenSupported(t *testing.T) {
 		StopToolName,
 		ListToolName,
 		WriteInputToolName,
+		ResizeToolName,
 	}
 	if !sameStrings(names, want) {
 		t.Fatalf("tool names = %#v, want %#v", names, want)

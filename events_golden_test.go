@@ -195,9 +195,11 @@ func TestQueryObservabilityEventStreamGolden(t *testing.T) {
 
 func TestQueryCommandSessionEventStreamGolden(t *testing.T) {
 	manager := commandtools.NewScriptedSessionManager(commandtools.ScriptedCommand{
-		ID:  "server-1",
-		PID: 4242,
-		TTY: true,
+		ID:   "server-1",
+		PID:  4242,
+		TTY:  true,
+		Cols: 100,
+		Rows: 30,
 		WritePages: []commandtools.ScriptedWritePage{{
 			Page: commandtools.ScriptedOutputPage{
 				Chunks: []commandtools.OutputChunk{{
@@ -217,7 +219,7 @@ func TestQueryCommandSessionEventStreamGolden(t *testing.T) {
 				ToolUse: model.ToolUse{
 					ID:    "start-1",
 					Name:  commandtools.StartToolName,
-					Input: json.RawMessage(`{"id":"server-1","command":["npm","run","dev"],"purpose":"start local dev server","tty":true}`),
+					Input: json.RawMessage(`{"id":"server-1","command":["npm","run","dev"],"purpose":"start local dev server","tty":true,"cols":100,"rows":30}`),
 				},
 			}},
 			{{
@@ -226,6 +228,14 @@ func TestQueryCommandSessionEventStreamGolden(t *testing.T) {
 					ID:    "write-1",
 					Name:  commandtools.WriteInputToolName,
 					Input: json.RawMessage(`{"id":"server-1","input":"hello","append_newline":true}`),
+				},
+			}},
+			{{
+				Kind: model.StreamToolUse,
+				ToolUse: model.ToolUse{
+					ID:    "resize-1",
+					Name:  commandtools.ResizeToolName,
+					Input: json.RawMessage(`{"id":"server-1","cols":120,"rows":40}`),
 				},
 			}},
 			{{
@@ -240,8 +250,9 @@ func TestQueryCommandSessionEventStreamGolden(t *testing.T) {
 		}},
 		Tools: tool.NewRegistry(
 			commandtools.NewStartTool(manager),
-			commandtools.NewStopTool(manager),
 			commandtools.NewWriteInputTool(manager),
+			commandtools.NewResizeTool(manager),
+			commandtools.NewStopTool(manager),
 		),
 	})
 	if err != nil {
@@ -503,6 +514,8 @@ type goldenEvent struct {
 	CommandStatus        string    `json:"command_status,omitempty"`
 	CommandPID           int       `json:"command_pid,omitempty"`
 	CommandTTY           bool      `json:"command_tty,omitempty"`
+	CommandCols          int       `json:"command_cols,omitempty"`
+	CommandRows          int       `json:"command_rows,omitempty"`
 	CommandInputBytes    int       `json:"command_input_bytes,omitempty"`
 	CommandNextSeq       int       `json:"command_next_seq,omitempty"`
 	CommandOutputChunks  int       `json:"command_output_chunks,omitempty"`
@@ -601,13 +614,15 @@ func normalizeGoldenEvent(event Event) goldenEvent {
 			out.ApprovalSingleUse = event.Approval.SingleUse
 			out.ApprovalInputBound = event.Approval.InputBound
 		}
-	case EventCommandFinished, EventCommandStarted, EventCommandInput, EventCommandOutput, EventCommandStopped:
+	case EventCommandFinished, EventCommandStarted, EventCommandInput, EventCommandOutput, EventCommandStopped, EventCommandResized:
 		if event.Command != nil {
 			out.CommandOperation = event.Command.Operation
 			out.CommandID = event.Command.CommandID
 			out.CommandStatus = event.Command.Status
 			out.CommandPID = event.Command.PID
 			out.CommandTTY = event.Command.TTY
+			out.CommandCols = event.Command.Cols
+			out.CommandRows = event.Command.Rows
 			out.CommandInputBytes = event.Command.InputBytes
 			out.CommandNextSeq = event.Command.NextSeq
 			out.CommandOutputChunks = event.Command.OutputChunks

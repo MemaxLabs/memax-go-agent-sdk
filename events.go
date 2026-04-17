@@ -88,6 +88,9 @@ const (
 	// EventCommandStopped is emitted when stop_command stops a managed command
 	// session.
 	EventCommandStopped EventKind = "command_stopped"
+	// EventCommandResized is emitted when resize_command_terminal changes a PTY
+	// session's terminal geometry.
+	EventCommandResized EventKind = "command_resized"
 	EventError          EventKind = "error"
 	EventResult         EventKind = "result"
 )
@@ -201,10 +204,10 @@ type ApprovalSummaryEvent struct {
 
 // CommandEvent describes one host-owned command lifecycle observation.
 // `run_command` uses Action "run" and populates process status fields.
-// Managed command sessions populate Action "start", "write", "read", or
-// "stop" plus CommandID, Status, PID, TTY, NextSeq, OutputChunks,
-// DroppedChunks, and DroppedBytes as appropriate. "write" additionally sets
-// InputBytes.
+// Managed command sessions populate Action "start", "write", "read", "resize",
+// or "stop" plus CommandID, Status, PID, TTY, Cols, Rows, NextSeq,
+// OutputChunks, DroppedChunks, and DroppedBytes as appropriate. "write"
+// additionally sets InputBytes.
 // Command output text remains in the paired EventToolResult so
 // transcript-visible tool behavior stays explicit.
 type CommandEvent struct {
@@ -215,6 +218,8 @@ type CommandEvent struct {
 	Status          string
 	PID             int
 	TTY             bool
+	Cols            int
+	Rows            int
 	InputBytes      int
 	ExitCode        int
 	TimedOut        bool

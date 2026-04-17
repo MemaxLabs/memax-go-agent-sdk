@@ -1892,6 +1892,8 @@ func emitCommandToolEvent(ctx context.Context, emit func(Event) bool, opts Optio
 		Status:          metadatavalues.String(result.Metadata, model.MetadataCommandStatus),
 		PID:             metadatavalues.Int(result.Metadata, model.MetadataCommandPID),
 		TTY:             metadatavalues.Bool(result.Metadata, model.MetadataCommandTTY),
+		Cols:            metadatavalues.Int(result.Metadata, model.MetadataCommandCols),
+		Rows:            metadatavalues.Int(result.Metadata, model.MetadataCommandRows),
 		InputBytes:      metadatavalues.Int(result.Metadata, model.MetadataCommandInputBytes),
 		ExitCode:        metadatavalues.Int(result.Metadata, model.MetadataCommandExitCode),
 		TimedOut:        metadatavalues.Bool(result.Metadata, model.MetadataCommandTimedOut),
@@ -1920,6 +1922,9 @@ func emitCommandToolEvent(ctx context.Context, emit func(Event) bool, opts Optio
 	case "stop":
 		kind = EventCommandStopped
 		meterName = "memax.command.stopped"
+	case "resize":
+		kind = EventCommandResized
+		meterName = "memax.command.resized"
 	default:
 		return true
 	}

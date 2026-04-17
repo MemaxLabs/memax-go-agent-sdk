@@ -552,6 +552,98 @@ func CommandSessionInteractiveRepairLoop() agenteval.Case {
 	}
 }
 
+// CommandSessionTTYResize returns a single-use scenario where the model starts
+// a PTY-backed session, resizes it, then stops it cleanly.
+func CommandSessionTTYResize() agenteval.Case {
+	manager := commandtools.NewScriptedSessionManager(commandtools.ScriptedCommand{
+		ID:           "shell-1",
+		PID:          7171,
+		TTY:          true,
+		Cols:         80,
+		Rows:         24,
+		StopExitCode: intPtr(0),
+	})
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "start-1",
+				Name:  commandtools.StartToolName,
+				Input: json.RawMessage(`{"id":"shell-1","command":["bash"],"purpose":"start interactive shell","tty":true,"cols":80,"rows":24}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "resize-1",
+				Name:  commandtools.ResizeToolName,
+				Input: json.RawMessage(`{"id":"shell-1","cols":120,"rows":40}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "stop-1",
+				Name:  commandtools.StopToolName,
+				Input: json.RawMessage(`{"id":"shell-1","force":true}`),
+			},
+		}},
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "PTY session resized and stopped."}},
+	)
+
+	return agenteval.Case{
+		Name:   "command_session_tty_resize",
+		Prompt: "Start a PTY shell session, resize it for a wider terminal, then stop it.",
+		Options: memaxagent.Options{
+			Model: modelClient,
+			Tools: tool.NewRegistry(
+				commandtools.NewStartTool(manager),
+				commandtools.NewResizeTool(manager),
+				commandtools.NewStopTool(manager),
+			),
+		},
+		Assertions: []agenteval.Assertion{
+			agenteval.ToolUsed(commandtools.StartToolName),
+			agenteval.ToolUsed(commandtools.ResizeToolName),
+			agenteval.ToolUsed(commandtools.StopToolName),
+			agenteval.NoToolErrors(),
+			agenteval.EventKindEmitted(memaxagent.EventCommandStarted),
+			agenteval.EventKindEmitted(memaxagent.EventCommandResized),
+			agenteval.EventKindEmitted(memaxagent.EventCommandStopped),
+			agenteval.FinalEquals("PTY session resized and stopped."),
+			requestCountEquals(modelClient, 4),
+			{
+				Name: "tty start and resize requests are captured",
+				Check: func(result agenteval.Result) error {
+					startRequests := manager.StartRequests()
+					if len(startRequests) != 1 || !startRequests[0].TTY || startRequests[0].Cols != 80 || startRequests[0].Rows != 24 {
+						return fmt.Errorf("start requests = %#v, want one 80x24 tty request", startRequests)
+					}
+					resizeRequests := manager.ResizeRequests()
+					if len(resizeRequests) != 1 || resizeRequests[0].Cols != 120 || resizeRequests[0].Rows != 40 {
+						return fmt.Errorf("resize requests = %#v, want one 120x40 resize", resizeRequests)
+					}
+					results := result.ToolResults()
+					sawResize := false
+					sawStopped := false
+					for _, toolResult := range results {
+						if toolResult.Name == commandtools.ResizeToolName && strings.Contains(toolResult.Content, "size: 120x40") {
+							sawResize = true
+						}
+						if toolResult.Name == commandtools.StopToolName && strings.Contains(toolResult.Content, "size: 120x40") {
+							sawStopped = true
+						}
+					}
+					if !sawResize || !sawStopped {
+						return fmt.Errorf("tool results = %#v, want resize and stop outputs with 120x40 geometry", results)
+					}
+					return nil
+				},
+			},
+		},
+	}
+}
+
 // CommandApprovalPolicyRecovery returns a single-use scenario where a command
 // is denied until the model obtains input-bound host approval.
 func CommandApprovalPolicyRecovery() agenteval.Case {

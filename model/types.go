@@ -208,6 +208,12 @@ const (
 	MetadataCommandPID = "command_pid"
 	// MetadataCommandTTY records whether the managed command session uses a PTY.
 	MetadataCommandTTY = "command_tty"
+	// MetadataCommandCols carries the terminal width for PTY-backed managed
+	// command sessions.
+	MetadataCommandCols = "command_cols"
+	// MetadataCommandRows carries the terminal height for PTY-backed managed
+	// command sessions.
+	MetadataCommandRows = "command_rows"
 	// MetadataCommandStartedAt carries the command session start time in
 	// RFC3339Nano format.
 	MetadataCommandStartedAt = "command_started_at"

@@ -241,7 +241,8 @@ patches, snapshots, restore, reviewable mutations, and sandbox boundaries.
 - Longer-lived command sessions are explicit tools over host-owned lifecycle
   interfaces rather than hidden background shell state. Initial start/read/stop
   support exists, including a reference OS-backed managed-session adapter with
-  rooted cwd resolution, bounded buffered output, and session cleanup hooks.
+  rooted cwd resolution, bounded buffered output, explicit PTY terminal
+  geometry, live resize, and session cleanup hooks.
 - Command governance is expressed as hook-based policy presets: argv-prefix
   allow/deny rules, exact-input approval for selected commands, and
   verify-before-final gates after successful mutating commands.
@@ -264,7 +265,8 @@ patches, snapshots, restore, reviewable mutations, and sandbox boundaries.
   model can either read buffered output or interact through stdin writes before
   stopping or exiting the session explicitly after success. PTY-backed starts
   now cover shells and REPLs that require terminal behavior instead of plain
-  pipes. Initial coverage exists.
+  pipes, and dedicated PTY resize coverage exists so terminal geometry is part
+  of the eval contract. Initial coverage exists.
 - Command approval denial drives an exact-input `request_approval` call and a
   single-use approved retry. Initial coverage exists.
 - Command verification policy denial prevents finalization after a matching

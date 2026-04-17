@@ -166,6 +166,16 @@ func (m *OSSessionManager) StartCommand(ctx context.Context, req StartRequest) (
 	if m.maxTimeout > 0 && timeout > m.maxTimeout {
 		return CommandSession{}, fmt.Errorf("commandtools: timeout %s exceeds maximum %s", timeout, m.maxTimeout)
 	}
+	if req.TTY {
+		if req.Cols <= 0 {
+			req.Cols = defaultTTYCols
+		}
+		if req.Rows <= 0 {
+			req.Rows = defaultTTYRows
+		}
+	} else if req.Cols > 0 || req.Rows > 0 {
+		return CommandSession{}, fmt.Errorf("commandtools: cols and rows require tty=true")
+	}
 	cwd, err := m.runner.resolveCWD(req.CWD)
 	if err != nil {
 		return CommandSession{}, err
@@ -173,7 +183,7 @@ func (m *OSSessionManager) StartCommand(ctx context.Context, req StartRequest) (
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = cwd
 	cmd.Env = m.runner.env(req.Env)
-	stdin, readers, err := startSessionIO(cmd, req)
+	stdin, readers, ttyFile, err := startSessionIO(cmd, req)
 	if err != nil {
 		return CommandSession{}, err
 	}
@@ -183,6 +193,7 @@ func (m *OSSessionManager) StartCommand(ctx context.Context, req StartRequest) (
 		manager: m,
 		cmd:     cmd,
 		stdin:   stdin,
+		ttyFile: ttyFile,
 		session: CommandSession{
 			SessionID:       req.SessionID,
 			ParentSessionID: req.ParentSessionID,
@@ -193,6 +204,8 @@ func (m *OSSessionManager) StartCommand(ctx context.Context, req StartRequest) (
 			Status:          SessionRunning,
 			PID:             cmd.Process.Pid,
 			TTY:             req.TTY,
+			Cols:            req.Cols,
+			Rows:            req.Rows,
 			StartedAt:       now,
 			NextSeq:         1,
 		},
@@ -281,6 +294,23 @@ func (m *OSSessionManager) WriteCommandInput(ctx context.Context, req WriteReque
 		return WriteResult{}, err
 	}
 	return state.writeInput(ctx, req)
+}
+
+func (m *OSSessionManager) ResizeCommandTerminal(ctx context.Context, req ResizeRequest) (CommandSession, error) {
+	if err := ctx.Err(); err != nil {
+		return CommandSession{}, err
+	}
+	if m == nil {
+		return CommandSession{}, fmt.Errorf("commandtools: nil OSSessionManager")
+	}
+	if req.Cols <= 0 || req.Rows <= 0 {
+		return CommandSession{}, fmt.Errorf("commandtools: cols and rows must be positive")
+	}
+	state, err := m.lookupSession(req.SessionID, req.ID)
+	if err != nil {
+		return CommandSession{}, err
+	}
+	return state.resizeTerminal(ctx, req)
 }
 
 func (m *OSSessionManager) StopCommand(ctx context.Context, req StopRequest) (CommandSession, error) {
@@ -378,41 +408,41 @@ func (m *OSSessionManager) lookupSession(sessionID, id string) (*osSessionState,
 	return state, nil
 }
 
-func startSessionIO(cmd *exec.Cmd, req StartRequest) (io.WriteCloser, []osSessionReader, error) {
+func startSessionIO(cmd *exec.Cmd, req StartRequest) (io.WriteCloser, []osSessionReader, *os.File, error) {
 	if req.TTY {
-		file, err := startPTYCommand(cmd)
+		file, err := startPTYCommand(cmd, req.Cols, req.Rows)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		return file, []osSessionReader{{
 			stream: "pty",
 			reader: file,
-		}}, nil
+		}}, file, nil
 	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		return nil, nil, fmt.Errorf("commandtools: stdin pipe: %w", err)
+		return nil, nil, nil, fmt.Errorf("commandtools: stdin pipe: %w", err)
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		_ = stdin.Close()
-		return nil, nil, fmt.Errorf("commandtools: stdout pipe: %w", err)
+		return nil, nil, nil, fmt.Errorf("commandtools: stdout pipe: %w", err)
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		_ = stdin.Close()
-		return nil, nil, fmt.Errorf("commandtools: stderr pipe: %w", err)
+		return nil, nil, nil, fmt.Errorf("commandtools: stderr pipe: %w", err)
 	}
 	if err := cmd.Start(); err != nil {
 		_ = stdin.Close()
 		_ = stdout.Close()
 		_ = stderr.Close()
-		return nil, nil, fmt.Errorf("commandtools: start command: %w", err)
+		return nil, nil, nil, fmt.Errorf("commandtools: start command: %w", err)
 	}
 	return stdin, []osSessionReader{
 		{stream: "stdout", reader: stdout, closer: stdout},
 		{stream: "stderr", reader: stderr, closer: stderr},
-	}, nil
+	}, nil, nil
 }
 
 type osSessionState struct {
@@ -420,6 +450,7 @@ type osSessionState struct {
 	mu            sync.RWMutex
 	cmd           *exec.Cmd
 	stdin         io.WriteCloser
+	ttyFile       *os.File
 	session       CommandSession
 	output        []OutputChunk
 	bufferBytes   int
@@ -509,6 +540,34 @@ func (s *osSessionState) writeInput(ctx context.Context, req WriteRequest) (Writ
 		NextSeq:    result.NextSeq,
 		InputBytes: len(req.Input),
 	}, nil
+}
+
+func (s *osSessionState) resizeTerminal(ctx context.Context, req ResizeRequest) (CommandSession, error) {
+	session := s.snapshot()
+	if !session.TTY {
+		return CommandSession{}, fmt.Errorf("commandtools: command session %s is not PTY-backed", session.ID)
+	}
+	if session.Status != SessionRunning {
+		return CommandSession{}, fmt.Errorf("commandtools: command session %s is not running", session.ID)
+	}
+	s.stdinMu.Lock()
+	file := s.ttyFile
+	s.stdinMu.Unlock()
+	if file == nil {
+		return CommandSession{}, fmt.Errorf("commandtools: command session %s terminal is closed", session.ID)
+	}
+	if err := resizePTY(file, req.Cols, req.Rows); err != nil {
+		return CommandSession{}, fmt.Errorf("commandtools: resize command session %s: %w", session.ID, err)
+	}
+	s.mu.Lock()
+	s.session.Cols = req.Cols
+	s.session.Rows = req.Rows
+	s.mu.Unlock()
+	s.signalUpdate()
+	if err := ctx.Err(); err != nil {
+		return CommandSession{}, err
+	}
+	return s.snapshot(), nil
 }
 
 func (s *osSessionState) waitForUpdate(ctx context.Context, afterSeq int, yield time.Duration) error {
@@ -728,6 +787,7 @@ func (s *osSessionState) finish(waitErr error) {
 			_ = s.stdin.Close()
 			s.stdin = nil
 		}
+		s.ttyFile = nil
 		s.stdinMu.Unlock()
 		s.signalUpdate()
 		close(s.done)

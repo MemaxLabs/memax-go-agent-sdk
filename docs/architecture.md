@@ -193,9 +193,10 @@ truncation status, and argv metadata, which drive `EventCommandFinished` and
 
 The same package also supports managed command sessions for longer-lived work
 such as dev servers, watchers, or background checks. `start_command`,
-`write_command_input`, `read_command_output`, `stop_command`, and
-`list_commands` sit on top of host-owned `Starter`, `Writer`, `Reader`,
-`Stopper`, and `Lister` interfaces. Session tools remain argv-only,
+`write_command_input`, `resize_command_terminal`, `read_command_output`,
+`stop_command`, and `list_commands` sit on top of host-owned `Starter`,
+`Writer`, `Resizer`, `Reader`, `Stopper`, and `Lister` interfaces. Session
+tools remain argv-only,
 transcript-visible, and metadata-driven. They do not introduce hidden shell
 state into the core loop. `commandtools.SessionCleanupOptions`
 adapts a `Cleaner` into a `SessionEnded` hook so host-managed processes can be
@@ -203,8 +204,9 @@ cleaned up when the parent agent session finishes. `commandtools.OSSessionManage
 is the reference local adapter for real managed processes: rooted cwd
 resolution, bounded buffered output with drop accounting, interactive stdin
 writes with optional short post-write waits, optional PTY-backed terminal
-sessions for shells and REPLs, natural-exit and stop tracking, and session-
-scoped cleanup over local `os/exec` processes.
+sessions for shells and REPLs, explicit terminal geometry at start and resize
+time, natural-exit and stop tracking, and session-scoped cleanup over local
+`os/exec` processes.
 `OSSessionManager` is not a sandbox and does not constrain filesystem, network,
 or process access beyond cwd resolution; hosts that need stronger isolation
 must wrap or replace it. Graceful stop is best-effort and platform dependent:

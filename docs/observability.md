@@ -107,10 +107,10 @@ Command events are metadata-derived from `run_command` and compatible custom
 command tools. `EventCommandFinished` carries argv, cwd, exit code, timeout
 status, duration, retained output byte counts, and truncation status.
 Managed-session command tools can additionally emit `EventCommandStarted`,
-`EventCommandInput`, `EventCommandOutput`, and `EventCommandStopped` with a
-command session ID, status, optional PID, whether the session is PTY-backed,
-next output sequence, stdin byte count, returned chunk count, and dropped
-buffer accounting. Command
+`EventCommandInput`, `EventCommandOutput`, `EventCommandResized`, and
+`EventCommandStopped` with a command session ID, status, optional PID, whether
+the session is PTY-backed, terminal cols/rows, next output sequence, stdin byte
+count, returned chunk count, and dropped buffer accounting. Command
 stdout/stderr remain in the paired `EventToolResult`, preserving the normal
 transcript-visible tool contract while giving hosts structured process status.
 
@@ -147,8 +147,8 @@ Important metric names include:
   `memax.workspace.checkpoint`, `memax.workspace.restore`
 - `memax.verification.run`
 - `memax.command.finished`, `memax.command.started`,
-  `memax.command.input`, `memax.command.output`, `memax.command.stopped`,
-  `memax.command.duration_ms`
+  `memax.command.input`, `memax.command.output`, `memax.command.resized`,
+  `memax.command.stopped`, `memax.command.duration_ms`
 - `memax.approval.requests`, `memax.approval.grants`,
   `memax.approval.denials`, `memax.approval.consumed`
 
@@ -172,7 +172,7 @@ The public event contract is protected by golden tests:
 - `testdata/golden/verification_event_stream.json` covers failed verification
   as a tool error plus verification event ordering.
 - `testdata/golden/command_session_event_stream.json` covers managed command
-  session start, PTY-backed interactive stdin write, and stop ordering.
+  session start, PTY-backed interactive stdin write, resize, and stop ordering.
 
 When adding a new event kind or changing event order, update the docs and golden
 files in the same change.

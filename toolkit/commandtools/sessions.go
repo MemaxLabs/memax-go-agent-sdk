@@ -23,6 +23,9 @@ const (
 	// WriteInputToolName is the default tool name for writing stdin to a managed
 	// command session and optionally waiting briefly for fresh output.
 	WriteInputToolName = "write_command_input"
+	// ResizeToolName is the default tool name for resizing the terminal of a
+	// PTY-backed managed command session.
+	ResizeToolName = "resize_command_terminal"
 	// ReadOutputToolName is the default tool name for reading buffered output
 	// from a managed command session.
 	ReadOutputToolName = "read_command_output"
@@ -37,6 +40,8 @@ const (
 	defaultReadBytes      = 16 * 1024
 	defaultWriteYield     = 250 * time.Millisecond
 	defaultSessionTimeout = time.Hour
+	defaultTTYCols        = 80
+	defaultTTYRows        = 24
 )
 
 // Metadata for managed command sessions.
@@ -45,6 +50,8 @@ const (
 	MetadataCommandStatus        = model.MetadataCommandStatus
 	MetadataCommandPID           = model.MetadataCommandPID
 	MetadataCommandTTY           = model.MetadataCommandTTY
+	MetadataCommandCols          = model.MetadataCommandCols
+	MetadataCommandRows          = model.MetadataCommandRows
 	MetadataCommandStartedAt     = model.MetadataCommandStartedAt
 	MetadataCommandFinishedAt    = model.MetadataCommandFinishedAt
 	MetadataCommandInputBytes    = model.MetadataCommandInputBytes
@@ -75,6 +82,8 @@ type CommandSession struct {
 	Status          SessionStatus
 	PID             int
 	TTY             bool
+	Cols            int
+	Rows            int
 	StartedAt       time.Time
 	FinishedAt      *time.Time
 	ExitCode        *int
@@ -103,6 +112,8 @@ type StartRequest struct {
 	Env             map[string]string
 	Stdin           string
 	TTY             bool
+	Cols            int
+	Rows            int
 	Timeout         time.Duration
 	Purpose         string
 	Metadata        map[string]any
@@ -147,6 +158,16 @@ type WriteResult struct {
 	InputBytes int
 }
 
+// ResizeRequest resizes a PTY-backed managed command session.
+type ResizeRequest struct {
+	ID              string
+	SessionID       string
+	ParentSessionID string
+	Identity        identity.Identity
+	Cols            int
+	Rows            int
+}
+
 // StopRequest stops a managed command session.
 type StopRequest struct {
 	ID              string
@@ -180,6 +201,11 @@ type Writer interface {
 	WriteCommandInput(context.Context, WriteRequest) (WriteResult, error)
 }
 
+// Resizer changes terminal geometry for a PTY-backed managed command session.
+type Resizer interface {
+	ResizeCommandTerminal(context.Context, ResizeRequest) (CommandSession, error)
+}
+
 // Stopper stops managed command sessions.
 type Stopper interface {
 	StopCommand(context.Context, StopRequest) (CommandSession, error)
@@ -199,7 +225,8 @@ type Cleaner interface {
 // SessionManager is the convenience baseline interface for managed command
 // session tools. Hosts can still expose narrower capabilities by using the
 // individual New*Tool constructors. NewSessionTools also installs
-// write_command_input when the provided manager implements Writer.
+// write_command_input and resize_command_terminal when the provided manager
+// implements the corresponding optional interfaces.
 type SessionManager interface {
 	Starter
 	Reader
@@ -222,6 +249,9 @@ func NewSessionTools(manager SessionManager) ([]tool.Tool, error) {
 	}
 	if writer, ok := any(manager).(Writer); ok {
 		tools = append(tools, NewWriteInputTool(writer))
+	}
+	if resizer, ok := any(manager).(Resizer); ok {
+		tools = append(tools, NewResizeTool(resizer))
 	}
 	return tools, nil
 }
@@ -391,6 +421,67 @@ func NewWriteInputTool(writer Writer) tool.Tool {
 	}
 }
 
+// NewResizeTool returns a tool that resizes the terminal geometry of a
+// PTY-backed managed command session.
+func NewResizeTool(resizer Resizer) tool.Tool {
+	return tool.Definition{
+		ToolSpec: model.ToolSpec{
+			Name:           ResizeToolName,
+			Description:    "Resize the terminal geometry of a PTY-backed managed command session.",
+			SearchHint:     "resize terminal pty session cols rows width height",
+			Destructive:    true,
+			MaxResultBytes: 8 * 1024,
+			InputSchema: map[string]any{
+				"type":                 "object",
+				"required":             []any{"id", "cols", "rows"},
+				"additionalProperties": false,
+				"properties": map[string]any{
+					"id": map[string]any{
+						"type":        "string",
+						"description": "Command session ID returned by start_command.",
+						"minLength":   1,
+					},
+					"cols": map[string]any{
+						"type":        "integer",
+						"description": "Terminal width in character cells.",
+						"minimum":     1,
+					},
+					"rows": map[string]any{
+						"type":        "integer",
+						"description": "Terminal height in character cells.",
+						"minimum":     1,
+					},
+				},
+			},
+		},
+		Handler: func(ctx context.Context, call tool.Call) (model.ToolResult, error) {
+			input, err := tool.DecodeInput[resizeInput](call.Use)
+			if err != nil {
+				return model.ToolResult{}, err
+			}
+			req := ResizeRequest{
+				ID:              strings.TrimSpace(input.ID),
+				SessionID:       call.Runtime.SessionID,
+				ParentSessionID: call.Runtime.ParentSessionID,
+				Identity:        call.Runtime.Identity,
+				Cols:            input.Cols,
+				Rows:            input.Rows,
+			}
+			if req.ID == "" {
+				return model.ToolResult{}, fmt.Errorf("commandtools: id is required")
+			}
+			if req.Cols <= 0 || req.Rows <= 0 {
+				return model.ToolResult{}, fmt.Errorf("commandtools: cols and rows must be positive")
+			}
+			session, err := resizer.ResizeCommandTerminal(ctx, req)
+			if err != nil {
+				return model.ToolResult{}, err
+			}
+			return resizeResult(session), nil
+		},
+	}
+}
+
 // NewStopTool returns a tool that stops a managed command session.
 func NewStopTool(stopper Stopper) tool.Tool {
 	return tool.Definition{
@@ -495,6 +586,8 @@ type startInput struct {
 	Env       map[string]string `json:"env"`
 	Stdin     string            `json:"stdin"`
 	TTY       bool              `json:"tty"`
+	Cols      int               `json:"cols"`
+	Rows      int               `json:"rows"`
 	TimeoutMS int               `json:"timeout_ms"`
 	Purpose   string            `json:"purpose"`
 	Metadata  map[string]any    `json:"metadata"`
@@ -514,6 +607,12 @@ type writeInput struct {
 	YieldMS       *int   `json:"yield_ms"`
 	Limit         int    `json:"limit"`
 	MaxBytes      int    `json:"max_bytes"`
+}
+
+type resizeInput struct {
+	ID   string `json:"id"`
+	Cols int    `json:"cols"`
+	Rows int    `json:"rows"`
 }
 
 type stopInput struct {
@@ -560,6 +659,16 @@ func startInputSchema() map[string]any {
 			"tty": map[string]any{
 				"type":        "boolean",
 				"description": "Allocate a PTY-backed terminal session. Use for shells, REPLs, prompts, or tools that behave differently when attached to a terminal.",
+			},
+			"cols": map[string]any{
+				"type":        "integer",
+				"description": "Optional PTY terminal width in character cells. Defaults to 80 when tty is true.",
+				"minimum":     1,
+			},
+			"rows": map[string]any{
+				"type":        "integer",
+				"description": "Optional PTY terminal height in character cells. Defaults to 24 when tty is true.",
+				"minimum":     1,
 			},
 			"timeout_ms": map[string]any{
 				"type":        "integer",
@@ -647,6 +756,12 @@ func startRequestFromInput(input startInput) (StartRequest, error) {
 	if len(argv) == 0 {
 		return StartRequest{}, fmt.Errorf("commandtools: command must contain at least one argv element")
 	}
+	if !input.TTY && (input.Cols > 0 || input.Rows > 0) {
+		return StartRequest{}, fmt.Errorf("commandtools: cols and rows require tty=true")
+	}
+	if (input.Cols > 0) != (input.Rows > 0) {
+		return StartRequest{}, fmt.Errorf("commandtools: cols and rows must be set together")
+	}
 	timeout := defaultSessionTimeout
 	if input.TimeoutMS > 0 {
 		timeout = time.Duration(input.TimeoutMS) * time.Millisecond
@@ -658,6 +773,8 @@ func startRequestFromInput(input startInput) (StartRequest, error) {
 		Env:      cloneStringMap(input.Env),
 		Stdin:    input.Stdin,
 		TTY:      input.TTY,
+		Cols:     input.Cols,
+		Rows:     input.Rows,
 		Timeout:  timeout,
 		Purpose:  strings.TrimSpace(input.Purpose),
 		Metadata: model.CloneMetadata(input.Metadata),
@@ -696,6 +813,15 @@ func writeResult(result WriteResult) model.ToolResult {
 	}
 }
 
+func resizeResult(session CommandSession) model.ToolResult {
+	metadata := sessionMetadata(session)
+	metadata[MetadataCommandOperation] = "resize"
+	return model.ToolResult{
+		Content:  formatSessionResize(session),
+		Metadata: metadata,
+	}
+}
+
 func stopResult(session CommandSession) model.ToolResult {
 	metadata := sessionMetadata(session)
 	metadata[MetadataCommandOperation] = "stop"
@@ -720,6 +846,9 @@ func listResult(sessions []CommandSession) model.ToolResult {
 		fmt.Fprintf(&b, "%s\t%s\t%s", session.ID, session.Status, strings.Join(session.Argv, " "))
 		if session.TTY {
 			b.WriteString("\ttty=true")
+			if session.Cols > 0 && session.Rows > 0 {
+				fmt.Fprintf(&b, "\tsize=%dx%d", session.Cols, session.Rows)
+			}
 		}
 		if session.CWD != "" {
 			fmt.Fprintf(&b, "\tcwd=%s", session.CWD)
@@ -744,6 +873,8 @@ func sessionMetadata(session CommandSession) map[string]any {
 		MetadataCommandStatus:    string(session.Status),
 		MetadataCommandPID:       session.PID,
 		MetadataCommandTTY:       session.TTY,
+		MetadataCommandCols:      session.Cols,
+		MetadataCommandRows:      session.Rows,
 		MetadataCommandStartedAt: session.StartedAt.UTC().Format(time.RFC3339Nano),
 		MetadataCommandTimedOut:  session.TimedOut,
 		MetadataCommandNextSeq:   session.NextSeq,
@@ -769,6 +900,9 @@ func formatSessionStart(session CommandSession) string {
 	fmt.Fprintf(&b, "\nstatus: %s", session.Status)
 	if session.TTY {
 		b.WriteString("\ntty: true")
+		if session.Cols > 0 && session.Rows > 0 {
+			fmt.Fprintf(&b, "\nsize: %dx%d", session.Cols, session.Rows)
+		}
 	}
 	if session.CWD != "" {
 		fmt.Fprintf(&b, "\ncwd: %s", session.CWD)
@@ -788,6 +922,9 @@ func formatSessionRead(result ReadResult) string {
 	fmt.Fprintf(&b, "\nstatus: %s", result.Session.Status)
 	if result.Session.TTY {
 		b.WriteString("\ntty: true")
+		if result.Session.Cols > 0 && result.Session.Rows > 0 {
+			fmt.Fprintf(&b, "\nsize: %dx%d", result.Session.Cols, result.Session.Rows)
+		}
 	}
 	fmt.Fprintf(&b, "\nnext_seq: %d", result.NextSeq)
 	if result.Session.DroppedChunks > 0 {
@@ -809,6 +946,9 @@ func formatSessionWrite(result WriteResult) string {
 	fmt.Fprintf(&b, "\nstatus: %s", result.Session.Status)
 	if result.Session.TTY {
 		b.WriteString("\ntty: true")
+		if result.Session.Cols > 0 && result.Session.Rows > 0 {
+			fmt.Fprintf(&b, "\nsize: %dx%d", result.Session.Cols, result.Session.Rows)
+		}
 	}
 	fmt.Fprintf(&b, "\ninput_bytes: %d", result.InputBytes)
 	fmt.Fprintf(&b, "\nnext_seq: %d", result.NextSeq)
@@ -825,12 +965,28 @@ func formatSessionWrite(result WriteResult) string {
 	return b.String()
 }
 
+func formatSessionResize(session CommandSession) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "resized command session %s: %s", session.ID, strings.Join(session.Argv, " "))
+	fmt.Fprintf(&b, "\nstatus: %s", session.Status)
+	if session.TTY {
+		b.WriteString("\ntty: true")
+	}
+	if session.Cols > 0 && session.Rows > 0 {
+		fmt.Fprintf(&b, "\nsize: %dx%d", session.Cols, session.Rows)
+	}
+	return b.String()
+}
+
 func formatSessionStop(session CommandSession) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "stopped command session %s: %s", session.ID, strings.Join(session.Argv, " "))
 	fmt.Fprintf(&b, "\nstatus: %s", session.Status)
 	if session.TTY {
 		b.WriteString("\ntty: true")
+		if session.Cols > 0 && session.Rows > 0 {
+			fmt.Fprintf(&b, "\nsize: %dx%d", session.Cols, session.Rows)
+		}
 	}
 	if session.ExitCode != nil {
 		fmt.Fprintf(&b, "\nexit_code: %d", *session.ExitCode)
@@ -863,6 +1019,8 @@ type ScriptedCommand struct {
 	ID           string
 	PID          int
 	TTY          bool
+	Cols         int
+	Rows         int
 	Pages        []ScriptedOutputPage
 	WritePages   []ScriptedWritePage
 	StopExitCode *int
@@ -872,13 +1030,14 @@ type ScriptedCommand struct {
 // ScriptedSessionManager is a deterministic concurrency-safe managed command
 // implementation for tests and evals.
 type ScriptedSessionManager struct {
-	mu            sync.Mutex
-	commands      []ScriptedCommand
-	sessions      map[string]*scriptedSessionState
-	startRequests []StartRequest
-	writeRequests []WriteRequest
-	readRequests  []ReadRequest
-	stopRequests  []StopRequest
+	mu             sync.Mutex
+	commands       []ScriptedCommand
+	sessions       map[string]*scriptedSessionState
+	startRequests  []StartRequest
+	writeRequests  []WriteRequest
+	resizeRequests []ResizeRequest
+	readRequests   []ReadRequest
+	stopRequests   []StopRequest
 }
 
 type scriptedSessionState struct {
@@ -935,12 +1094,22 @@ func (m *ScriptedSessionManager) StartCommand(ctx context.Context, req StartRequ
 			Status:          SessionRunning,
 			PID:             cmd.PID,
 			TTY:             cmd.TTY || req.TTY,
+			Cols:            firstPositive(req.Cols, cmd.Cols),
+			Rows:            firstPositive(req.Rows, cmd.Rows),
 			StartedAt:       now,
 		},
 		pages:    cloneOutputPages(cmd.Pages),
 		writes:   cloneWritePages(cmd.WritePages),
 		stopExit: cloneIntPtr(cmd.StopExitCode),
 		stopTime: cmd.StopTimedOut,
+	}
+	if state.session.TTY {
+		if state.session.Cols <= 0 {
+			state.session.Cols = defaultTTYCols
+		}
+		if state.session.Rows <= 0 {
+			state.session.Rows = defaultTTYRows
+		}
 	}
 	m.sessions[id] = state
 	return cloneSession(state.session), nil
@@ -1027,6 +1196,34 @@ func (m *ScriptedSessionManager) WriteCommandInput(ctx context.Context, req Writ
 		NextSeq:    state.session.NextSeq,
 		InputBytes: len(req.Input),
 	}, nil
+}
+
+func (m *ScriptedSessionManager) ResizeCommandTerminal(ctx context.Context, req ResizeRequest) (CommandSession, error) {
+	if err := ctx.Err(); err != nil {
+		return CommandSession{}, err
+	}
+	if m == nil {
+		return CommandSession{}, fmt.Errorf("commandtools: nil ScriptedSessionManager")
+	}
+	if req.Cols <= 0 || req.Rows <= 0 {
+		return CommandSession{}, fmt.Errorf("commandtools: cols and rows must be positive")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.resizeRequests = append(m.resizeRequests, cloneResizeRequest(req))
+	state, err := m.lookupSession(req.SessionID, req.ID)
+	if err != nil {
+		return CommandSession{}, err
+	}
+	if !state.session.TTY {
+		return CommandSession{}, fmt.Errorf("commandtools: command session %s is not PTY-backed", state.session.ID)
+	}
+	if state.session.Status != SessionRunning {
+		return CommandSession{}, fmt.Errorf("commandtools: command session %s is not running", state.session.ID)
+	}
+	state.session.Cols = req.Cols
+	state.session.Rows = req.Rows
+	return cloneSession(state.session), nil
 }
 
 func (m *ScriptedSessionManager) StopCommand(ctx context.Context, req StopRequest) (CommandSession, error) {
@@ -1138,6 +1335,20 @@ func (m *ScriptedSessionManager) WriteRequests() []WriteRequest {
 	return out
 }
 
+// ResizeRequests returns captured resize requests.
+func (m *ScriptedSessionManager) ResizeRequests() []ResizeRequest {
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]ResizeRequest, len(m.resizeRequests))
+	for i, req := range m.resizeRequests {
+		out[i] = cloneResizeRequest(req)
+	}
+	return out
+}
+
 // StopRequests returns captured stop requests.
 func (m *ScriptedSessionManager) StopRequests() []StopRequest {
 	if m == nil {
@@ -1216,6 +1427,8 @@ func cloneScriptedCommands(commands []ScriptedCommand) []ScriptedCommand {
 			ID:           command.ID,
 			PID:          command.PID,
 			TTY:          command.TTY,
+			Cols:         command.Cols,
+			Rows:         command.Rows,
 			Pages:        cloneOutputPages(command.Pages),
 			WritePages:   cloneWritePages(command.WritePages),
 			StopExitCode: cloneIntPtr(command.StopExitCode),
@@ -1314,4 +1527,15 @@ func cloneReadRequest(req ReadRequest) ReadRequest { return req }
 
 func cloneWriteRequest(req WriteRequest) WriteRequest { return req }
 
+func cloneResizeRequest(req ResizeRequest) ResizeRequest { return req }
+
 func cloneStopRequest(req StopRequest) StopRequest { return req }
+
+func firstPositive(values ...int) int {
+	for _, value := range values {
+		if value > 0 {
+			return value
+		}
+	}
+	return 0
+}

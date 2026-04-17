@@ -62,6 +62,7 @@ func All() []agenteval.Case {
 		CommandTestRepairLoop(),
 		CommandSessionRepairLoop(),
 		CommandSessionInteractiveRepairLoop(),
+		CommandSessionTTYResize(),
 		CommandApprovalPolicyRecovery(),
 		CommandVerifyBeforeFinalPolicyRecovery(),
 		OpenAIProviderTextAndUsage(),
