@@ -24,6 +24,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/memorytools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/messagetools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/notetools"
+	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/scheduletools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/subagents"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/tasktools"
 )
@@ -44,6 +45,7 @@ type Config struct {
 	Memory   memorytools.Config
 	Notes    notetools.Config
 	Messages messagetools.Config
+	Schedule scheduletools.Config
 
 	Tasks              tasktools.Store
 	TaskPlannerOptions []planner.TaskSourceOption
@@ -62,10 +64,13 @@ type Config struct {
 // value is intentionally conservative about hidden behavior: policies are
 // disabled until the host opts in or uses a preset.
 type Policies struct {
-	RequireMemoryApproval     bool
-	RequireNoteApproval       bool
-	RequireMessageApproval    bool
-	RequireDelegationApproval bool
+	RequireMemoryApproval             bool
+	RequireNoteApproval               bool
+	RequireMessageApproval            bool
+	RequireScheduleCreateApproval     bool
+	RequireScheduleRescheduleApproval bool
+	RequireScheduleCancelApproval     bool
+	RequireDelegationApproval         bool
 
 	SingleUseApprovals  bool
 	InputBoundApprovals bool
@@ -78,11 +83,14 @@ type Policies struct {
 // subagent use is often a workflow choice rather than a durable-state mutation.
 func DefaultPolicies() Policies {
 	return Policies{
-		RequireMemoryApproval:  true,
-		RequireNoteApproval:    true,
-		RequireMessageApproval: true,
-		SingleUseApprovals:     true,
-		InputBoundApprovals:    true,
+		RequireMemoryApproval:             true,
+		RequireNoteApproval:               true,
+		RequireMessageApproval:            true,
+		RequireScheduleCreateApproval:     true,
+		RequireScheduleRescheduleApproval: true,
+		RequireScheduleCancelApproval:     true,
+		SingleUseApprovals:                true,
+		InputBoundApprovals:               true,
 	}
 }
 
@@ -167,6 +175,9 @@ func validateConfig(config Config) error {
 	if config.Policies.RequireMessageApproval && hasMutableMessageTools(config.Messages) && config.Approval.Approver == nil {
 		return fmt.Errorf("personal stack: message approval requires approval approver")
 	}
+	if needsScheduleApprover(config.Policies, config.Schedule) && config.Approval.Approver == nil {
+		return fmt.Errorf("personal stack: schedule approval requires approval approver")
+	}
 	if config.Policies.RequireDelegationApproval && config.Subagents != nil && config.Approval.Approver == nil {
 		return fmt.Errorf("personal stack: delegation approval requires approval approver")
 	}
@@ -194,6 +205,15 @@ func registerTools(registry *tool.Registry, config Config) error {
 	}
 	if configuredMessages(config.Messages) {
 		tools, err := messagetools.NewTools(config.Messages)
+		if err != nil {
+			return err
+		}
+		if err := registerAll(registry, tools...); err != nil {
+			return err
+		}
+	}
+	if configuredSchedule(config.Schedule) {
+		tools, err := scheduletools.NewTools(config.Schedule)
 		if err != nil {
 			return err
 		}
@@ -243,6 +263,9 @@ func installHooks(opts *memaxagent.Options, config Config) error {
 	}
 	if policies.RequireMessageApproval && hasMutableMessageTools(config.Messages) {
 		hookOptions = append(hookOptions, messageApprovalPolicy(config).Options()...)
+	}
+	if schedulePolicy := scheduleApprovalPolicy(config); schedulePolicy != nil {
+		hookOptions = append(hookOptions, schedulePolicy.Options()...)
 	}
 	if policies.RequireDelegationApproval && config.Subagents != nil {
 		hookOptions = append(hookOptions, delegationApprovalPolicy(config).Options()...)
@@ -313,6 +336,23 @@ func messageApprovalPolicy(config Config) *agentpolicy.ApprovalBeforeTool {
 	return agentpolicy.RequireApprovalBeforeToolsWithOptions(messageMutationToolNames(config.Messages), options...)
 }
 
+func scheduleApprovalPolicy(config Config) *agentpolicy.ApprovalBeforeTool {
+	names := scheduleMutationToolNames(config.Policies, config.Schedule)
+	if len(names) == 0 {
+		return nil
+	}
+	options := []agentpolicy.ApprovalBeforeToolOption{
+		agentpolicy.WithApprovalToolName(approvalToolName(config.Approval)),
+	}
+	if config.Policies.SingleUseApprovals {
+		options = append(options, agentpolicy.WithSingleUseApprovals())
+	}
+	if config.Policies.InputBoundApprovals {
+		options = append(options, agentpolicy.WithInputBoundApprovals())
+	}
+	return agentpolicy.RequireApprovalBeforeToolsWithOptions(names, options...)
+}
+
 func defaultPlannerOptions(config Config) []planner.TaskSourceOption {
 	var toolHints []string
 	if config.Memory.Source != nil {
@@ -345,6 +385,21 @@ func defaultPlannerOptions(config Config) []planner.TaskSourceOption {
 	if config.Messages.Sender != nil {
 		toolHints = append(toolHints, messageSendToolName(config.Messages))
 	}
+	if config.Schedule.Searcher != nil {
+		toolHints = append(toolHints, scheduleSearchToolName(config.Schedule))
+	}
+	if config.Schedule.Reader != nil {
+		toolHints = append(toolHints, scheduleReadToolName(config.Schedule))
+	}
+	if config.Schedule.Creator != nil {
+		toolHints = append(toolHints, scheduleCreateToolName(config.Schedule))
+	}
+	if config.Schedule.Rescheduler != nil {
+		toolHints = append(toolHints, scheduleRescheduleToolName(config.Schedule))
+	}
+	if config.Schedule.Canceller != nil {
+		toolHints = append(toolHints, scheduleCancelToolName(config.Schedule))
+	}
 	if config.Tasks != nil {
 		toolHints = append(toolHints,
 			tasktools.ListToolName,
@@ -376,10 +431,10 @@ func defaultPlannerOptions(config Config) []planner.TaskSourceOption {
 func configuredSubagents(config Config) (subagents.Config, error) {
 	cfg := *config.Subagents
 	// Child agents inherit the stack's posture by default so delegated work
-	// keeps the same identity, durable context sources, note and message
-	// discovery/loading, and skill-disclosure policy unless the host overrides
-	// those fields explicitly. Note and message mutation are intentionally not
-	// inherited by default.
+	// keeps the same identity, durable context sources, note/message/schedule
+	// discovery-loading, and skill-disclosure policy unless the host overrides
+	// those fields explicitly. Mutation capabilities remain intentionally
+	// opt-in and are not inherited by default.
 	cfg.DefaultOptions = config.Base.Merge(cfg.DefaultOptions)
 	if cfg.DefaultOptions.MemorySource == nil && config.Memory.Source != nil {
 		cfg.DefaultOptions.MemorySource = config.Memory.Source
@@ -390,6 +445,11 @@ func configuredSubagents(config Config) (subagents.Config, error) {
 		cfg.DefaultOptions = inherited
 	}
 	if inherited, err := inheritSubagentMessages(cfg.DefaultOptions, config.Messages); err != nil {
+		return subagents.Config{}, err
+	} else {
+		cfg.DefaultOptions = inherited
+	}
+	if inherited, err := inheritSubagentSchedule(cfg.DefaultOptions, config.Schedule); err != nil {
 		return subagents.Config{}, err
 	} else {
 		cfg.DefaultOptions = inherited
@@ -457,6 +517,27 @@ func configuredMessages(config messagetools.Config) bool {
 
 func hasMutableMessageTools(config messagetools.Config) bool {
 	return config.Sender != nil
+}
+
+func configuredSchedule(config scheduletools.Config) bool {
+	return config.Searcher != nil || config.Reader != nil || config.Creator != nil || config.Rescheduler != nil || config.Canceller != nil
+}
+
+func hasMutableScheduleTools(config scheduletools.Config) bool {
+	return config.Creator != nil || config.Rescheduler != nil || config.Canceller != nil
+}
+
+func needsScheduleApprover(policies Policies, config scheduletools.Config) bool {
+	if policies.RequireScheduleCreateApproval && config.Creator != nil {
+		return true
+	}
+	if policies.RequireScheduleRescheduleApproval && config.Rescheduler != nil {
+		return true
+	}
+	if policies.RequireScheduleCancelApproval && config.Canceller != nil {
+		return true
+	}
+	return false
 }
 
 func inheritSubagentNotes(opts memaxagent.Options, config notetools.Config) (memaxagent.Options, error) {
@@ -543,6 +624,48 @@ func inheritSubagentMessages(opts memaxagent.Options, config messagetools.Config
 	return opts, nil
 }
 
+func inheritSubagentSchedule(opts memaxagent.Options, config scheduletools.Config) (memaxagent.Options, error) {
+	if config.Searcher == nil && config.Reader == nil {
+		return opts, nil
+	}
+	registry := cloneRegistry(opts.Tools)
+	if config.Searcher != nil {
+		name := scheduleSearchToolName(config)
+		if !registryHasTool(registry, name) {
+			searchTool, err := scheduletools.NewSearchTool(scheduletools.Config{
+				Searcher:       config.Searcher,
+				SearchName:     config.SearchName,
+				DefaultLimit:   config.DefaultLimit,
+				MaxResultBytes: config.MaxResultBytes,
+			})
+			if err != nil {
+				return opts, err
+			}
+			if err := registry.Register(searchTool); err != nil {
+				return opts, err
+			}
+		}
+	}
+	if config.Reader != nil {
+		name := scheduleReadToolName(config)
+		if !registryHasTool(registry, name) {
+			readTool, err := scheduletools.NewReadTool(scheduletools.Config{
+				Reader:         config.Reader,
+				ReadName:       config.ReadName,
+				MaxResultBytes: config.MaxResultBytes,
+			})
+			if err != nil {
+				return opts, err
+			}
+			if err := registry.Register(readTool); err != nil {
+				return opts, err
+			}
+		}
+	}
+	opts.Tools = registry
+	return opts, nil
+}
+
 func registryHasTool(registry *tool.Registry, name string) bool {
 	if registry == nil {
 		return false
@@ -581,6 +704,23 @@ func messageMutationToolNames(config messagetools.Config) []string {
 	names := make([]string, 0, 1)
 	if config.Sender != nil {
 		names = append(names, messageSendToolName(config))
+	}
+	return names
+}
+
+func scheduleMutationToolNames(policies Policies, config scheduletools.Config) []string {
+	// Schedule mutations are gated only when both the capability is configured
+	// and the corresponding approval flag is enabled, so hosts can selectively
+	// leave specific calendar actions ungated without reworking the stack.
+	names := make([]string, 0, 3)
+	if policies.RequireScheduleCreateApproval && config.Creator != nil {
+		names = append(names, scheduleCreateToolName(config))
+	}
+	if policies.RequireScheduleRescheduleApproval && config.Rescheduler != nil {
+		names = append(names, scheduleRescheduleToolName(config))
+	}
+	if policies.RequireScheduleCancelApproval && config.Canceller != nil {
+		names = append(names, scheduleCancelToolName(config))
 	}
 	return names
 }
@@ -653,6 +793,41 @@ func messageSendToolName(config messagetools.Config) string {
 		return name
 	}
 	return messagetools.SendToolName
+}
+
+func scheduleSearchToolName(config scheduletools.Config) string {
+	if name := strings.TrimSpace(config.SearchName); name != "" {
+		return name
+	}
+	return scheduletools.SearchToolName
+}
+
+func scheduleReadToolName(config scheduletools.Config) string {
+	if name := strings.TrimSpace(config.ReadName); name != "" {
+		return name
+	}
+	return scheduletools.ReadToolName
+}
+
+func scheduleCreateToolName(config scheduletools.Config) string {
+	if name := strings.TrimSpace(config.CreateName); name != "" {
+		return name
+	}
+	return scheduletools.CreateToolName
+}
+
+func scheduleRescheduleToolName(config scheduletools.Config) string {
+	if name := strings.TrimSpace(config.RescheduleName); name != "" {
+		return name
+	}
+	return scheduletools.RescheduleToolName
+}
+
+func scheduleCancelToolName(config scheduletools.Config) string {
+	if name := strings.TrimSpace(config.CancelName); name != "" {
+		return name
+	}
+	return scheduletools.CancelToolName
 }
 
 func approvalToolName(config approvaltools.Config) string {

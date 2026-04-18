@@ -64,6 +64,8 @@ func All() []agenteval.Case {
 		PersonalPresetAssistantNoteRecall(),
 		PersonalPresetAssistantMessageRecall(),
 		PersonalPresetAssistantMessageApprovalRecovery(),
+		PersonalPresetAssistantScheduleRecall(),
+		PersonalPresetAssistantScheduleApprovalRecovery(),
 		PersonalPresetResearchPartner(),
 		CodingPresetSafeLocal(),
 		CodingPresetSafeLocalRollbackRecovery(),

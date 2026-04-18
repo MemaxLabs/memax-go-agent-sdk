@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
 	"github.com/MemaxLabs/memax-go-agent-sdk/memory"
@@ -12,6 +13,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/notes"
 	"github.com/MemaxLabs/memax-go-agent-sdk/planner"
+	"github.com/MemaxLabs/memax-go-agent-sdk/scheduling"
 	"github.com/MemaxLabs/memax-go-agent-sdk/skill"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/agentpolicy"
@@ -19,6 +21,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/memorytools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/messagetools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/notetools"
+	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/scheduletools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/subagents"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/tasktools"
 )
@@ -57,6 +60,21 @@ func TestNewAssemblesPersonalRuntime(t *testing.T) {
 			Sender:    messaging.Participant{Name: "Alex", Address: "alex@example.com"},
 		}},
 	}})
+	start := time.Date(2026, 4, 20, 15, 0, 0, 0, time.UTC)
+	scheduleStore := scheduling.NewEventStore([]scheduling.Event{{
+		ID:       "event-1",
+		Title:    "Project kickoff",
+		Summary:  "Weekly kickoff with owners and due dates",
+		Location: "Zoom",
+		Organizer: scheduling.Participant{
+			Name:    "Alex",
+			Address: "alex@example.com",
+		},
+		Start:       start,
+		End:         start.Add(time.Hour),
+		TimeZone:    "UTC",
+		Description: "Keep the meeting concise and end with owners and due dates.",
+	}})
 	tasks := tasktools.NewMemoryStore([]tasktools.Task{{
 		ID:     "task-1",
 		Title:  "prepare meeting brief",
@@ -86,6 +104,13 @@ func TestNewAssemblesPersonalRuntime(t *testing.T) {
 			Reader:   messageStore,
 			Sender:   messageStore,
 		},
+		Schedule: scheduletools.Config{
+			Searcher:    scheduleStore,
+			Reader:      scheduleStore,
+			Creator:     scheduleStore,
+			Rescheduler: scheduleStore,
+			Canceller:   scheduleStore,
+		},
 		Tasks: tasks,
 		SkillSource: skill.StaticSource{{
 			Name:        "meeting-preferences",
@@ -108,12 +133,15 @@ func TestNewAssemblesPersonalRuntime(t *testing.T) {
 			}},
 		},
 		Policies: Policies{
-			RequireMemoryApproval:     true,
-			RequireNoteApproval:       true,
-			RequireMessageApproval:    true,
-			RequireDelegationApproval: true,
-			SingleUseApprovals:        true,
-			InputBoundApprovals:       true,
+			RequireMemoryApproval:             true,
+			RequireNoteApproval:               true,
+			RequireMessageApproval:            true,
+			RequireScheduleCreateApproval:     true,
+			RequireScheduleRescheduleApproval: true,
+			RequireScheduleCancelApproval:     true,
+			RequireDelegationApproval:         true,
+			SingleUseApprovals:                true,
+			InputBoundApprovals:               true,
 		},
 		SkillDisclosure: skill.DisclosureProgressive,
 	})
@@ -153,6 +181,11 @@ func TestNewAssemblesPersonalRuntime(t *testing.T) {
 		messagetools.SearchToolName,
 		messagetools.ReadToolName,
 		messagetools.SendToolName,
+		scheduletools.SearchToolName,
+		scheduletools.ReadToolName,
+		scheduletools.CreateToolName,
+		scheduletools.RescheduleToolName,
+		scheduletools.CancelToolName,
 		tasktools.ListToolName,
 		tasktools.UpsertToolName,
 		tasktools.DeleteToolName,
@@ -257,6 +290,61 @@ func TestNewAssemblesPersonalRuntime(t *testing.T) {
 		t.Fatalf("approved message send should succeed: %s", result.Content)
 	}
 
+	createScheduleInput := map[string]any{
+		"title":   "Weekly sync",
+		"summary": "Keep the sync concise",
+		"organizer": map[string]any{
+			"name":    "Alex",
+			"address": "alex@example.com",
+		},
+		"start":     start.Add(24 * time.Hour).Format(time.RFC3339),
+		"end":       start.Add(25 * time.Hour).Format(time.RFC3339),
+		"time_zone": "UTC",
+	}
+	result = runTool(t, exec, scheduletools.CreateToolName, createScheduleInput)
+	if !result.IsError || !strings.Contains(result.Content, agentpolicy.ApprovalBeforeToolReason(scheduletools.CreateToolName)) {
+		t.Fatalf("expected schedule create approval denial, got error=%v content=%q", result.IsError, result.Content)
+	}
+
+	result = runTool(t, exec, approvaltools.ToolName, map[string]any{
+		"action":     scheduletools.CreateToolName,
+		"reason":     "create a follow-up event in the personal schedule backend",
+		"tool_input": createScheduleInput,
+	})
+	if result.IsError {
+		t.Fatalf("schedule create approval should succeed: %s", result.Content)
+	}
+
+	result = runTool(t, exec, scheduletools.CreateToolName, createScheduleInput)
+	if result.IsError {
+		t.Fatalf("approved schedule create should succeed: %s", result.Content)
+	}
+
+	rescheduleInput := map[string]any{
+		"id":        "event-1",
+		"start":     start.Add(2 * time.Hour).Format(time.RFC3339),
+		"end":       start.Add(3 * time.Hour).Format(time.RFC3339),
+		"time_zone": "America/Los_Angeles",
+	}
+	result = runTool(t, exec, scheduletools.RescheduleToolName, rescheduleInput)
+	if !result.IsError || !strings.Contains(result.Content, agentpolicy.ApprovalBeforeToolReason(scheduletools.RescheduleToolName)) {
+		t.Fatalf("expected schedule reschedule approval denial, got error=%v content=%q", result.IsError, result.Content)
+	}
+
+	result = runTool(t, exec, approvaltools.ToolName, map[string]any{
+		"action":     scheduletools.RescheduleToolName,
+		"reason":     "move the kickoff event in the personal schedule backend",
+		"tool_input": rescheduleInput,
+	})
+	if result.IsError {
+		t.Fatalf("schedule reschedule approval should succeed: %s", result.Content)
+	}
+
+	result = runTool(t, exec, scheduletools.RescheduleToolName, rescheduleInput)
+	if result.IsError {
+		t.Fatalf("approved schedule reschedule should succeed: %s", result.Content)
+	}
+
 	allMemories, err := memories.Memories(ctx, memory.Request{})
 	if err != nil {
 		t.Fatalf("Memories() error = %v", err)
@@ -284,6 +372,11 @@ func TestNewAssemblesPersonalRuntime(t *testing.T) {
 		messagetools.SearchToolName,
 		messagetools.ReadToolName,
 		messagetools.SendToolName,
+		scheduletools.SearchToolName,
+		scheduletools.ReadToolName,
+		scheduletools.CreateToolName,
+		scheduletools.RescheduleToolName,
+		scheduletools.CancelToolName,
 		tasktools.ListToolName,
 		approvaltools.ToolName,
 		subagents.ToolName,
@@ -409,6 +502,64 @@ func TestConfiguredSubagentsInheritReadOnlyMessagesOnly(t *testing.T) {
 	}
 }
 
+func TestConfiguredSubagentsInheritReadOnlyScheduleOnly(t *testing.T) {
+	t.Parallel()
+
+	start := time.Date(2026, 4, 20, 15, 0, 0, 0, time.UTC)
+	scheduleStore := scheduling.NewEventStore([]scheduling.Event{{
+		ID:       "event-1",
+		Title:    "Project kickoff",
+		Summary:  "Weekly kickoff with owners and due dates",
+		Location: "Zoom",
+		Organizer: scheduling.Participant{
+			Name:    "Alex",
+			Address: "alex@example.com",
+		},
+		Start:       start,
+		End:         start.Add(time.Hour),
+		TimeZone:    "UTC",
+		Description: "Keep the meeting concise and end with owners and due dates.",
+	}})
+
+	cfg, err := configuredSubagents(Config{
+		Base: memaxagent.Options{},
+		Schedule: scheduletools.Config{
+			Searcher:    scheduleStore,
+			Reader:      scheduleStore,
+			Creator:     scheduleStore,
+			Rescheduler: scheduleStore,
+			Canceller:   scheduleStore,
+		},
+		Subagents: &subagents.Config{
+			Agents: []subagents.Agent{{
+				Name:        "researcher",
+				Description: "Investigates questions.",
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("configuredSubagents() error = %v", err)
+	}
+	if cfg.DefaultOptions.Tools == nil {
+		t.Fatal("configuredSubagents() missing inherited child registry")
+	}
+	names := toolNames(cfg.DefaultOptions.Tools)
+	for _, want := range []string{scheduletools.SearchToolName, scheduletools.ReadToolName} {
+		if !contains(names, want) {
+			t.Fatalf("child registry missing %q; got %v", want, names)
+		}
+	}
+	for _, forbidden := range []string{
+		scheduletools.CreateToolName,
+		scheduletools.RescheduleToolName,
+		scheduletools.CancelToolName,
+	} {
+		if contains(names, forbidden) {
+			t.Fatalf("child registry unexpectedly inherited %q; got %v", forbidden, names)
+		}
+	}
+}
+
 func TestNewRejectsApprovalGatesWithoutApprover(t *testing.T) {
 	t.Parallel()
 
@@ -449,6 +600,18 @@ func TestNewRejectsApprovalGatesWithoutApprover(t *testing.T) {
 	}
 
 	_, err = New(Config{
+		Schedule: scheduletools.Config{
+			Creator: scheduling.NewEventStore(nil),
+		},
+		Policies: Policies{
+			RequireScheduleCreateApproval: true,
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "schedule approval requires approval approver") {
+		t.Fatalf("New() error = %v, want schedule approval validation", err)
+	}
+
+	_, err = New(Config{
 		Subagents: &subagents.Config{
 			Agents: []subagents.Agent{{Name: "researcher", Description: "Investigates questions."}},
 		},
@@ -468,8 +631,16 @@ func TestPresetsAndDefaultPolicies(t *testing.T) {
 		t.Fatalf("Presets() = %v, want stable personal presets", got)
 	}
 	policies := DefaultPolicies()
-	if !policies.RequireMemoryApproval || !policies.RequireNoteApproval || !policies.RequireMessageApproval || !policies.SingleUseApprovals || !policies.InputBoundApprovals || policies.RequireDelegationApproval {
-		t.Fatalf("DefaultPolicies() = %#v, want memory, note, and message approval on and delegation approval off", policies)
+	if !policies.RequireMemoryApproval ||
+		!policies.RequireNoteApproval ||
+		!policies.RequireMessageApproval ||
+		!policies.RequireScheduleCreateApproval ||
+		!policies.RequireScheduleRescheduleApproval ||
+		!policies.RequireScheduleCancelApproval ||
+		!policies.SingleUseApprovals ||
+		!policies.InputBoundApprovals ||
+		policies.RequireDelegationApproval {
+		t.Fatalf("DefaultPolicies() = %#v, want durable-state approvals on and delegation approval off", policies)
 	}
 
 	if _, err := PresetPersonalAssistant.Config(); err != nil {

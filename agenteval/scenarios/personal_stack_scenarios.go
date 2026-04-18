@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
 	"github.com/MemaxLabs/memax-go-agent-sdk/agenteval"
@@ -12,6 +13,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/messaging"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/notes"
+	"github.com/MemaxLabs/memax-go-agent-sdk/scheduling"
 	"github.com/MemaxLabs/memax-go-agent-sdk/session"
 	"github.com/MemaxLabs/memax-go-agent-sdk/stack/personal"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/agentpolicy"
@@ -19,6 +21,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/memorytools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/messagetools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/notetools"
+	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/scheduletools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/subagents"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/tasktools"
 )
@@ -403,7 +406,7 @@ func PersonalPresetAssistantNoteRecall() agenteval.Case {
 					}
 					initialPrompt := requests[0].SystemPrompt
 					for _, want := range []string{
-						"Search note, document, and message-thread metadata before loading full content or sending new replies.",
+						"Search note, document, message-thread, and schedule metadata before loading full content or changing calendar state.",
 						"[in_progress] task-1",
 						notetools.SearchToolName,
 						notetools.ReadToolName,
@@ -575,7 +578,7 @@ func PersonalPresetAssistantMessageRecall() agenteval.Case {
 					}
 					initialPrompt := requests[0].SystemPrompt
 					for _, want := range []string{
-						"Search note, document, and message-thread metadata before loading full content or sending new replies.",
+						"Search note, document, message-thread, and schedule metadata before loading full content or changing calendar state.",
 						"[in_progress] task-1",
 						messagetools.SearchToolName,
 						messagetools.ReadToolName,
@@ -778,6 +781,333 @@ func PersonalPresetAssistantMessageApprovalRecovery() agenteval.Case {
 					last := thread.Messages[len(thread.Messages)-1]
 					if !strings.Contains(last.Body, "owners and due dates") {
 						return fmt.Errorf("outbound message body = %q, want recalled style", last.Body)
+					}
+					return nil
+				},
+			},
+		},
+	}
+}
+
+// PersonalPresetAssistantScheduleRecall returns a single-use scenario where
+// the personal_assistant preset searches schedule metadata, reads one seeded
+// event, requests approval, reschedules the event using the recalled
+// constraints, and confirms the updated event remains discoverable.
+func PersonalPresetAssistantScheduleRecall() agenteval.Case {
+	start := time.Date(2026, 4, 20, 22, 0, 0, 0, time.UTC)
+	scheduleStore := scheduling.NewEventStore([]scheduling.Event{{
+		ID:       "event-1",
+		Title:    "Project kickoff",
+		Summary:  "Weekly kickoff with owners and due dates",
+		Location: "Zoom",
+		Organizer: scheduling.Participant{
+			Name:    "Alex",
+			Address: "alex@example.com",
+		},
+		Start:       start,
+		End:         start.Add(time.Hour),
+		TimeZone:    "UTC",
+		Description: "Keep this kickoff to 45 minutes and do not move it after 4 PM Pacific.",
+		Tags:        []string{"project", "kickoff"},
+	}})
+	taskStore := tasktools.NewMemoryStore([]tasktools.Task{{
+		ID:     "task-1",
+		Title:  "adjust the kickoff event",
+		Status: tasktools.StatusInProgress,
+		Notes:  "search schedule metadata first, then read the event before changing calendar state",
+	}})
+	rescheduleInput := `{
+		"id":"event-1",
+		"start":"2026-04-20T15:15:00-07:00",
+		"end":"2026-04-20T16:00:00-07:00",
+		"time_zone":"America/Los_Angeles"
+	}`
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "search-1",
+				Name:  scheduletools.SearchToolName,
+				Input: json.RawMessage(`{"query":"kickoff owners due dates","limit":3}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "read-1",
+				Name:  scheduletools.ReadToolName,
+				Input: json.RawMessage(`{"id":"event-1"}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "approval-1",
+				Name: approvaltools.ToolName,
+				Input: json.RawMessage(`{
+					"action":"reschedule_schedule_event",
+					"reason":"rescheduling a calendar event requires approval",
+					"tool_input":` + rescheduleInput + `
+				}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "reschedule-1",
+				Name:  scheduletools.RescheduleToolName,
+				Input: json.RawMessage(rescheduleInput),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "search-2",
+				Name:  scheduletools.SearchToolName,
+				Input: json.RawMessage(`{"query":"kickoff america/los_angeles","limit":3}`),
+			},
+		}},
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "Personal assistant recalled the event constraints, rescheduled the kickoff, and confirmed the updated event metadata."}},
+	)
+
+	config, configErr := personal.PresetPersonalAssistant.Config()
+	config.Schedule = scheduletools.Config{
+		Searcher:     scheduleStore,
+		Reader:       scheduleStore,
+		Rescheduler:  scheduleStore,
+		DefaultLimit: 3,
+	}
+	config.Tasks = taskStore
+	config.Approval.Approver = approvaltools.StaticApprover{
+		Decision: approvaltools.Decision{
+			Approved: true,
+			Reason:   "approved kickoff reschedule",
+		},
+	}
+	stack, stackErr := personal.New(config)
+
+	return agenteval.Case{
+		Name:    "personal_preset_personal_assistant_schedule_recall",
+		Prompt:  "Adjust the kickoff event carefully, but search schedule metadata first and read the event before changing calendar state.",
+		Options: stack.WithModel(modelClient),
+		Assertions: []agenteval.Assertion{
+			toolConstructionSucceeded(configErr, stackErr),
+			agenteval.ToolUsed(scheduletools.SearchToolName),
+			agenteval.ToolUsed(scheduletools.ReadToolName),
+			agenteval.ToolUsed(approvaltools.ToolName),
+			agenteval.ToolUsed(scheduletools.RescheduleToolName),
+			agenteval.EventKindEmitted(memaxagent.EventApprovalRequested),
+			agenteval.EventKindEmitted(memaxagent.EventApprovalGranted),
+			agenteval.EventKindEmitted(memaxagent.EventApprovalConsumed),
+			agenteval.NoToolErrors(),
+			agenteval.FinalEquals("Personal assistant recalled the event constraints, rescheduled the kickoff, and confirmed the updated event metadata."),
+			requestCountEquals(modelClient, 6),
+			{
+				Name: "assistant preset prompt includes schedule workflow guidance",
+				Check: func(agenteval.Result) error {
+					requests := modelClient.Requests()
+					if len(requests) != 6 {
+						return fmt.Errorf("requests = %d, want 6", len(requests))
+					}
+					initialPrompt := requests[0].SystemPrompt
+					for _, want := range []string{
+						"Search note, document, message-thread, and schedule metadata before loading full content or changing calendar state.",
+						"[in_progress] task-1",
+						scheduletools.SearchToolName,
+						scheduletools.ReadToolName,
+						scheduletools.RescheduleToolName,
+					} {
+						if !strings.Contains(initialPrompt, want) {
+							return fmt.Errorf("initial prompt missing %q:\n%s", want, initialPrompt)
+						}
+					}
+					return nil
+				},
+			},
+			{
+				Name: "schedule recall changes the approved reschedule",
+				Check: func(result agenteval.Result) error {
+					toolResults := result.ToolResults()
+					if len(toolResults) != 5 {
+						return fmt.Errorf("tool results = %#v, want exactly search read approval reschedule search", toolResults)
+					}
+					if strings.Contains(toolResults[0].Content, "Keep this kickoff to 45 minutes") {
+						return fmt.Errorf("metadata search leaked full event description: %#v", toolResults[0])
+					}
+					if toolResults[1].IsError || !strings.Contains(toolResults[1].Content, "do not move it after 4 PM Pacific") {
+						return fmt.Errorf("read result = %#v, want recalled event description", toolResults[1])
+					}
+					if toolResults[2].IsError || toolResults[2].Metadata[approvaltools.MetadataApprovalApproved] != true {
+						return fmt.Errorf("approval result = %#v, want granted approval", toolResults[2])
+					}
+					if toolResults[3].IsError || !strings.Contains(toolResults[3].Content, "rescheduled schedule event Project kickoff") {
+						return fmt.Errorf("reschedule result = %#v, want reschedule success", toolResults[3])
+					}
+					if toolResults[3].Metadata["event_time_zone"] != "America/Los_Angeles" {
+						return fmt.Errorf("reschedule metadata = %#v, want updated time zone", toolResults[3].Metadata)
+					}
+					if toolResults[4].IsError || !strings.Contains(toolResults[4].Content, "America/Los_Angeles") {
+						return fmt.Errorf("search result = %#v, want updated schedule metadata", toolResults[4])
+					}
+					item, err := scheduleStore.ReadEvent(context.Background(), scheduling.ReadRequest{ID: "event-1"})
+					if err != nil {
+						return err
+					}
+					if item.TimeZone != "America/Los_Angeles" {
+						return fmt.Errorf("event timezone = %q, want America/Los_Angeles", item.TimeZone)
+					}
+					if item.End.Sub(item.Start) != 45*time.Minute {
+						return fmt.Errorf("event duration = %s, want 45m", item.End.Sub(item.Start))
+					}
+					return nil
+				},
+			},
+		},
+	}
+}
+
+// PersonalPresetAssistantScheduleApprovalRecovery returns a single-use scenario
+// where the personal_assistant preset denies a reschedule until the model
+// requests approval and retries the event change.
+func PersonalPresetAssistantScheduleApprovalRecovery() agenteval.Case {
+	start := time.Date(2026, 4, 20, 22, 0, 0, 0, time.UTC)
+	scheduleStore := scheduling.NewEventStore([]scheduling.Event{{
+		ID:       "event-1",
+		Title:    "Project kickoff",
+		Summary:  "Weekly kickoff with owners and due dates",
+		Location: "Zoom",
+		Organizer: scheduling.Participant{
+			Name:    "Alex",
+			Address: "alex@example.com",
+		},
+		Start:       start,
+		End:         start.Add(time.Hour),
+		TimeZone:    "UTC",
+		Description: "Keep this kickoff to 45 minutes and do not move it after 4 PM Pacific.",
+		Tags:        []string{"project", "kickoff"},
+	}})
+	taskStore := tasktools.NewMemoryStore([]tasktools.Task{{
+		ID:     "task-1",
+		Title:  "adjust the kickoff event",
+		Status: tasktools.StatusInProgress,
+		Notes:  "search schedule metadata first, then read the event before changing calendar state",
+	}})
+	rescheduleInput := `{
+		"id":"event-1",
+		"start":"2026-04-20T15:15:00-07:00",
+		"end":"2026-04-20T16:00:00-07:00",
+		"time_zone":"America/Los_Angeles"
+	}`
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "search-1",
+				Name:  scheduletools.SearchToolName,
+				Input: json.RawMessage(`{"query":"kickoff owners due dates","limit":3}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "read-1",
+				Name:  scheduletools.ReadToolName,
+				Input: json.RawMessage(`{"id":"event-1"}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "reschedule-1",
+				Name:  scheduletools.RescheduleToolName,
+				Input: json.RawMessage(rescheduleInput),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "approval-1",
+				Name: approvaltools.ToolName,
+				Input: json.RawMessage(`{
+					"action":"reschedule_schedule_event",
+					"reason":"rescheduling a calendar event requires approval",
+					"tool_input":` + rescheduleInput + `
+				}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "reschedule-2",
+				Name:  scheduletools.RescheduleToolName,
+				Input: json.RawMessage(rescheduleInput),
+			},
+		}},
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "Personal assistant recovered after schedule approval and rescheduled the kickoff."}},
+	)
+
+	config, configErr := personal.PresetPersonalAssistant.Config()
+	config.Schedule = scheduletools.Config{
+		Searcher:     scheduleStore,
+		Reader:       scheduleStore,
+		Rescheduler:  scheduleStore,
+		DefaultLimit: 3,
+	}
+	config.Tasks = taskStore
+	config.Approval.Approver = approvaltools.StaticApprover{
+		Decision: approvaltools.Decision{
+			Approved: true,
+			Reason:   "approved kickoff reschedule",
+		},
+	}
+	stack, stackErr := personal.New(config)
+
+	return agenteval.Case{
+		Name:    "personal_preset_personal_assistant_schedule_approval_recovery",
+		Prompt:  "Adjust the kickoff event carefully and recover through approval if the first calendar change is denied.",
+		Options: stack.WithModel(modelClient),
+		Assertions: []agenteval.Assertion{
+			toolConstructionSucceeded(configErr, stackErr),
+			agenteval.ToolUsed(scheduletools.SearchToolName),
+			agenteval.ToolUsed(scheduletools.ReadToolName),
+			agenteval.ToolUsed(scheduletools.RescheduleToolName),
+			agenteval.ToolUsed(approvaltools.ToolName),
+			agenteval.EventKindEmitted(memaxagent.EventApprovalRequested),
+			agenteval.EventKindEmitted(memaxagent.EventApprovalGranted),
+			agenteval.EventKindEmitted(memaxagent.EventApprovalConsumed),
+			agenteval.FinalEquals("Personal assistant recovered after schedule approval and rescheduled the kickoff."),
+			requestCountEquals(modelClient, 6),
+			{
+				Name: "schedule approval recovery drives the event change",
+				Check: func(result agenteval.Result) error {
+					toolResults := result.ToolResults()
+					if len(toolResults) != 5 {
+						return fmt.Errorf("tool results = %#v, want exactly search read denied reschedule approval reschedule", toolResults)
+					}
+					if strings.Contains(toolResults[0].Content, "Keep this kickoff to 45 minutes") {
+						return fmt.Errorf("metadata search leaked full event description: %#v", toolResults[0])
+					}
+					if toolResults[1].IsError || !strings.Contains(toolResults[1].Content, "do not move it after 4 PM Pacific") {
+						return fmt.Errorf("read result = %#v, want recalled event description", toolResults[1])
+					}
+					if !toolResults[2].IsError || !strings.Contains(toolResults[2].Content, agentpolicy.ApprovalBeforeToolReason(scheduletools.RescheduleToolName)) {
+						return fmt.Errorf("first reschedule result = %#v, want approval denial", toolResults[2])
+					}
+					if toolResults[3].IsError || toolResults[3].Metadata[approvaltools.MetadataApprovalApproved] != true {
+						return fmt.Errorf("approval result = %#v, want granted approval", toolResults[3])
+					}
+					if toolResults[4].IsError || !strings.Contains(toolResults[4].Content, "rescheduled schedule event Project kickoff") {
+						return fmt.Errorf("second reschedule result = %#v, want reschedule success", toolResults[4])
+					}
+					item, err := scheduleStore.ReadEvent(context.Background(), scheduling.ReadRequest{ID: "event-1"})
+					if err != nil {
+						return err
+					}
+					if item.TimeZone != "America/Los_Angeles" {
+						return fmt.Errorf("event timezone = %q, want America/Los_Angeles", item.TimeZone)
+					}
+					if item.End.Sub(item.Start) != 45*time.Minute {
+						return fmt.Errorf("event duration = %s, want 45m", item.End.Sub(item.Start))
 					}
 					return nil
 				},

@@ -13,6 +13,9 @@ Both presets start from the same default governance baseline via
 - `RequireMemoryApproval`
 - `RequireNoteApproval`
 - `RequireMessageApproval`
+- `RequireScheduleCreateApproval`
+- `RequireScheduleRescheduleApproval`
+- `RequireScheduleCancelApproval`
 - `SingleUseApprovals`
 - `InputBoundApprovals`
 
@@ -24,6 +27,9 @@ Important:
   (`save_note` and/or `delete_note`)
 - message approval only applies when the host exposes outbound messaging
   tools (`send_message`)
+- schedule approval only applies when the host exposes calendar mutation tools
+  (`create_schedule_event`, `reschedule_schedule_event`, and/or
+  `cancel_schedule_event`)
 - delegation approval is opt-in and stays off unless the host enables it
 - approval gates still require an `approvaltools.Approver`; presets do not
   invent one implicitly
@@ -32,8 +38,8 @@ Important:
 
 | Preset | Intended workflow | Policies enabled by default | Preset-specific posture | Example | Eval scenarios |
 | --- | --- | --- | --- | --- | --- |
-| `personal_assistant` | careful personal assistance with durable recall, explicit task tracking, and cautious memory/note/message writes | `RequireMemoryApproval`, `RequireNoteApproval`, `RequireMessageApproval`, `SingleUseApprovals`, `InputBoundApprovals` | `MaxTurns=28`, `MaxToolConcurrency=4`, balanced personal-assistant identity, progressive skill disclosure, prompt guidance to recall durable context first and search note and message metadata before loading or sending | [`examples/personal_stack`](../examples/personal_stack/main.go), [`examples/personal_notes_stack`](../examples/personal_notes_stack/main.go), [`examples/personal_messages_stack`](../examples/personal_messages_stack/main.go) | `personal_preset_personal_assistant`, `personal_preset_personal_assistant_memory_approval_recovery`, `personal_preset_personal_assistant_note_recall`, `personal_preset_personal_assistant_message_recall`, `personal_preset_personal_assistant_message_approval_recovery` |
-| `research_partner` | longer-horizon personal research, synthesis, and scoped delegation | `RequireMemoryApproval`, `RequireNoteApproval`, `RequireMessageApproval`, `SingleUseApprovals`, `InputBoundApprovals` | `MaxTurns=36`, `MaxToolConcurrency=6`, higher-autonomy research identity, progressive skill disclosure, prompt guidance to separate working notes from durable memory and search note/message metadata before loading larger items or drafting replies | none yet | `personal_preset_research_partner` |
+| `personal_assistant` | careful personal assistance with durable recall, explicit task tracking, and cautious memory/note/message/schedule writes | `RequireMemoryApproval`, `RequireNoteApproval`, `RequireMessageApproval`, `RequireScheduleCreateApproval`, `RequireScheduleRescheduleApproval`, `RequireScheduleCancelApproval`, `SingleUseApprovals`, `InputBoundApprovals` | `MaxTurns=28`, `MaxToolConcurrency=4`, balanced personal-assistant identity, progressive skill disclosure, prompt guidance to recall durable context first and search note, message, and schedule metadata before loading or mutating | [`examples/personal_stack`](../examples/personal_stack/main.go), [`examples/personal_notes_stack`](../examples/personal_notes_stack/main.go), [`examples/personal_messages_stack`](../examples/personal_messages_stack/main.go), [`examples/personal_schedule_stack`](../examples/personal_schedule_stack/main.go) | `personal_preset_personal_assistant`, `personal_preset_personal_assistant_memory_approval_recovery`, `personal_preset_personal_assistant_note_recall`, `personal_preset_personal_assistant_message_recall`, `personal_preset_personal_assistant_message_approval_recovery`, `personal_preset_personal_assistant_schedule_recall`, `personal_preset_personal_assistant_schedule_approval_recovery` |
+| `research_partner` | longer-horizon personal research, synthesis, and scoped delegation | `RequireMemoryApproval`, `RequireNoteApproval`, `RequireMessageApproval`, `RequireScheduleCreateApproval`, `RequireScheduleRescheduleApproval`, `RequireScheduleCancelApproval`, `SingleUseApprovals`, `InputBoundApprovals` | `MaxTurns=36`, `MaxToolConcurrency=6`, higher-autonomy research identity, progressive skill disclosure, prompt guidance to separate working notes from durable memory and search note/message/schedule metadata before loading larger items or changing calendar state | none yet | `personal_preset_research_partner` |
 
 ## Reading the table
 
@@ -69,6 +75,11 @@ cfg.Messages = messagetools.Config{
     Reader:   messageStore,
     Sender:   messageStore,
 }
+cfg.Schedule = scheduletools.Config{
+    Searcher:    scheduleStore,
+    Reader:      scheduleStore,
+    Rescheduler: scheduleStore,
+}
 cfg.Tasks = taskStore
 cfg.Approval.Approver = approver
 
@@ -85,10 +96,16 @@ Common sources of confusion:
 - enabling outbound messaging without an approver under the default preset
   posture will fail stack construction, because message approval is on by
   default
+- enabling schedule create/reschedule/cancel tools without an approver under
+  the default preset posture will fail stack construction, because schedule
+  approvals are on by default
 - hosts that want mutable note tools without approvals must both attach the
   note `Writer` and/or `Deleter` and explicitly disable `RequireNoteApproval`
 - hosts that want outbound messaging without approvals must both attach the
   message `Sender` and explicitly disable `RequireMessageApproval`
+- hosts that want schedule mutation tools without approvals must both attach
+  the schedule `Creator`, `Rescheduler`, and/or `Canceller` and explicitly
+  disable the corresponding `RequireSchedule*Approval` flags
 - `research_partner` does not automatically expose delegation; the host still
   has to attach a `subagents.Config`
 - progressive skill disclosure remains harmless when no skill source is
