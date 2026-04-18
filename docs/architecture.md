@@ -112,7 +112,10 @@ bounded subagent work does not disappear from a hosted audit trail.
 Managed quotas now sit behind a host-owned `QuotaStore` seam: the reference
 `MemoryQuotaStore` keeps the zero-config path for local or single-process
 deployments, while distributed hosts can attach a shared backend without
-rewriting tenant validation or session-end cleanup logic.
+rewriting tenant validation or session-end cleanup logic. The first shared
+backend now exists as `stack/cloudmanaged/redistore`, which keeps the atomic
+reserve contract on the Redis server side and applies TTL-backed cleanup as a
+crash-safety net.
 Each preset now has deterministic end-to-end eval coverage for its normal
 workflow and its defining recovery or delegation path, so preset behavior is
 part of the public contract rather than informal guidance. The navigable preset

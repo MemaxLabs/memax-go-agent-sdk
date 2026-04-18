@@ -148,8 +148,9 @@ system prompt.
   `managed_worker` preset, and initial host-owned audit sinks now exist through
   the cloudmanaged audit subscriber plus memory/JSONL sinks. Initial
   host-owned quota state now sits behind a `QuotaStore` seam with the
-  reference `MemoryQuotaStore`; next steps are richer cloudmanaged presets,
-  shared distributed quota backends, and
+  reference `MemoryQuotaStore`, and the first shared backend now exists through
+  `stack/cloudmanaged/redistore`; next steps are richer cloudmanaged presets,
+  additional distributed quota backends, and
   remote-execution backends built on top of the same tenant seam.
 
 ## Phase 7: Opinionated Stacks

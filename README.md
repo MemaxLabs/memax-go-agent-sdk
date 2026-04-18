@@ -89,6 +89,8 @@ Coding-oriented adapters and toolkits:
 - initial `stack/cloudmanaged` assembly for tenant-scoped managed-worker
   workflows with explicit tenant admission, per-session quota validation, and
   host-owned audit sinks
+- initial Redis-backed cloudmanaged quota store for shared multi-replica quota
+  enforcement
 - initial SQLite-backed scheduling adapter for durable local calendar backends
 - skill discovery tools
 
@@ -123,6 +125,8 @@ managed cloud-agent stacks without forking the core.
 seam. The reference `MemoryQuotaStore` keeps the zero-config path for local or
 single-process managed hosts, while distributed deployments can attach a shared
 quota backend without reimplementing tenant validation or session-end cleanup.
+The first shared backend now exists as `stack/cloudmanaged/redistore`, using
+server-side atomic reservation plus TTL-backed cleanup safety.
 
 `stack/personal` now exposes named presets so hosts can start from a
 personal-intelligence workflow profile and then attach only the host-owned
