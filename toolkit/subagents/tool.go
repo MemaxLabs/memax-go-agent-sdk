@@ -12,7 +12,8 @@ import (
 )
 
 const (
-	defaultToolName       = "run_subagent"
+	// ToolName is the default tool name used for bounded child-agent runs.
+	ToolName              = "run_subagent"
 	defaultMaxPromptBytes = 64 * 1024
 	defaultMaxTurns       = 8
 	defaultRunDuration    = 2 * time.Minute
@@ -127,7 +128,7 @@ func NewTool(config Config) (tool.Tool, error) {
 
 	name := config.Name
 	if name == "" {
-		name = defaultToolName
+		name = ToolName
 	}
 	description := config.Description
 	if description == "" {
