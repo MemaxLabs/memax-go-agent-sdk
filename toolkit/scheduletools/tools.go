@@ -302,6 +302,7 @@ func NewRescheduleTool(config Config) (tool.Tool, error) {
 				return model.ToolResult{}, err
 			}
 			metadata := eventMetadata(result.Event)
+			addPreviousEventMetadata(metadata, result.Previous)
 			metadata["action"] = "rescheduled"
 			return model.ToolResult{
 				Content:  fmt.Sprintf("rescheduled schedule event %s", eventLabel(result.Event)),
@@ -351,6 +352,7 @@ func NewCancelTool(config Config) (tool.Tool, error) {
 				return model.ToolResult{}, err
 			}
 			metadata := eventMetadata(result.Event)
+			addPreviousEventMetadata(metadata, result.Previous)
 			metadata["action"] = "cancelled"
 			return model.ToolResult{
 				Content:  fmt.Sprintf("cancelled schedule event %s", eventLabel(result.Event)),
@@ -706,6 +708,24 @@ func eventMetadata(item scheduling.Event) map[string]any {
 		metadata["event_end"] = item.End.Format(time.RFC3339Nano)
 	}
 	return metadata
+}
+
+func addPreviousEventMetadata(metadata map[string]any, item scheduling.Event) {
+	metadata["previous_event_id"] = item.ID
+	metadata["previous_event_title"] = item.Title
+	metadata["previous_event_status"] = string(item.Status)
+	metadata["previous_event_location"] = item.Location
+	metadata["previous_event_time_zone"] = item.TimeZone
+	metadata["previous_event_attendees"] = participantStrings(item.Attendees)
+	if organizer := participantLabel(item.Organizer); organizer != "" {
+		metadata["previous_event_organizer"] = organizer
+	}
+	if !item.Start.IsZero() {
+		metadata["previous_event_start"] = item.Start.Format(time.RFC3339Nano)
+	}
+	if !item.End.IsZero() {
+		metadata["previous_event_end"] = item.End.Format(time.RFC3339Nano)
+	}
 }
 
 func participantStrings(items []scheduling.Participant) []string {

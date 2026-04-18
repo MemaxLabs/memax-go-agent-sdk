@@ -119,6 +119,12 @@ func TestCreateRescheduleAndCancelTools(t *testing.T) {
 	if rescheduleResult.Metadata["event_time_zone"] != "America/Los_Angeles" {
 		t.Fatalf("reschedule metadata = %#v, want updated time zone", rescheduleResult.Metadata)
 	}
+	if got := rescheduleResult.Metadata["previous_event_time_zone"]; got != "UTC" {
+		t.Fatalf("reschedule metadata = %#v, want previous time zone UTC", rescheduleResult.Metadata)
+	}
+	if got := rescheduleResult.Metadata["previous_event_start"]; got != start.Format(time.RFC3339Nano) {
+		t.Fatalf("reschedule metadata = %#v, want previous start %q", rescheduleResult.Metadata, start.Format(time.RFC3339Nano))
+	}
 
 	cancelResult := runTool(t, cancelTool, CancelToolName, map[string]any{
 		"id":     eventID,
@@ -129,6 +135,53 @@ func TestCreateRescheduleAndCancelTools(t *testing.T) {
 	}
 	if cancelResult.Metadata["event_status"] != string(scheduling.StatusCancelled) {
 		t.Fatalf("cancel metadata = %#v, want cancelled status", cancelResult.Metadata)
+	}
+	if got := cancelResult.Metadata["previous_event_status"]; got != string(scheduling.StatusScheduled) {
+		t.Fatalf("cancel metadata = %#v, want previous scheduled status", cancelResult.Metadata)
+	}
+}
+
+func TestRescheduleToolOmitsOptionalPreviousMetadataForZeroPrevious(t *testing.T) {
+	t.Parallel()
+
+	start := time.Date(2026, 4, 20, 15, 0, 0, 0, time.UTC)
+	rescheduleTool, err := NewRescheduleTool(Config{
+		Rescheduler: scheduling.ReschedulerFunc(func(context.Context, scheduling.RescheduleRequest) (scheduling.RescheduleResult, error) {
+			return scheduling.RescheduleResult{
+				Event: scheduling.Event{
+					ID:       "event-1",
+					Title:    "Project kickoff",
+					Start:    start.Add(2 * time.Hour),
+					End:      start.Add(3 * time.Hour),
+					TimeZone: "America/Los_Angeles",
+					Status:   scheduling.StatusScheduled,
+				},
+			}, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("NewRescheduleTool() error = %v", err)
+	}
+
+	result := runTool(t, rescheduleTool, RescheduleToolName, map[string]any{
+		"id":        "event-1",
+		"start":     start.Add(2 * time.Hour).Format(time.RFC3339),
+		"end":       start.Add(3 * time.Hour).Format(time.RFC3339),
+		"time_zone": "America/Los_Angeles",
+	})
+	if result.IsError {
+		t.Fatalf("reschedule result = %#v", result)
+	}
+	if got := result.Metadata["previous_event_id"]; got != "" {
+		t.Fatalf("metadata = %#v, want empty previous_event_id", result.Metadata)
+	}
+	if attendees, ok := result.Metadata["previous_event_attendees"].([]string); !ok || len(attendees) != 0 {
+		t.Fatalf("metadata = %#v, want empty previous_event_attendees", result.Metadata)
+	}
+	for _, key := range []string{"previous_event_start", "previous_event_end", "previous_event_organizer"} {
+		if _, ok := result.Metadata[key]; ok {
+			t.Fatalf("metadata = %#v, want %s omitted for zero previous event", result.Metadata, key)
+		}
 	}
 }
 

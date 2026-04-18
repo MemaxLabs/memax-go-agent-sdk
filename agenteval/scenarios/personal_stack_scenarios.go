@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
@@ -1114,6 +1115,350 @@ func PersonalPresetAssistantScheduleApprovalRecovery() agenteval.Case {
 			},
 		},
 	}
+}
+
+// PersonalPresetAssistantScheduleConflictRecovery returns a single-use scenario
+// where the personal_assistant preset approves a schedule change, receives a
+// recoverable conflict from the host-owned schedule backend, rereads the event,
+// re-requests approval, retries the reschedule, and marks the task completed
+// with evidence.
+func PersonalPresetAssistantScheduleConflictRecovery() agenteval.Case {
+	originalStart := time.Date(2026, 4, 20, 22, 0, 0, 0, time.UTC)
+	original := scheduling.Event{
+		ID:       "event-1",
+		Title:    "Project kickoff",
+		Summary:  "Weekly kickoff with owners and due dates",
+		Location: "Zoom",
+		Organizer: scheduling.Participant{
+			Name:    "Alex",
+			Address: "alex@example.com",
+		},
+		Start:       originalStart,
+		End:         originalStart.Add(time.Hour),
+		TimeZone:    "UTC",
+		Description: "Keep this kickoff to 45 minutes and do not move it after 4 PM Pacific.",
+		Tags:        []string{"project", "kickoff"},
+	}
+	conflicting := cloneScheduleEvent(original)
+	conflicting.Start = time.Date(2026, 4, 20, 22, 30, 0, 0, time.UTC)
+	conflicting.End = conflicting.Start.Add(50 * time.Minute)
+	conflicting.TimeZone = "America/Los_Angeles"
+	conflicting.Description = original.Description + " Another editor already moved it, so reread before retrying."
+	scheduleStore := newConflictScheduleStore(original, conflicting)
+	taskStore := tasktools.NewMemoryStore([]tasktools.Task{{
+		ID:     "task-1",
+		Title:  "adjust the kickoff event",
+		Status: tasktools.StatusInProgress,
+		Notes:  "search schedule metadata first, then read the event before changing calendar state",
+	}})
+	rescheduleInput := `{
+		"id":"event-1",
+		"start":"2026-04-20T15:00:00-07:00",
+		"end":"2026-04-20T15:45:00-07:00",
+		"time_zone":"America/Los_Angeles"
+	}`
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "search-1",
+				Name:  scheduletools.SearchToolName,
+				Input: json.RawMessage(`{"query":"kickoff owners due dates","limit":3}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "read-1",
+				Name:  scheduletools.ReadToolName,
+				Input: json.RawMessage(`{"id":"event-1"}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "approval-1",
+				Name: approvaltools.ToolName,
+				Input: json.RawMessage(`{
+					"action":"reschedule_schedule_event",
+					"reason":"rescheduling a calendar event requires approval",
+					"tool_input":` + rescheduleInput + `
+				}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "reschedule-1",
+				Name:  scheduletools.RescheduleToolName,
+				Input: json.RawMessage(rescheduleInput),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "read-2",
+				Name:  scheduletools.ReadToolName,
+				Input: json.RawMessage(`{"id":"event-1"}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "approval-2",
+				Name: approvaltools.ToolName,
+				Input: json.RawMessage(`{
+					"action":"reschedule_schedule_event",
+					"reason":"retrying a calendar event reschedule after a conflict requires approval",
+					"tool_input":` + rescheduleInput + `
+				}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "reschedule-2",
+				Name:  scheduletools.RescheduleToolName,
+				Input: json.RawMessage(rescheduleInput),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "task-1",
+				Name: tasktools.UpsertToolName,
+				Input: json.RawMessage(`{
+					"id":"task-1",
+					"status":"completed",
+					"notes":"Recovered from a schedule conflict and applied the final kickoff time.",
+					"evidence":["schedule conflict recovered","event-1"]
+				}`),
+			},
+		}},
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "Personal assistant recovered from a schedule conflict, retried the kickoff update, and recorded task evidence."}},
+	)
+
+	config, configErr := personal.PresetPersonalAssistant.Config()
+	config.Schedule = scheduletools.Config{
+		Searcher:     scheduleStore,
+		Reader:       scheduleStore,
+		Rescheduler:  scheduleStore,
+		DefaultLimit: 3,
+	}
+	config.Tasks = taskStore
+	config.Approval.Approver = approvaltools.StaticApprover{
+		Decision: approvaltools.Decision{
+			Approved: true,
+			Reason:   "approved kickoff reschedule retry",
+		},
+	}
+	stack, stackErr := personal.New(config)
+
+	conflictingStart := conflicting.Start.Format(time.RFC3339Nano)
+	finalStart := time.Date(2026, 4, 20, 22, 0, 0, 0, time.UTC).Format(time.RFC3339Nano)
+
+	return agenteval.Case{
+		Name:    "personal_preset_personal_assistant_schedule_conflict_recovery",
+		Prompt:  "Adjust the kickoff event carefully, recover from schedule conflicts, and keep task progress current.",
+		Options: stack.WithModel(modelClient),
+		Assertions: []agenteval.Assertion{
+			toolConstructionSucceeded(configErr, stackErr),
+			agenteval.ToolUsed(scheduletools.SearchToolName),
+			agenteval.ToolUsed(scheduletools.ReadToolName),
+			agenteval.ToolUsed(approvaltools.ToolName),
+			agenteval.ToolUsed(scheduletools.RescheduleToolName),
+			agenteval.ToolUsed(tasktools.UpsertToolName),
+			agenteval.EventKindEmitted(memaxagent.EventApprovalRequested),
+			agenteval.EventKindEmitted(memaxagent.EventApprovalGranted),
+			agenteval.EventKindEmitted(memaxagent.EventApprovalConsumed),
+			agenteval.FinalEquals("Personal assistant recovered from a schedule conflict, retried the kickoff update, and recorded task evidence."),
+			requestCountEquals(modelClient, 9),
+			{
+				Name: "conflict recovery updates task guidance in the final prompt",
+				Check: func(agenteval.Result) error {
+					requests := modelClient.Requests()
+					if len(requests) != 9 {
+						return fmt.Errorf("requests = %d, want 9", len(requests))
+					}
+					finalPrompt := requests[len(requests)-1].SystemPrompt
+					for _, want := range []string{
+						"[completed] task-1",
+						"schedule conflict recovered",
+						scheduletools.RescheduleToolName,
+						tasktools.UpsertToolName,
+					} {
+						if !strings.Contains(finalPrompt, want) {
+							return fmt.Errorf("final prompt missing %q:\n%s", want, finalPrompt)
+						}
+					}
+					return nil
+				},
+			},
+			{
+				Name: "schedule conflict recovery rereads and retries against the updated state",
+				Check: func(result agenteval.Result) error {
+					toolResults := result.ToolResults()
+					if len(toolResults) != 8 {
+						return fmt.Errorf("tool results = %#v, want search read approval reschedule conflict read approval reschedule upsert", toolResults)
+					}
+					if strings.Contains(toolResults[0].Content, "Keep this kickoff to 45 minutes") {
+						return fmt.Errorf("metadata search leaked full event description: %#v", toolResults[0])
+					}
+					if toolResults[1].IsError || !strings.Contains(toolResults[1].Content, "do not move it after 4 PM Pacific") {
+						return fmt.Errorf("first read result = %#v, want original event description", toolResults[1])
+					}
+					if toolResults[2].IsError || toolResults[2].Metadata[approvaltools.MetadataApprovalApproved] != true {
+						return fmt.Errorf("first approval result = %#v, want granted approval", toolResults[2])
+					}
+					if !toolResults[3].IsError || !strings.Contains(toolResults[3].Content, "schedule event changed during reschedule") {
+						return fmt.Errorf("first reschedule result = %#v, want recoverable conflict", toolResults[3])
+					}
+					if toolResults[4].IsError || toolResults[4].Metadata["event_start"] != conflictingStart {
+						return fmt.Errorf("second read result = %#v, want conflicted event state", toolResults[4])
+					}
+					if toolResults[5].IsError || toolResults[5].Metadata[approvaltools.MetadataApprovalApproved] != true {
+						return fmt.Errorf("second approval result = %#v, want granted retry approval", toolResults[5])
+					}
+					if toolResults[6].IsError || !strings.Contains(toolResults[6].Content, "rescheduled schedule event Project kickoff") {
+						return fmt.Errorf("second reschedule result = %#v, want successful retry", toolResults[6])
+					}
+					if toolResults[6].Metadata["previous_event_start"] != conflictingStart {
+						return fmt.Errorf("retry metadata = %#v, want previous conflicted start %q", toolResults[6].Metadata, conflictingStart)
+					}
+					if toolResults[6].Metadata["event_start"] != finalStart {
+						return fmt.Errorf("retry metadata = %#v, want final start %q", toolResults[6].Metadata, finalStart)
+					}
+					if toolResults[7].IsError || toolResults[7].Metadata["status"] != string(tasktools.StatusCompleted) {
+						return fmt.Errorf("task result = %#v, want completed task", toolResults[7])
+					}
+					tasks, err := taskStore.List(context.Background())
+					if err != nil {
+						return err
+					}
+					if len(tasks) != 1 || tasks[0].Status != tasktools.StatusCompleted {
+						return fmt.Errorf("tasks = %#v, want one completed task", tasks)
+					}
+					if len(tasks[0].Evidence) != 2 || tasks[0].Evidence[0] != "schedule conflict recovered" {
+						return fmt.Errorf("task evidence = %#v, want conflict evidence", tasks[0].Evidence)
+					}
+					item, err := scheduleStore.ReadEvent(context.Background(), scheduling.ReadRequest{ID: "event-1"})
+					if err != nil {
+						return err
+					}
+					if item.TimeZone != "America/Los_Angeles" {
+						return fmt.Errorf("event timezone = %q, want America/Los_Angeles", item.TimeZone)
+					}
+					if item.End.Sub(item.Start) != 45*time.Minute {
+						return fmt.Errorf("event duration = %s, want 45m", item.End.Sub(item.Start))
+					}
+					return nil
+				},
+			},
+		},
+	}
+}
+
+type conflictScheduleStore struct {
+	mu               sync.Mutex
+	event            scheduling.Event
+	conflictingEvent scheduling.Event
+	conflictInjected bool
+}
+
+func newConflictScheduleStore(initial scheduling.Event, conflicting scheduling.Event) *conflictScheduleStore {
+	return &conflictScheduleStore{
+		event:            cloneScheduleEvent(initial),
+		conflictingEvent: cloneScheduleEvent(conflicting),
+	}
+}
+
+func (s *conflictScheduleStore) SearchEvents(ctx context.Context, req scheduling.SearchRequest) ([]scheduling.Event, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if s == nil {
+		return nil, fmt.Errorf("nil conflict schedule store")
+	}
+	s.mu.Lock()
+	current := cloneScheduleEvent(s.event)
+	s.mu.Unlock()
+	return (scheduling.Selector{MaxEvents: req.Limit}).Select([]scheduling.Event{current}, req.Query, req.WindowStart, req.WindowEnd), nil
+}
+
+func (s *conflictScheduleStore) ReadEvent(ctx context.Context, req scheduling.ReadRequest) (scheduling.Event, error) {
+	if err := ctx.Err(); err != nil {
+		return scheduling.Event{}, err
+	}
+	if s == nil {
+		return scheduling.Event{}, fmt.Errorf("nil conflict schedule store")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !matchesScheduleLookup(s.event, req.ID, req.Title) {
+		return scheduling.Event{}, fmt.Errorf("schedule event not found")
+	}
+	return cloneScheduleEvent(s.event), nil
+}
+
+func (s *conflictScheduleStore) RescheduleEvent(ctx context.Context, req scheduling.RescheduleRequest) (scheduling.RescheduleResult, error) {
+	if err := ctx.Err(); err != nil {
+		return scheduling.RescheduleResult{}, err
+	}
+	if s == nil {
+		return scheduling.RescheduleResult{}, fmt.Errorf("nil conflict schedule store")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !matchesScheduleLookup(s.event, req.ID, req.Title) {
+		return scheduling.RescheduleResult{}, fmt.Errorf("schedule event not found")
+	}
+	if !s.conflictInjected {
+		s.event = cloneScheduleEvent(s.conflictingEvent)
+		s.conflictInjected = true
+		return scheduling.RescheduleResult{}, fmt.Errorf("schedule event changed during reschedule; read the latest event and retry")
+	}
+	previous := cloneScheduleEvent(s.event)
+	updated := cloneScheduleEvent(s.event)
+	updated.Start = req.Start.UTC()
+	updated.End = req.End.UTC()
+	if strings.TrimSpace(req.TimeZone) != "" {
+		updated.TimeZone = strings.TrimSpace(req.TimeZone)
+	}
+	if len(req.Metadata) > 0 {
+		if updated.Metadata == nil {
+			updated.Metadata = make(map[string]any, len(req.Metadata))
+		}
+		for key, value := range req.Metadata {
+			updated.Metadata[key] = value
+		}
+	}
+	s.event = updated
+	return scheduling.RescheduleResult{
+		Event:       cloneScheduleEvent(updated),
+		Previous:    previous,
+		Rescheduled: true,
+	}, nil
+}
+
+func matchesScheduleLookup(item scheduling.Event, id string, title string) bool {
+	id = strings.TrimSpace(id)
+	title = strings.TrimSpace(title)
+	switch {
+	case id != "":
+		return item.ID == id
+	case title != "":
+		return item.Title == title
+	default:
+		return false
+	}
+}
+
+func cloneScheduleEvent(item scheduling.Event) scheduling.Event {
+	out := item
+	out.Attendees = append([]scheduling.Participant(nil), item.Attendees...)
+	out.Tags = append([]string(nil), item.Tags...)
+	out.Metadata = model.CloneMetadata(item.Metadata)
+	return out
 }
 
 // PersonalPresetResearchPartner returns a single-use scenario that exercises
