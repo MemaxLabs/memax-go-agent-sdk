@@ -924,6 +924,36 @@ func TestQueryAsyncEmitsTenantDeniedBeforeStartupError(t *testing.T) {
 	}
 }
 
+func TestQueryObserverSeesStartupTenantDenial(t *testing.T) {
+	var observed []Event
+	ctx := WithEventObserver(context.Background(), EventObserverFunc(func(_ context.Context, event Event) {
+		observed = append(observed, event)
+	}))
+
+	_, err := Query(ctx, "start", Options{
+		Model:  &fakeModel{},
+		Tenant: tenant.Scope{ID: "tenant-1", SubjectID: "user-1"},
+		TenantValidator: tenant.ValidatorFunc(func(_ context.Context, req tenant.Request) error {
+			if req.Boundary == tenant.BoundarySessionStart {
+				return errors.New("tenant mismatch")
+			}
+			return nil
+		}),
+	})
+	if err == nil || err.Error() != "tenant validation failed: tenant mismatch" {
+		t.Fatalf("Query error = %v, want tenant validation failure", err)
+	}
+	if len(observed) != 2 {
+		t.Fatalf("len(observed) = %d, want 2", len(observed))
+	}
+	if observed[0].Kind != EventTenantDenied || observed[0].Tenant == nil || observed[0].Tenant.Boundary != "session_start" {
+		t.Fatalf("observed[0] = %#v, want tenant denial event", observed[0])
+	}
+	if observed[1].Kind != EventError || observed[1].Err == nil || observed[1].Err.Error() != "tenant mismatch" {
+		t.Fatalf("observed[1] = %#v, want startup error event", observed[1])
+	}
+}
+
 func TestQueryAppliesContextPolicyBeforeModelRequest(t *testing.T) {
 	fake := &fakeModel{turns: [][]model.StreamEvent{
 		{{Kind: model.StreamToolUse, ToolUse: model.ToolUse{ID: "tool-1", Name: "noop", Input: json.RawMessage(`{}`)}}},

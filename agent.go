@@ -58,6 +58,7 @@ func Query(ctx context.Context, prompt string, opts Options) (<-chan Event, erro
 		if cancel != nil {
 			cancel()
 		}
+		observeStartupError(ctx, opts.SessionID, opts.ParentSessionID, err)
 		err = fmt.Errorf("start session: %w", err)
 		querySpan.RecordError(err)
 		querySpan.End()
@@ -77,6 +78,7 @@ func Query(ctx context.Context, prompt string, opts Options) (<-chan Event, erro
 		if cancel != nil {
 			cancel()
 		}
+		observeStartupError(ctx, sess.ID, opts.ParentSessionID, err)
 		err = fmt.Errorf("tenant validation failed: %w", err)
 		querySpan.RecordError(err)
 		querySpan.End()
@@ -91,6 +93,7 @@ func Query(ctx context.Context, prompt string, opts Options) (<-chan Event, erro
 			cancel()
 		}
 		err = fmt.Errorf("session started hook failed: %w", errors.Join(errs...))
+		observeStartupError(ctx, sess.ID, opts.ParentSessionID, err)
 		querySpan.RecordError(err)
 		querySpan.End()
 		return nil, err
@@ -105,6 +108,7 @@ func Query(ctx context.Context, prompt string, opts Options) (<-chan Event, erro
 			cancel()
 		}
 		err = fmt.Errorf("user prompt hook failed: %w", err)
+		observeStartupError(ctx, sess.ID, opts.ParentSessionID, err)
 		querySpan.RecordError(err)
 		querySpan.End()
 		return nil, err
@@ -114,6 +118,7 @@ func Query(ctx context.Context, prompt string, opts Options) (<-chan Event, erro
 			cancel()
 		}
 		err = fmt.Errorf("%s", promptResult.DenyReason)
+		observeStartupError(ctx, sess.ID, opts.ParentSessionID, err)
 		querySpan.RecordError(err)
 		querySpan.End()
 		return nil, err
@@ -129,6 +134,7 @@ func Query(ctx context.Context, prompt string, opts Options) (<-chan Event, erro
 			cancel()
 		}
 		err = fmt.Errorf("append user prompt: %w", err)
+		observeStartupError(ctx, sess.ID, opts.ParentSessionID, err)
 		querySpan.RecordError(err)
 		querySpan.End()
 		return nil, err
@@ -243,6 +249,7 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 		if event.ParentSessionID == "" {
 			event.ParentSessionID = opts.ParentSessionID
 		}
+		observeEvent(ctx, event)
 		select {
 		case <-ctx.Done():
 			return false
