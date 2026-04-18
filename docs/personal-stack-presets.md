@@ -26,7 +26,7 @@ Important:
 
 | Preset | Intended workflow | Policies enabled by default | Preset-specific posture | Example | Eval scenarios |
 | --- | --- | --- | --- | --- | --- |
-| `personal_assistant` | careful personal assistance with durable recall, explicit task tracking, and cautious memory writes | `RequireMemoryApproval`, `SingleUseApprovals`, `InputBoundApprovals` | `MaxTurns=28`, `MaxToolConcurrency=4`, balanced personal-assistant identity, progressive skill disclosure, prompt guidance to recall context before writing new durable memory | none yet | `personal_preset_personal_assistant`, `personal_preset_personal_assistant_memory_approval_recovery` |
+| `personal_assistant` | careful personal assistance with durable recall, explicit task tracking, and cautious memory writes | `RequireMemoryApproval`, `SingleUseApprovals`, `InputBoundApprovals` | `MaxTurns=28`, `MaxToolConcurrency=4`, balanced personal-assistant identity, progressive skill disclosure, prompt guidance to recall context before writing new durable memory | [`examples/personal_stack`](../examples/personal_stack/main.go) | `personal_preset_personal_assistant`, `personal_preset_personal_assistant_memory_approval_recovery` |
 | `research_partner` | longer-horizon personal research, synthesis, and scoped delegation | `RequireMemoryApproval`, `SingleUseApprovals`, `InputBoundApprovals` | `MaxTurns=36`, `MaxToolConcurrency=6`, higher-autonomy research identity, progressive skill disclosure, prompt guidance to separate working notes from durable memory and use scoped delegation when available | none yet | `personal_preset_research_partner` |
 
 ## Reading the table

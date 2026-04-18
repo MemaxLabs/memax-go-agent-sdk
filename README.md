@@ -166,12 +166,13 @@ Additional deterministic examples:
 go run ./examples/session_resume
 go run ./examples/advanced_stack
 go run ./examples/coding_stack
+go run ./examples/personal_stack
 go run ./examples/ci_embedding
 go run ./examples/skills_identity
 go run ./examples/eval_scenarios
 ```
 
-`session_resume` shows how to continue a durable transcript by passing `Options.SessionID`. `advanced_stack` composes task state, checkpointing, context budgeting, tool search, and memory-backed file tools in one run. `coding_stack` now demonstrates a `ci_repair` workflow that hits an approval gate, requests approval explicitly, retries the patch, reruns the check, and verifies before completion. `ci_embedding` shows a bounded, read-only agent run shaped for CI jobs. `skills_identity` shows how an agent profile and relevant skills become deterministic prompt guidance. `eval_scenarios` runs the deterministic autonomy scenario suite and exits non-zero on failure.
+`session_resume` shows how to continue a durable transcript by passing `Options.SessionID`. `advanced_stack` composes task state, checkpointing, context budgeting, tool search, and memory-backed file tools in one run. `coding_stack` now demonstrates a `ci_repair` workflow that hits an approval gate, requests approval explicitly, retries the patch, reruns the check, and verifies before completion. `personal_stack` demonstrates a `personal_assistant` workflow where recalled durable memory changes the saved follow-up preference, approval gates the durable write, and the saved memory is then recalled through the normal tool layer. `ci_embedding` shows a bounded, read-only agent run shaped for CI jobs. `skills_identity` shows how an agent profile and relevant skills become deterministic prompt guidance. `eval_scenarios` runs the deterministic autonomy scenario suite and exits non-zero on failure.
 
 To try the embeddable HTTP shape:
 
