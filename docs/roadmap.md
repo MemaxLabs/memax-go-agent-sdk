@@ -141,6 +141,12 @@ system prompt.
 - Add MCP/tool bridge examples while keeping the core tool contract provider-neutral.
 - Add release automation, API compatibility checks, and generated reference docs.
 - Add security hardening guides for filesystem adapters, approval flows, credentials, and multi-tenant server embedding.
+- Initial tenant scope and admission seams now exist through `tenant.Scope`,
+  `Options.Tenant`, and `Options.TenantValidator`, covering session start,
+  model-request, and tool-use boundaries. Initial `stack/cloudmanaged`
+  quota wiring and adversarial eval coverage now exist through the
+  `managed_worker` preset. Next steps are richer cloudmanaged presets, audit
+  surfaces, and remote-execution backends built on top of the same tenant seam.
 
 ## Phase 7: Opinionated Stacks
 

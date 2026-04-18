@@ -60,7 +60,9 @@ The permanent core:
 - memory injection and lifecycle proposals
 - observability, budgets, and eval contracts
 
-This layer should remain domain-neutral.
+This layer should remain domain-neutral. That includes multi-tenant server
+embedding: the kernel can carry an opaque tenant scope and call a host-owned
+validator, but it should not hard-code any account, billing, or tenancy model.
 
 ### 2. Capability Adapters
 
@@ -96,13 +98,19 @@ personal-intelligence presets
 (`personal_assistant`, `research_partner`). `stack/coding` remains the first
 stack expected to reach competitive maturity; the other stacks should reuse the
 same kernel and adapter seams rather than fork the architecture.
+Initial `stack/cloudmanaged` now exists as a deliberately narrow managed-worker
+assembly: it layers tenant-scope enforcement and per-session quota validation
+onto the kernel's explicit tenant seam without hard-coding billing, remote
+execution, or policy-service semantics into the runtime.
 Each preset now has deterministic end-to-end eval coverage for its normal
 workflow and its defining recovery or delegation path, so preset behavior is
 part of the public contract rather than informal guidance. The navigable preset
 contracts live in [coding-stack-presets.md](coding-stack-presets.md) and
 [personal-stack-presets.md](personal-stack-presets.md), including default
 policy posture, examples, and the specific eval scenario names that enforce the
-surface.
+surface. `stack/cloudmanaged` is earlier in maturity: the initial quota-denial
+eval locks the tenant-admission contract, while richer managed-host presets and
+audit surfaces remain follow-on work.
 
 ## Package Shape
 
@@ -113,6 +121,8 @@ surface.
 - `tool`: registry, tool definition contract, decoder helpers, and executor.
 - `hook`: lifecycle hooks for host policy, audit, and observability.
 - `identity`: reusable agent identity profiles for role, mission, tone, autonomy, and constraints.
+- `tenant`: host-owned tenant scope and admission contracts for multi-tenant
+  embedding, quota routing, and cloud-managed policy.
 - `permission`: reusable permission checkers and policy composition.
 - `prompt`: deterministic system prompt assembly from named parts, identity, tools, skills, and host guidance.
 - `session`: session persistence interface plus in-memory and append-only JSONL implementations.
@@ -347,6 +357,13 @@ concern rather than a special case in orchestration.
 The optional `toolkit/checkpointtools` package provides `create_checkpoint`, `list_checkpoints`, `restore_checkpoint`, and `delete_checkpoint` over the `checkpoint.Manager` interface. The SDK's in-memory manager stores checkpoint metadata and is useful for tests; production managers should connect these operations to a virtual workspace, filesystem snapshot service, database branch, or remote sandbox. Checkpoints are not stored inside session transcripts, but checkpoint records carry session and parent-session IDs for correlation.
 
 Before-tool hooks run after validation and before permission checks. They can deny execution with a model-visible reason. After-tool hooks observe completed results; observer failures are attached to result metadata and do not convert successful tool output into a model-visible failure. Before-final hooks run when the model produces a no-tool assistant answer and before final output validation or result emission; a denial appends a normal user repair prompt so finalization gates remain transcript-visible and recoverable. `Options.MaxFinalDenials` bounds these repair attempts; zero uses the SDK default and negative disables before-final retries.
+
+For multi-tenant hosts, `Options.Tenant` carries the run's opaque tenant scope
+through model requests, tool runtime, and lifecycle hooks. `Options.TenantValidator`
+lets the host enforce admission at three explicit boundaries: session start or
+resume, outbound model request, and tool use after schema validation but before
+hooks, permissions, or execution. This keeps tenancy policy transcript-visible
+and host-controlled without baking any specific tenancy model into the kernel.
 
 Session lifecycle hooks cover session start/end, user prompt submission, stop events, and context-window application. User prompt hooks may rewrite or deny the prompt before it is persisted. Session start/end, stop, and context-applied hooks are observational; their errors are surfaced as agent errors at stable lifecycle boundaries.
 

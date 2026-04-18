@@ -86,6 +86,8 @@ Coding-oriented adapters and toolkits:
   note/document tools, metadata-first messaging tools, metadata-first
   scheduling tools, task, approval, skill, and delegation-oriented personal
   workflows
+- initial `stack/cloudmanaged` assembly for tenant-scoped managed-worker
+  workflows with explicit tenant admission and per-session quota validation
 - initial SQLite-backed scheduling adapter for durable local calendar backends
 - skill discovery tools
 
