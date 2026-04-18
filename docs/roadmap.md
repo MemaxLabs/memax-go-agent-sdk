@@ -154,13 +154,15 @@ system prompt.
   embeddings and more adversarial preset suites tuned for competitive coding
   workflows.
 - Initial `stack/personal` assembly now exists with durable-memory,
-  metadata-first notes/docs tools, task, approval, progressive-skill, and
-  scoped-delegation wiring, plus named workflow presets
+  metadata-first notes/docs tools, metadata-first messaging tools, task,
+  approval, progressive-skill, and scoped-delegation wiring, plus named
+  workflow presets
   (`personal_assistant`, `research_partner`). Initial deterministic eval
   coverage now exercises durable-memory approval recovery, note-first recall,
-  and scoped delegation with parent-visible task progress. Next steps are
-  broader host adapters for messaging and scheduling, plus more adversarial
-  preset suites for privacy-sensitive and long-horizon personal workflows.
+  message-thread recall, message approval recovery, and scoped delegation with
+  parent-visible task progress. Next steps are broader host adapters for
+  scheduling plus more adversarial preset suites for privacy-sensitive and
+  long-horizon personal workflows.
 - Add `stack/cloudmanaged` for multi-tenant, server-embedded, remote-execution
   products with durable jobs, tenancy-aware policy, quotas, audit hooks, and
   managed-agent DX.

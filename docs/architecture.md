@@ -67,7 +67,8 @@ This layer should remain domain-neutral.
 Optional packages that let hosts expose real powers to the model:
 
 - coding: workspace, patch, verify, command, managed sessions, sandbox backends
-- personal intelligence: browser, docs, email, calendar, notes, knowledge
+- personal intelligence: browser, docs, email, calendar, notes, messaging,
+  knowledge
 - managed cloud: remote execution, approval surfaces, tenancy-aware policy,
   durable jobs, quotas, and audit integrations
 
@@ -89,8 +90,9 @@ Initial `stack/coding` and `stack/personal` packages now exist. `stack/coding`
 assembles workspace, command, verification, approval, task/planner, and policy
 defaults into a reusable coding runtime profile with named workflow presets
 (`safe_local`, `ci_repair`, `interactive_dev`). `stack/personal` assembles
-durable memory, note/document tools, task/planner, approval, skill-disclosure,
-and scoped delegation defaults into personal-intelligence presets
+durable memory, note/document tools, message-thread tools, task/planner,
+approval, skill-disclosure, and scoped delegation defaults into
+personal-intelligence presets
 (`personal_assistant`, `research_partner`). `stack/coding` remains the first
 stack expected to reach competitive maturity; the other stacks should reuse the
 same kernel and adapter seams rather than fork the architecture.
@@ -120,6 +122,8 @@ surface.
   distillation proposals.
 - `notes`: host-owned note and lightweight document search/read/write
   contracts for personal-intelligence adapters.
+- `messaging`: host-owned message-thread search/read/send contracts for
+  personal-intelligence adapters.
 - `planner`: host-owned plan and task-source contracts for strategy injection.
 - `budget`: provider-neutral run-budget contracts and policies.
 - `output`: provider-neutral structured final-output contracts.
@@ -148,6 +152,8 @@ gateway needs a nonstandard route.
 - `toolkit/skilltools`: optional skill discovery tools over `skill.Source`.
 - `toolkit/notetools`: optional metadata-first note/document search, full-note
   read, and note mutation tools over `notes` contracts.
+- `toolkit/messagetools`: optional metadata-first message-thread search,
+  full-thread read, and outbound send tools over `messaging` contracts.
 - `toolkit/workspacetools`: optional workspace read/list/patch/diff/checkpoint/restore tools over `workspace.Store`.
 - `toolkit/commandtools`: optional command execution tools over a host-owned
   runner. The reference OS runner launches argv directly without an implicit
@@ -510,6 +516,16 @@ mutation capabilities. The optional `toolkit/notetools` package exposes
 `search_notes`, `read_note`, `save_note`, and `delete_note`, keeping larger
 personal knowledge artifacts progressive and transcript-visible instead of
 turning note search into hidden prompt stuffing.
+
+`messaging` provides the analogous seam for host-owned message threads and
+conversation backends. `messaging.Searcher` returns metadata-first thread
+results suited for discovery, `messaging.Reader` loads full thread content only
+when the model explicitly asks for it, and `messaging.Sender` remains an
+optional outbound mutation capability. The optional `toolkit/messagetools`
+package exposes `search_message_threads`, `read_message_thread`, and
+`send_message`, so recall and reply flows stay progressive, transcript-visible,
+and approval-gated through normal tool and hook policy instead of hidden prompt
+stuffing or direct transport access.
 
 Distillers receive the durable message snapshot already available to the turn,
 including the final assistant message. That avoids a second session-store read

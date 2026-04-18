@@ -83,8 +83,8 @@ Coding-oriented adapters and toolkits:
   host-owned backends
 - initial `stack/coding` assembly for batteries-included coding workflows
 - initial `stack/personal` assembly for durable-memory, metadata-first
-  note/document tools, task, approval, skill, and delegation-oriented personal
-  workflows
+  note/document tools, metadata-first messaging tools, task, approval, skill,
+  and delegation-oriented personal workflows
 - skill discovery tools
 
 `stack/coding` now exposes named presets so hosts can start from a workflow
@@ -135,7 +135,7 @@ preset contract, default policy posture, and authoritative eval scenario names.
 
 | Preset | Intended workflow | Eval-backed coverage |
 | --- | --- | --- |
-| `personal_assistant` | careful personal assistance with durable recall plus approval-gated memory and note writes | `personal_preset_personal_assistant`, `personal_preset_personal_assistant_memory_approval_recovery`, `personal_preset_personal_assistant_note_recall` |
+| `personal_assistant` | careful personal assistance with durable recall plus approval-gated memory, note, and message writes | `personal_preset_personal_assistant`, `personal_preset_personal_assistant_memory_approval_recovery`, `personal_preset_personal_assistant_note_recall`, `personal_preset_personal_assistant_message_recall`, `personal_preset_personal_assistant_message_approval_recovery` |
 | `research_partner` | longer-horizon personal research and scoped delegation | `personal_preset_research_partner` |
 
 ## Try It
@@ -169,12 +169,13 @@ go run ./examples/advanced_stack
 go run ./examples/coding_stack
 go run ./examples/personal_stack
 go run ./examples/personal_notes_stack
+go run ./examples/personal_messages_stack
 go run ./examples/ci_embedding
 go run ./examples/skills_identity
 go run ./examples/eval_scenarios
 ```
 
-`session_resume` shows how to continue a durable transcript by passing `Options.SessionID`. `advanced_stack` composes task state, checkpointing, context budgeting, tool search, and memory-backed file tools in one run. `coding_stack` now demonstrates a `ci_repair` workflow that hits an approval gate, requests approval explicitly, retries the patch, reruns the check, and verifies before completion. `personal_stack` demonstrates a `personal_assistant` workflow where recalled durable memory changes the saved follow-up preference, approval gates the durable write, and the saved memory is then recalled through the normal tool layer. `personal_notes_stack` demonstrates the note-first variant: search metadata, read the relevant note, request approval for a new reusable note, and save content that reflects the recalled note style. `ci_embedding` shows a bounded, read-only agent run shaped for CI jobs. `skills_identity` shows how an agent profile and relevant skills become deterministic prompt guidance. `eval_scenarios` runs the deterministic autonomy scenario suite and exits non-zero on failure.
+`session_resume` shows how to continue a durable transcript by passing `Options.SessionID`. `advanced_stack` composes task state, checkpointing, context budgeting, tool search, and memory-backed file tools in one run. `coding_stack` now demonstrates a `ci_repair` workflow that hits an approval gate, requests approval explicitly, retries the patch, reruns the check, and verifies before completion. `personal_stack` demonstrates a `personal_assistant` workflow where recalled durable memory changes the saved follow-up preference, approval gates the durable write, and the saved memory is then recalled through the normal tool layer. `personal_notes_stack` demonstrates the note-first variant: search metadata, read the relevant note, request approval for a new reusable note, and save content that reflects the recalled note style. `personal_messages_stack` demonstrates the thread-first messaging variant: search thread metadata, read the relevant conversation, request approval for an outbound reply, and send content that reflects the recalled guidance. `ci_embedding` shows a bounded, read-only agent run shaped for CI jobs. `skills_identity` shows how an agent profile and relevant skills become deterministic prompt guidance. `eval_scenarios` runs the deterministic autonomy scenario suite and exits non-zero on failure.
 
 To try the embeddable HTTP shape:
 

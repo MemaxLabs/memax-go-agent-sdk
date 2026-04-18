@@ -9,6 +9,7 @@ import (
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
 	"github.com/MemaxLabs/memax-go-agent-sdk/agenteval"
 	"github.com/MemaxLabs/memax-go-agent-sdk/memory"
+	"github.com/MemaxLabs/memax-go-agent-sdk/messaging"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/notes"
 	"github.com/MemaxLabs/memax-go-agent-sdk/session"
@@ -16,6 +17,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/agentpolicy"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/approvaltools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/memorytools"
+	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/messagetools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/notetools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/subagents"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/tasktools"
@@ -401,7 +403,7 @@ func PersonalPresetAssistantNoteRecall() agenteval.Case {
 					}
 					initialPrompt := requests[0].SystemPrompt
 					for _, want := range []string{
-						"Search note and document metadata before loading full note content or saving replacements.",
+						"Search note, document, and message-thread metadata before loading full content or sending new replies.",
 						"[in_progress] task-1",
 						notetools.SearchToolName,
 						notetools.ReadToolName,
@@ -442,6 +444,340 @@ func PersonalPresetAssistantNoteRecall() agenteval.Case {
 					}
 					if !strings.Contains(item.Content, "owner and due-date bullets") {
 						return fmt.Errorf("saved note content = %q, want recalled style", item.Content)
+					}
+					return nil
+				},
+			},
+		},
+	}
+}
+
+// PersonalPresetAssistantMessageRecall returns a single-use scenario where the
+// personal_assistant preset searches message-thread metadata, reads one seeded
+// thread, requests approval, sends a reply that reflects the recalled thread
+// guidance, and confirms the updated thread remains discoverable.
+func PersonalPresetAssistantMessageRecall() agenteval.Case {
+	messageStore := messaging.NewThreadStore([]messaging.Thread{{
+		ID:      "thread-1",
+		Subject: "Project kickoff follow-up",
+		Summary: "Alex wants concise replies with owners and due dates.",
+		Participants: []messaging.Participant{
+			{Name: "Alex", Address: "alex@example.com"},
+		},
+		Tags: []string{"project", "follow-up"},
+		Messages: []messaging.Message{{
+			ID:        "thread-1-msg-1",
+			ThreadID:  "thread-1",
+			Subject:   "Project kickoff follow-up",
+			Summary:   "Keep replies concise.",
+			Body:      "Please keep replies concise and include owners and due dates.",
+			Direction: messaging.DirectionInbound,
+			Sender:    messaging.Participant{Name: "Alex", Address: "alex@example.com"},
+		}},
+	}})
+	taskStore := tasktools.NewMemoryStore([]tasktools.Task{{
+		ID:     "task-1",
+		Title:  "reply to kickoff follow-up",
+		Status: tasktools.StatusInProgress,
+		Notes:  "search message thread metadata first, then read the thread before sending a reply",
+	}})
+	sendInput := `{
+		"thread_id":"thread-1",
+		"body":"Thanks. I'll keep the update concise and call out owners and due dates in the follow-up.",
+		"recipients":[{"name":"Alex","address":"alex@example.com"}]
+	}`
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "search-1",
+				Name:  messagetools.SearchToolName,
+				Input: json.RawMessage(`{"query":"kickoff follow-up owners due dates","limit":3}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "read-1",
+				Name:  messagetools.ReadToolName,
+				Input: json.RawMessage(`{"thread_id":"thread-1"}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "approval-1",
+				Name: approvaltools.ToolName,
+				Input: json.RawMessage(`{
+					"action":"send_message",
+					"reason":"sending an outbound project follow-up requires approval",
+					"tool_input":` + sendInput + `
+				}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "send-1",
+				Name:  messagetools.SendToolName,
+				Input: json.RawMessage(sendInput),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "search-2",
+				Name:  messagetools.SearchToolName,
+				Input: json.RawMessage(`{"query":"kickoff follow-up concise owners due dates","limit":3}`),
+			},
+		}},
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "Personal assistant recalled the thread guidance, sent an approved reply, and confirmed the thread remains discoverable."}},
+	)
+
+	config, configErr := personal.PresetPersonalAssistant.Config()
+	config.Messages = messagetools.Config{
+		Searcher:     messageStore,
+		Reader:       messageStore,
+		Sender:       messageStore,
+		DefaultLimit: 3,
+	}
+	config.Tasks = taskStore
+	config.Approval.Approver = approvaltools.StaticApprover{
+		Decision: approvaltools.Decision{
+			Approved: true,
+			Reason:   "approved outbound project follow-up",
+		},
+	}
+	stack, stackErr := personal.New(config)
+
+	return agenteval.Case{
+		Name:    "personal_preset_personal_assistant_message_recall",
+		Prompt:  "Reply to the kickoff follow-up carefully, but search message metadata first and read the thread before sending anything.",
+		Options: stack.WithModel(modelClient),
+		Assertions: []agenteval.Assertion{
+			toolConstructionSucceeded(configErr, stackErr),
+			agenteval.ToolUsed(messagetools.SearchToolName),
+			agenteval.ToolUsed(messagetools.ReadToolName),
+			agenteval.ToolUsed(approvaltools.ToolName),
+			agenteval.ToolUsed(messagetools.SendToolName),
+			agenteval.EventKindEmitted(memaxagent.EventApprovalRequested),
+			agenteval.EventKindEmitted(memaxagent.EventApprovalGranted),
+			agenteval.EventKindEmitted(memaxagent.EventApprovalConsumed),
+			agenteval.NoToolErrors(),
+			agenteval.FinalEquals("Personal assistant recalled the thread guidance, sent an approved reply, and confirmed the thread remains discoverable."),
+			requestCountEquals(modelClient, 6),
+			{
+				Name: "assistant preset prompt includes message workflow guidance",
+				Check: func(agenteval.Result) error {
+					requests := modelClient.Requests()
+					if len(requests) != 6 {
+						return fmt.Errorf("requests = %d, want 6", len(requests))
+					}
+					initialPrompt := requests[0].SystemPrompt
+					for _, want := range []string{
+						"Search note, document, and message-thread metadata before loading full content or sending new replies.",
+						"[in_progress] task-1",
+						messagetools.SearchToolName,
+						messagetools.ReadToolName,
+						messagetools.SendToolName,
+					} {
+						if !strings.Contains(initialPrompt, want) {
+							return fmt.Errorf("initial prompt missing %q:\n%s", want, initialPrompt)
+						}
+					}
+					return nil
+				},
+			},
+			{
+				Name: "message recall changes the approved outbound reply",
+				Check: func(result agenteval.Result) error {
+					toolResults := result.ToolResults()
+					if len(toolResults) != 5 {
+						return fmt.Errorf("tool results = %#v, want exactly search read approval send search", toolResults)
+					}
+					if strings.Contains(toolResults[0].Content, "Please keep replies concise and include owners and due dates.") {
+						return fmt.Errorf("metadata search leaked full thread content: %#v", toolResults[0])
+					}
+					if toolResults[1].IsError || !strings.Contains(toolResults[1].Content, "Please keep replies concise and include owners and due dates.") {
+						return fmt.Errorf("read result = %#v, want recalled thread content", toolResults[1])
+					}
+					if toolResults[2].IsError || toolResults[2].Metadata[approvaltools.MetadataApprovalApproved] != true {
+						return fmt.Errorf("approval result = %#v, want granted approval", toolResults[2])
+					}
+					if toolResults[3].IsError || !strings.Contains(toolResults[3].Content, "sent message Project kickoff follow-up") {
+						return fmt.Errorf("send result = %#v, want send success", toolResults[3])
+					}
+					if toolResults[3].Metadata["created_thread"] != false {
+						return fmt.Errorf("send result metadata = %#v, want reply to existing thread", toolResults[3].Metadata)
+					}
+					if toolResults[4].IsError || !strings.Contains(toolResults[4].Content, "Project kickoff follow-up") {
+						return fmt.Errorf("search result = %#v, want thread metadata after send", toolResults[4])
+					}
+					thread, err := messageStore.ReadThread(context.Background(), messaging.ReadRequest{ThreadID: "thread-1"})
+					if err != nil {
+						return err
+					}
+					if len(thread.Messages) != 2 {
+						return fmt.Errorf("thread messages = %d, want 2", len(thread.Messages))
+					}
+					last := thread.Messages[len(thread.Messages)-1]
+					if !strings.Contains(last.Body, "owners and due dates") {
+						return fmt.Errorf("outbound message body = %q, want recalled style", last.Body)
+					}
+					return nil
+				},
+			},
+		},
+	}
+}
+
+// PersonalPresetAssistantMessageApprovalRecovery returns a single-use scenario
+// where the personal_assistant preset denies an outbound reply until the model
+// requests approval and retries the send against the same thread.
+func PersonalPresetAssistantMessageApprovalRecovery() agenteval.Case {
+	messageStore := messaging.NewThreadStore([]messaging.Thread{{
+		ID:      "thread-1",
+		Subject: "Project kickoff follow-up",
+		Summary: "Alex wants concise replies with owners and due dates.",
+		Participants: []messaging.Participant{
+			{Name: "Alex", Address: "alex@example.com"},
+		},
+		Tags: []string{"project", "follow-up"},
+		Messages: []messaging.Message{{
+			ID:        "thread-1-msg-1",
+			ThreadID:  "thread-1",
+			Subject:   "Project kickoff follow-up",
+			Summary:   "Keep replies concise.",
+			Body:      "Please keep replies concise and include owners and due dates.",
+			Direction: messaging.DirectionInbound,
+			Sender:    messaging.Participant{Name: "Alex", Address: "alex@example.com"},
+		}},
+	}})
+	taskStore := tasktools.NewMemoryStore([]tasktools.Task{{
+		ID:     "task-1",
+		Title:  "reply to kickoff follow-up",
+		Status: tasktools.StatusInProgress,
+		Notes:  "search message thread metadata first, then read the thread before sending a reply",
+	}})
+	sendInput := `{
+		"thread_id":"thread-1",
+		"body":"Thanks. I'll keep the update concise and call out owners and due dates in the follow-up.",
+		"recipients":[{"name":"Alex","address":"alex@example.com"}]
+	}`
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "search-1",
+				Name:  messagetools.SearchToolName,
+				Input: json.RawMessage(`{"query":"kickoff follow-up owners due dates","limit":3}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "read-1",
+				Name:  messagetools.ReadToolName,
+				Input: json.RawMessage(`{"thread_id":"thread-1"}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "send-1",
+				Name:  messagetools.SendToolName,
+				Input: json.RawMessage(sendInput),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "approval-1",
+				Name: approvaltools.ToolName,
+				Input: json.RawMessage(`{
+					"action":"send_message",
+					"reason":"sending an outbound project follow-up requires approval",
+					"tool_input":` + sendInput + `
+				}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "send-2",
+				Name:  messagetools.SendToolName,
+				Input: json.RawMessage(sendInput),
+			},
+		}},
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "Personal assistant recovered after message approval and sent the requested reply."}},
+	)
+
+	config, configErr := personal.PresetPersonalAssistant.Config()
+	config.Messages = messagetools.Config{
+		Searcher:     messageStore,
+		Reader:       messageStore,
+		Sender:       messageStore,
+		DefaultLimit: 3,
+	}
+	config.Tasks = taskStore
+	config.Approval.Approver = approvaltools.StaticApprover{
+		Decision: approvaltools.Decision{
+			Approved: true,
+			Reason:   "approved outbound project follow-up",
+		},
+	}
+	stack, stackErr := personal.New(config)
+
+	return agenteval.Case{
+		Name:    "personal_preset_personal_assistant_message_approval_recovery",
+		Prompt:  "Reply to the kickoff follow-up carefully and recover through the required approval flow if the first send is denied.",
+		Options: stack.WithModel(modelClient),
+		Assertions: []agenteval.Assertion{
+			toolConstructionSucceeded(configErr, stackErr),
+			agenteval.ToolUsed(messagetools.SearchToolName),
+			agenteval.ToolUsed(messagetools.ReadToolName),
+			agenteval.ToolUsed(messagetools.SendToolName),
+			agenteval.ToolUsed(approvaltools.ToolName),
+			agenteval.EventKindEmitted(memaxagent.EventApprovalRequested),
+			agenteval.EventKindEmitted(memaxagent.EventApprovalGranted),
+			agenteval.EventKindEmitted(memaxagent.EventApprovalConsumed),
+			agenteval.FinalEquals("Personal assistant recovered after message approval and sent the requested reply."),
+			requestCountEquals(modelClient, 6),
+			{
+				Name: "message approval recovery drives the outbound reply",
+				Check: func(result agenteval.Result) error {
+					toolResults := result.ToolResults()
+					if len(toolResults) != 5 {
+						return fmt.Errorf("tool results = %#v, want exactly search read denied send approval send", toolResults)
+					}
+					if strings.Contains(toolResults[0].Content, "Please keep replies concise and include owners and due dates.") {
+						return fmt.Errorf("metadata search leaked full thread content: %#v", toolResults[0])
+					}
+					if toolResults[1].IsError || !strings.Contains(toolResults[1].Content, "Please keep replies concise and include owners and due dates.") {
+						return fmt.Errorf("read result = %#v, want recalled thread content", toolResults[1])
+					}
+					if !toolResults[2].IsError || !strings.Contains(toolResults[2].Content, agentpolicy.ApprovalBeforeToolReason(messagetools.SendToolName)) {
+						return fmt.Errorf("first send result = %#v, want approval denial", toolResults[2])
+					}
+					if toolResults[3].IsError || toolResults[3].Metadata[approvaltools.MetadataApprovalApproved] != true {
+						return fmt.Errorf("approval result = %#v, want granted approval", toolResults[3])
+					}
+					if toolResults[4].IsError || !strings.Contains(toolResults[4].Content, "sent message Project kickoff follow-up") {
+						return fmt.Errorf("second send result = %#v, want send success", toolResults[4])
+					}
+					if toolResults[4].Metadata["created_thread"] != false {
+						return fmt.Errorf("second send metadata = %#v, want reply to existing thread", toolResults[4].Metadata)
+					}
+					thread, err := messageStore.ReadThread(context.Background(), messaging.ReadRequest{ThreadID: "thread-1"})
+					if err != nil {
+						return err
+					}
+					if len(thread.Messages) != 2 {
+						return fmt.Errorf("thread messages = %d, want 2", len(thread.Messages))
+					}
+					last := thread.Messages[len(thread.Messages)-1]
+					if !strings.Contains(last.Body, "owners and due dates") {
+						return fmt.Errorf("outbound message body = %q, want recalled style", last.Body)
 					}
 					return nil
 				},

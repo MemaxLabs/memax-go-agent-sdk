@@ -67,11 +67,12 @@ func PersonalAssistant() Config {
 				Constraints: []string{
 					"favor recalling existing context before creating new durable memory",
 					"search note and document metadata before loading full content or saving replacements",
+					"search message thread metadata before loading full threads or sending replies",
 					"keep durable memory concise, specific, and clearly reusable",
-					"treat personal data and long-lived notes as approval-sensitive state",
+					"treat personal data, long-lived notes, and outbound messages as approval-sensitive state",
 				},
 			},
-			AppendSystemPrompt: "Recall durable user and project context before writing new memory. Search note and document metadata before loading full note content or saving replacements. Keep task state explicit, prefer concise summaries, and use approvals before mutating long-lived personal context.",
+			AppendSystemPrompt: "Recall durable user and project context before writing new memory. Search note, document, and message-thread metadata before loading full content or sending new replies. Keep task state explicit, prefer concise summaries, and use approvals before mutating long-lived personal context.",
 		},
 		SkillDisclosure: skill.DisclosureProgressive,
 		Approval: approvaltools.Config{
@@ -98,11 +99,12 @@ func ResearchPartner() Config {
 				Constraints: []string{
 					"separate tentative working notes from durable personal memory",
 					"search note and document metadata before reading or updating larger notes",
+					"search message thread metadata before reading full conversations or drafting outbound replies",
 					"use delegation for independent research threads when the host exposes it",
 					"keep final conclusions traceable to the gathered evidence",
 				},
 			},
-			AppendSystemPrompt: "Use scoped delegation for independent research threads when it helps. Search note and document metadata before loading or revising larger notes. Separate working notes from durable memory, keep conclusions traceable, and avoid saving long-lived memories without clear future value.",
+			AppendSystemPrompt: "Use scoped delegation for independent research threads when it helps. Search note, document, and message-thread metadata before loading larger items or drafting replies. Separate working notes from durable memory, keep conclusions traceable, and avoid saving long-lived memories without clear future value.",
 		},
 		SkillDisclosure: skill.DisclosureProgressive,
 		Approval: approvaltools.Config{

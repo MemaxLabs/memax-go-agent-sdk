@@ -8,6 +8,7 @@ import (
 
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
 	"github.com/MemaxLabs/memax-go-agent-sdk/memory"
+	"github.com/MemaxLabs/memax-go-agent-sdk/messaging"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/notes"
 	"github.com/MemaxLabs/memax-go-agent-sdk/planner"
@@ -16,6 +17,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/agentpolicy"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/approvaltools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/memorytools"
+	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/messagetools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/notetools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/subagents"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/tasktools"
@@ -37,6 +39,23 @@ func TestNewAssemblesPersonalRuntime(t *testing.T) {
 		Kind:    "brief",
 		Summary: "Template for concise meeting briefs",
 		Content: "Use one short summary paragraph followed by owner and due-date bullets.",
+	}})
+	messageStore := messaging.NewThreadStore([]messaging.Thread{{
+		ID:      "thread-1",
+		Subject: "Project kickoff follow-up",
+		Summary: "Alex asked for concise replies with owners and due dates.",
+		Participants: []messaging.Participant{
+			{Name: "Alex", Address: "alex@example.com"},
+		},
+		Messages: []messaging.Message{{
+			ID:        "thread-1-msg-1",
+			ThreadID:  "thread-1",
+			Subject:   "Project kickoff follow-up",
+			Summary:   "Keep replies concise.",
+			Body:      "Please keep replies concise and include owners and due dates.",
+			Direction: messaging.DirectionInbound,
+			Sender:    messaging.Participant{Name: "Alex", Address: "alex@example.com"},
+		}},
 	}})
 	tasks := tasktools.NewMemoryStore([]tasktools.Task{{
 		ID:     "task-1",
@@ -62,6 +81,11 @@ func TestNewAssemblesPersonalRuntime(t *testing.T) {
 			Writer:   noteStore,
 			Deleter:  noteStore,
 		},
+		Messages: messagetools.Config{
+			Searcher: messageStore,
+			Reader:   messageStore,
+			Sender:   messageStore,
+		},
 		Tasks: tasks,
 		SkillSource: skill.StaticSource{{
 			Name:        "meeting-preferences",
@@ -86,6 +110,7 @@ func TestNewAssemblesPersonalRuntime(t *testing.T) {
 		Policies: Policies{
 			RequireMemoryApproval:     true,
 			RequireNoteApproval:       true,
+			RequireMessageApproval:    true,
 			RequireDelegationApproval: true,
 			SingleUseApprovals:        true,
 			InputBoundApprovals:       true,
@@ -125,6 +150,9 @@ func TestNewAssemblesPersonalRuntime(t *testing.T) {
 		notetools.ReadToolName,
 		notetools.SaveToolName,
 		notetools.DeleteToolName,
+		messagetools.SearchToolName,
+		messagetools.ReadToolName,
+		messagetools.SendToolName,
 		tasktools.ListToolName,
 		tasktools.UpsertToolName,
 		tasktools.DeleteToolName,
@@ -203,6 +231,32 @@ func TestNewAssemblesPersonalRuntime(t *testing.T) {
 		t.Fatalf("approved note save should succeed: %s", result.Content)
 	}
 
+	sendInput := map[string]any{
+		"thread_id": "thread-1",
+		"body":      "Thanks. I will keep replies concise and call out owners and due dates.",
+		"recipients": []map[string]any{
+			{"name": "Alex", "address": "alex@example.com"},
+		},
+	}
+	result = runTool(t, exec, messagetools.SendToolName, sendInput)
+	if !result.IsError || !strings.Contains(result.Content, agentpolicy.ApprovalBeforeToolReason(messagetools.SendToolName)) {
+		t.Fatalf("expected message approval denial, got error=%v content=%q", result.IsError, result.Content)
+	}
+
+	result = runTool(t, exec, approvaltools.ToolName, map[string]any{
+		"action":     messagetools.SendToolName,
+		"reason":     "send a concise follow-up through the personal messaging backend",
+		"tool_input": sendInput,
+	})
+	if result.IsError {
+		t.Fatalf("message approval should succeed: %s", result.Content)
+	}
+
+	result = runTool(t, exec, messagetools.SendToolName, sendInput)
+	if result.IsError {
+		t.Fatalf("approved message send should succeed: %s", result.Content)
+	}
+
 	allMemories, err := memories.Memories(ctx, memory.Request{})
 	if err != nil {
 		t.Fatalf("Memories() error = %v", err)
@@ -227,6 +281,9 @@ func TestNewAssemblesPersonalRuntime(t *testing.T) {
 		notetools.ReadToolName,
 		notetools.SaveToolName,
 		notetools.DeleteToolName,
+		messagetools.SearchToolName,
+		messagetools.ReadToolName,
+		messagetools.SendToolName,
 		tasktools.ListToolName,
 		approvaltools.ToolName,
 		subagents.ToolName,
@@ -300,6 +357,58 @@ func TestConfiguredSubagentsInheritReadOnlyNotesOnly(t *testing.T) {
 	}
 }
 
+func TestConfiguredSubagentsInheritReadOnlyMessagesOnly(t *testing.T) {
+	t.Parallel()
+
+	messageStore := messaging.NewThreadStore([]messaging.Thread{{
+		ID:      "thread-1",
+		Subject: "Project kickoff follow-up",
+		Summary: "Alex wants concise replies.",
+		Participants: []messaging.Participant{
+			{Name: "Alex", Address: "alex@example.com"},
+		},
+		Messages: []messaging.Message{{
+			ID:        "thread-1-msg-1",
+			ThreadID:  "thread-1",
+			Subject:   "Project kickoff follow-up",
+			Summary:   "Keep replies concise.",
+			Body:      "Please keep replies concise and include owners.",
+			Direction: messaging.DirectionInbound,
+			Sender:    messaging.Participant{Name: "Alex", Address: "alex@example.com"},
+		}},
+	}})
+
+	cfg, err := configuredSubagents(Config{
+		Base: memaxagent.Options{},
+		Messages: messagetools.Config{
+			Searcher: messageStore,
+			Reader:   messageStore,
+			Sender:   messageStore,
+		},
+		Subagents: &subagents.Config{
+			Agents: []subagents.Agent{{
+				Name:        "researcher",
+				Description: "Investigates questions.",
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("configuredSubagents() error = %v", err)
+	}
+	if cfg.DefaultOptions.Tools == nil {
+		t.Fatal("configuredSubagents() missing inherited child registry")
+	}
+	names := toolNames(cfg.DefaultOptions.Tools)
+	for _, want := range []string{messagetools.SearchToolName, messagetools.ReadToolName} {
+		if !contains(names, want) {
+			t.Fatalf("child registry missing %q; got %v", want, names)
+		}
+	}
+	if contains(names, messagetools.SendToolName) {
+		t.Fatalf("child registry unexpectedly inherited %q; got %v", messagetools.SendToolName, names)
+	}
+}
+
 func TestNewRejectsApprovalGatesWithoutApprover(t *testing.T) {
 	t.Parallel()
 
@@ -328,6 +437,18 @@ func TestNewRejectsApprovalGatesWithoutApprover(t *testing.T) {
 	}
 
 	_, err = New(Config{
+		Messages: messagetools.Config{
+			Sender: messaging.NewThreadStore(nil),
+		},
+		Policies: Policies{
+			RequireMessageApproval: true,
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "message approval requires approval approver") {
+		t.Fatalf("New() error = %v, want message approval validation", err)
+	}
+
+	_, err = New(Config{
 		Subagents: &subagents.Config{
 			Agents: []subagents.Agent{{Name: "researcher", Description: "Investigates questions."}},
 		},
@@ -347,8 +468,8 @@ func TestPresetsAndDefaultPolicies(t *testing.T) {
 		t.Fatalf("Presets() = %v, want stable personal presets", got)
 	}
 	policies := DefaultPolicies()
-	if !policies.RequireMemoryApproval || !policies.RequireNoteApproval || !policies.SingleUseApprovals || !policies.InputBoundApprovals || policies.RequireDelegationApproval {
-		t.Fatalf("DefaultPolicies() = %#v, want memory and note approval on and delegation approval off", policies)
+	if !policies.RequireMemoryApproval || !policies.RequireNoteApproval || !policies.RequireMessageApproval || !policies.SingleUseApprovals || !policies.InputBoundApprovals || policies.RequireDelegationApproval {
+		t.Fatalf("DefaultPolicies() = %#v, want memory, note, and message approval on and delegation approval off", policies)
 	}
 
 	if _, err := PresetPersonalAssistant.Config(); err != nil {
