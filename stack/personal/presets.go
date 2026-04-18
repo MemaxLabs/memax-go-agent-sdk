@@ -52,7 +52,7 @@ func (p Preset) Config() (Config, error) {
 
 // PersonalAssistant returns a careful personal-assistant profile. It favors
 // durable context recall before mutation, explicit task tracking, and a
-// conservative approval posture for memory writes.
+// conservative approval posture for memory and note writes.
 func PersonalAssistant() Config {
 	return Config{
 		Base: memaxagent.Options{
@@ -66,11 +66,12 @@ func PersonalAssistant() Config {
 				Autonomy: identity.AutonomyBalanced,
 				Constraints: []string{
 					"favor recalling existing context before creating new durable memory",
+					"search note and document metadata before loading full content or saving replacements",
 					"keep durable memory concise, specific, and clearly reusable",
 					"treat personal data and long-lived notes as approval-sensitive state",
 				},
 			},
-			AppendSystemPrompt: "Recall durable user and project context before writing new memory. Keep task state explicit, prefer concise summaries, and use approvals before mutating long-lived personal context.",
+			AppendSystemPrompt: "Recall durable user and project context before writing new memory. Search note and document metadata before loading full note content or saving replacements. Keep task state explicit, prefer concise summaries, and use approvals before mutating long-lived personal context.",
 		},
 		SkillDisclosure: skill.DisclosureProgressive,
 		Approval: approvaltools.Config{
@@ -96,11 +97,12 @@ func ResearchPartner() Config {
 				Autonomy: identity.AutonomyHigh,
 				Constraints: []string{
 					"separate tentative working notes from durable personal memory",
+					"search note and document metadata before reading or updating larger notes",
 					"use delegation for independent research threads when the host exposes it",
 					"keep final conclusions traceable to the gathered evidence",
 				},
 			},
-			AppendSystemPrompt: "Use scoped delegation for independent research threads when it helps. Separate working notes from durable memory, keep conclusions traceable, and avoid saving long-lived memories without clear future value.",
+			AppendSystemPrompt: "Use scoped delegation for independent research threads when it helps. Search note and document metadata before loading or revising larger notes. Separate working notes from durable memory, keep conclusions traceable, and avoid saving long-lived memories without clear future value.",
 		},
 		SkillDisclosure: skill.DisclosureProgressive,
 		Approval: approvaltools.Config{

@@ -11,6 +11,7 @@ Both presets start from the same default governance baseline via
 `personal.DefaultPolicies()`:
 
 - `RequireMemoryApproval`
+- `RequireNoteApproval`
 - `SingleUseApprovals`
 - `InputBoundApprovals`
 
@@ -18,6 +19,8 @@ Important:
 
 - durable-memory approval only applies when the host exposes mutable memory
   tools (`save_memory` and/or `delete_memory`)
+- note approval only applies when the host exposes mutable note tools
+  (`save_note` and/or `delete_note`)
 - delegation approval is opt-in and stays off unless the host enables it
 - approval gates still require an `approvaltools.Approver`; presets do not
   invent one implicitly
@@ -26,8 +29,8 @@ Important:
 
 | Preset | Intended workflow | Policies enabled by default | Preset-specific posture | Example | Eval scenarios |
 | --- | --- | --- | --- | --- | --- |
-| `personal_assistant` | careful personal assistance with durable recall, explicit task tracking, and cautious memory writes | `RequireMemoryApproval`, `SingleUseApprovals`, `InputBoundApprovals` | `MaxTurns=28`, `MaxToolConcurrency=4`, balanced personal-assistant identity, progressive skill disclosure, prompt guidance to recall context before writing new durable memory | [`examples/personal_stack`](../examples/personal_stack/main.go) | `personal_preset_personal_assistant`, `personal_preset_personal_assistant_memory_approval_recovery` |
-| `research_partner` | longer-horizon personal research, synthesis, and scoped delegation | `RequireMemoryApproval`, `SingleUseApprovals`, `InputBoundApprovals` | `MaxTurns=36`, `MaxToolConcurrency=6`, higher-autonomy research identity, progressive skill disclosure, prompt guidance to separate working notes from durable memory and use scoped delegation when available | none yet | `personal_preset_research_partner` |
+| `personal_assistant` | careful personal assistance with durable recall, explicit task tracking, and cautious memory/note writes | `RequireMemoryApproval`, `RequireNoteApproval`, `SingleUseApprovals`, `InputBoundApprovals` | `MaxTurns=28`, `MaxToolConcurrency=4`, balanced personal-assistant identity, progressive skill disclosure, prompt guidance to recall durable context first and search note metadata before loading or saving note content | [`examples/personal_stack`](../examples/personal_stack/main.go), [`examples/personal_notes_stack`](../examples/personal_notes_stack/main.go) | `personal_preset_personal_assistant`, `personal_preset_personal_assistant_memory_approval_recovery`, `personal_preset_personal_assistant_note_recall` |
+| `research_partner` | longer-horizon personal research, synthesis, and scoped delegation | `RequireMemoryApproval`, `RequireNoteApproval`, `SingleUseApprovals`, `InputBoundApprovals` | `MaxTurns=36`, `MaxToolConcurrency=6`, higher-autonomy research identity, progressive skill disclosure, prompt guidance to separate working notes from durable memory and search note metadata before loading or revising larger notes | none yet | `personal_preset_research_partner` |
 
 ## Reading the table
 
@@ -53,6 +56,11 @@ cfg.Memory = memorytools.Config{
     Source: memoryStore,
     Writer: memoryStore,
 }
+cfg.Notes = notetools.Config{
+    Searcher: noteStore,
+    Reader:   noteStore,
+    Writer:   noteStore,
+}
 cfg.Tasks = taskStore
 cfg.Approval.Approver = approver
 
@@ -64,6 +72,10 @@ Common sources of confusion:
 - enabling mutable memory tools without an approver under the default preset
   posture will fail stack construction, because durable-memory approval is on by
   default
+- enabling mutable note tools without an approver under the default preset
+  posture will fail stack construction, because note approval is on by default
+- hosts that want mutable note tools without approvals must both attach the
+  note `Writer` and/or `Deleter` and explicitly disable `RequireNoteApproval`
 - `research_partner` does not automatically expose delegation; the host still
   has to attach a `subagents.Config`
 - progressive skill disclosure remains harmless when no skill source is

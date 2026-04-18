@@ -3,9 +3,9 @@
 //
 // The package assembles explicit host-owned tools and policy presets into one
 // reusable workflow configuration without changing the core kernel: durable
-// memory recall and mutation, task planning, approval requests, scoped
-// delegation, and skill disclosure remain normal prompt inputs, tools, and
-// hooks.
+// memory recall and mutation, note/document search and mutation, task
+// planning, approval requests, scoped delegation, and skill disclosure remain
+// normal prompt inputs, tools, and hooks.
 package personal
 
 import (
@@ -22,6 +22,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/agentpolicy"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/approvaltools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/memorytools"
+	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/notetools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/subagents"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/tasktools"
 )
@@ -40,6 +41,7 @@ type Config struct {
 	Sessions session.Store
 
 	Memory memorytools.Config
+	Notes  notetools.Config
 
 	Tasks              tasktools.Store
 	TaskPlannerOptions []planner.TaskSourceOption
@@ -59,6 +61,7 @@ type Config struct {
 // disabled until the host opts in or uses a preset.
 type Policies struct {
 	RequireMemoryApproval     bool
+	RequireNoteApproval       bool
 	RequireDelegationApproval bool
 
 	SingleUseApprovals  bool
@@ -73,6 +76,7 @@ type Policies struct {
 func DefaultPolicies() Policies {
 	return Policies{
 		RequireMemoryApproval: true,
+		RequireNoteApproval:   true,
 		SingleUseApprovals:    true,
 		InputBoundApprovals:   true,
 	}
@@ -153,6 +157,9 @@ func validateConfig(config Config) error {
 	if config.Policies.RequireMemoryApproval && hasMutableMemoryTools(config.Memory) && config.Approval.Approver == nil {
 		return fmt.Errorf("personal stack: memory approval requires approval approver")
 	}
+	if config.Policies.RequireNoteApproval && hasMutableNoteTools(config.Notes) && config.Approval.Approver == nil {
+		return fmt.Errorf("personal stack: note approval requires approval approver")
+	}
 	if config.Policies.RequireDelegationApproval && config.Subagents != nil && config.Approval.Approver == nil {
 		return fmt.Errorf("personal stack: delegation approval requires approval approver")
 	}
@@ -162,6 +169,15 @@ func validateConfig(config Config) error {
 func registerTools(registry *tool.Registry, config Config) error {
 	if configuredMemory(config.Memory) {
 		tools, err := memorytools.NewTools(config.Memory)
+		if err != nil {
+			return err
+		}
+		if err := registerAll(registry, tools...); err != nil {
+			return err
+		}
+	}
+	if configuredNotes(config.Notes) {
+		tools, err := notetools.NewTools(config.Notes)
 		if err != nil {
 			return err
 		}
@@ -184,7 +200,11 @@ func registerTools(registry *tool.Registry, config Config) error {
 		}
 	}
 	if config.Subagents != nil {
-		delegate, err := subagents.NewTool(configuredSubagents(config))
+		subagentConfig, err := configuredSubagents(config)
+		if err != nil {
+			return err
+		}
+		delegate, err := subagents.NewTool(subagentConfig)
 		if err != nil {
 			return err
 		}
@@ -201,6 +221,9 @@ func installHooks(opts *memaxagent.Options, config Config) error {
 
 	if policies.RequireMemoryApproval && hasMutableMemoryTools(config.Memory) {
 		hookOptions = append(hookOptions, memoryApprovalPolicy(config).Options()...)
+	}
+	if policies.RequireNoteApproval && hasMutableNoteTools(config.Notes) {
+		hookOptions = append(hookOptions, noteApprovalPolicy(config).Options()...)
 	}
 	if policies.RequireDelegationApproval && config.Subagents != nil {
 		hookOptions = append(hookOptions, delegationApprovalPolicy(config).Options()...)
@@ -245,6 +268,19 @@ func delegationApprovalPolicy(config Config) *agentpolicy.ApprovalBeforeTool {
 	return agentpolicy.RequireApprovalBeforeToolsWithOptions([]string{subagentToolName(config.Subagents)}, options...)
 }
 
+func noteApprovalPolicy(config Config) *agentpolicy.ApprovalBeforeTool {
+	options := []agentpolicy.ApprovalBeforeToolOption{
+		agentpolicy.WithApprovalToolName(approvalToolName(config.Approval)),
+	}
+	if config.Policies.SingleUseApprovals {
+		options = append(options, agentpolicy.WithSingleUseApprovals())
+	}
+	if config.Policies.InputBoundApprovals {
+		options = append(options, agentpolicy.WithInputBoundApprovals())
+	}
+	return agentpolicy.RequireApprovalBeforeToolsWithOptions(noteMutationToolNames(config.Notes), options...)
+}
+
 func defaultPlannerOptions(config Config) []planner.TaskSourceOption {
 	var toolHints []string
 	if config.Memory.Source != nil {
@@ -255,6 +291,18 @@ func defaultPlannerOptions(config Config) []planner.TaskSourceOption {
 	}
 	if config.Memory.Deleter != nil {
 		toolHints = append(toolHints, memoryDeleteToolName(config.Memory))
+	}
+	if config.Notes.Searcher != nil {
+		toolHints = append(toolHints, noteSearchToolName(config.Notes))
+	}
+	if config.Notes.Reader != nil {
+		toolHints = append(toolHints, noteReadToolName(config.Notes))
+	}
+	if config.Notes.Writer != nil {
+		toolHints = append(toolHints, noteSaveToolName(config.Notes))
+	}
+	if config.Notes.Deleter != nil {
+		toolHints = append(toolHints, noteDeleteToolName(config.Notes))
 	}
 	if config.Tasks != nil {
 		toolHints = append(toolHints,
@@ -284,14 +332,20 @@ func defaultPlannerOptions(config Config) []planner.TaskSourceOption {
 	return options
 }
 
-func configuredSubagents(config Config) subagents.Config {
+func configuredSubagents(config Config) (subagents.Config, error) {
 	cfg := *config.Subagents
 	// Child agents inherit the stack's posture by default so delegated work
-	// keeps the same identity, durable context sources, and skill-disclosure
-	// policy unless the host overrides those fields explicitly.
+	// keeps the same identity, durable context sources, note discovery/loading,
+	// and skill-disclosure policy unless the host overrides those fields
+	// explicitly. Note mutation is intentionally not inherited by default.
 	cfg.DefaultOptions = config.Base.Merge(cfg.DefaultOptions)
 	if cfg.DefaultOptions.MemorySource == nil && config.Memory.Source != nil {
 		cfg.DefaultOptions.MemorySource = config.Memory.Source
+	}
+	if inherited, err := inheritSubagentNotes(cfg.DefaultOptions, config.Notes); err != nil {
+		return subagents.Config{}, err
+	} else {
+		cfg.DefaultOptions = inherited
 	}
 	if cfg.DefaultOptions.SkillSource == nil && config.SkillSource != nil {
 		cfg.DefaultOptions.SkillSource = config.SkillSource
@@ -308,7 +362,7 @@ func configuredSubagents(config Config) subagents.Config {
 	if cfg.ResultHandler == nil && config.Tasks != nil {
 		cfg.ResultHandler = tasktools.NewSubagentProgressHandler(config.Tasks)
 	}
-	return cfg
+	return cfg, nil
 }
 
 func cloneRegistry(registry *tool.Registry) *tool.Registry {
@@ -342,6 +396,68 @@ func hasMutableMemoryTools(config memorytools.Config) bool {
 	return config.Writer != nil || config.Deleter != nil
 }
 
+func configuredNotes(config notetools.Config) bool {
+	return config.Searcher != nil || config.Reader != nil || config.Writer != nil || config.Deleter != nil
+}
+
+func hasMutableNoteTools(config notetools.Config) bool {
+	return config.Writer != nil || config.Deleter != nil
+}
+
+func inheritSubagentNotes(opts memaxagent.Options, config notetools.Config) (memaxagent.Options, error) {
+	if config.Searcher == nil && config.Reader == nil {
+		return opts, nil
+	}
+	registry := cloneRegistry(opts.Tools)
+	if config.Searcher != nil {
+		name := noteSearchToolName(config)
+		if !registryHasTool(registry, name) {
+			searchTool, err := notetools.NewSearchTool(notetools.Config{
+				Searcher:       config.Searcher,
+				SearchName:     config.SearchName,
+				DefaultLimit:   config.DefaultLimit,
+				MaxResultBytes: config.MaxResultBytes,
+			})
+			if err != nil {
+				return opts, err
+			}
+			if err := registry.Register(searchTool); err != nil {
+				return opts, err
+			}
+		}
+	}
+	if config.Reader != nil {
+		name := noteReadToolName(config)
+		if !registryHasTool(registry, name) {
+			readTool, err := notetools.NewReadTool(notetools.Config{
+				Reader:         config.Reader,
+				ReadName:       config.ReadName,
+				MaxResultBytes: config.MaxResultBytes,
+			})
+			if err != nil {
+				return opts, err
+			}
+			if err := registry.Register(readTool); err != nil {
+				return opts, err
+			}
+		}
+	}
+	opts.Tools = registry
+	return opts, nil
+}
+
+func registryHasTool(registry *tool.Registry, name string) bool {
+	if registry == nil {
+		return false
+	}
+	for _, spec := range registry.Specs() {
+		if spec.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 func memoryMutationToolNames(config memorytools.Config) []string {
 	names := make([]string, 0, 2)
 	if config.Writer != nil {
@@ -349,6 +465,17 @@ func memoryMutationToolNames(config memorytools.Config) []string {
 	}
 	if config.Deleter != nil {
 		names = append(names, memoryDeleteToolName(config))
+	}
+	return names
+}
+
+func noteMutationToolNames(config notetools.Config) []string {
+	names := make([]string, 0, 2)
+	if config.Writer != nil {
+		names = append(names, noteSaveToolName(config))
+	}
+	if config.Deleter != nil {
+		names = append(names, noteDeleteToolName(config))
 	}
 	return names
 }
@@ -372,6 +499,34 @@ func memoryDeleteToolName(config memorytools.Config) string {
 		return name
 	}
 	return memorytools.DeleteToolName
+}
+
+func noteSearchToolName(config notetools.Config) string {
+	if name := strings.TrimSpace(config.SearchName); name != "" {
+		return name
+	}
+	return notetools.SearchToolName
+}
+
+func noteReadToolName(config notetools.Config) string {
+	if name := strings.TrimSpace(config.ReadName); name != "" {
+		return name
+	}
+	return notetools.ReadToolName
+}
+
+func noteSaveToolName(config notetools.Config) string {
+	if name := strings.TrimSpace(config.SaveName); name != "" {
+		return name
+	}
+	return notetools.SaveToolName
+}
+
+func noteDeleteToolName(config notetools.Config) string {
+	if name := strings.TrimSpace(config.DeleteName); name != "" {
+		return name
+	}
+	return notetools.DeleteToolName
 }
 
 func approvalToolName(config approvaltools.Config) string {

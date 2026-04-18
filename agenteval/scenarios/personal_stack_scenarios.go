@@ -10,11 +10,13 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/agenteval"
 	"github.com/MemaxLabs/memax-go-agent-sdk/memory"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
+	"github.com/MemaxLabs/memax-go-agent-sdk/notes"
 	"github.com/MemaxLabs/memax-go-agent-sdk/session"
 	"github.com/MemaxLabs/memax-go-agent-sdk/stack/personal"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/agentpolicy"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/approvaltools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/memorytools"
+	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/notetools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/subagents"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/tasktools"
 )
@@ -273,6 +275,173 @@ func PersonalPresetAssistantMemoryApprovalRecovery() agenteval.Case {
 					}
 					if toolResults[3].IsError || !strings.Contains(toolResults[3].Content, "meeting-outcomes") {
 						return fmt.Errorf("search result = %#v, want recalled memory", toolResults[3])
+					}
+					return nil
+				},
+			},
+		},
+	}
+}
+
+// PersonalPresetAssistantNoteRecall returns a single-use scenario where the
+// personal_assistant preset searches note metadata, reads one seeded note, uses
+// the recalled content to save a matching reusable note, and confirms the new
+// note is discoverable afterward.
+func PersonalPresetAssistantNoteRecall() agenteval.Case {
+	noteStore := notes.NewNoteStore([]notes.Note{{
+		ID:      "note-1",
+		Title:   "meeting brief style",
+		Kind:    "brief",
+		Summary: "Reusable style for concise meeting briefs",
+		Content: "Use one short summary paragraph followed by owner and due-date bullets.",
+		Tags:    []string{"meeting", "brief"},
+	}})
+	taskStore := tasktools.NewMemoryStore([]tasktools.Task{{
+		ID:     "task-1",
+		Title:  "capture reusable meeting template",
+		Status: tasktools.StatusInProgress,
+		Notes:  "search notes first, then load the relevant note before saving a reusable template",
+	}})
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "search-1",
+				Name:  notetools.SearchToolName,
+				Input: json.RawMessage(`{"query":"meeting brief style owner due date","limit":3}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "read-1",
+				Name:  notetools.ReadToolName,
+				Input: json.RawMessage(`{"id":"note-1"}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "approval-1",
+				Name: approvaltools.ToolName,
+				Input: json.RawMessage(`{
+					"action":"save_note",
+					"reason":"saving a reusable personal note template requires approval",
+					"tool_input":{
+						"title":"meeting follow-up template",
+						"kind":"template",
+						"summary":"Reusable action-oriented follow-up template",
+						"content":"Use one short summary paragraph followed by owner and due-date bullets for every follow-up."
+					}
+				}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "save-1",
+				Name: notetools.SaveToolName,
+				Input: json.RawMessage(`{
+					"title":"meeting follow-up template",
+					"kind":"template",
+					"summary":"Reusable action-oriented follow-up template",
+					"content":"Use one short summary paragraph followed by owner and due-date bullets for every follow-up."
+				}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "search-2",
+				Name:  notetools.SearchToolName,
+				Input: json.RawMessage(`{"query":"meeting follow-up template owner due-date bullets","limit":3}`),
+			},
+		}},
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "Personal assistant recalled the note style and saved a matching reusable template."}},
+	)
+
+	config, configErr := personal.PresetPersonalAssistant.Config()
+	config.Notes = notetools.Config{
+		Searcher:     noteStore,
+		Reader:       noteStore,
+		Writer:       noteStore,
+		DefaultLimit: 3,
+	}
+	config.Tasks = taskStore
+	config.Approval.Approver = approvaltools.StaticApprover{
+		Decision: approvaltools.Decision{
+			Approved: true,
+			Reason:   "approved reusable note template",
+		},
+	}
+	stack, stackErr := personal.New(config)
+
+	return agenteval.Case{
+		Name:    "personal_preset_personal_assistant_note_recall",
+		Prompt:  "Capture a reusable meeting follow-up template, but search notes first and reuse the existing style before saving anything.",
+		Options: stack.WithModel(modelClient),
+		Assertions: []agenteval.Assertion{
+			toolConstructionSucceeded(configErr, stackErr),
+			agenteval.ToolUsed(notetools.SearchToolName),
+			agenteval.ToolUsed(notetools.ReadToolName),
+			agenteval.ToolUsed(approvaltools.ToolName),
+			agenteval.ToolUsed(notetools.SaveToolName),
+			agenteval.EventKindEmitted(memaxagent.EventApprovalRequested),
+			agenteval.EventKindEmitted(memaxagent.EventApprovalGranted),
+			agenteval.EventKindEmitted(memaxagent.EventApprovalConsumed),
+			agenteval.NoToolErrors(),
+			agenteval.FinalEquals("Personal assistant recalled the note style and saved a matching reusable template."),
+			requestCountEquals(modelClient, 6),
+			{
+				Name: "assistant preset prompt includes note workflow guidance",
+				Check: func(agenteval.Result) error {
+					requests := modelClient.Requests()
+					if len(requests) != 6 {
+						return fmt.Errorf("requests = %d, want 6", len(requests))
+					}
+					initialPrompt := requests[0].SystemPrompt
+					for _, want := range []string{
+						"Search note and document metadata before loading full note content or saving replacements.",
+						"[in_progress] task-1",
+						notetools.SearchToolName,
+						notetools.ReadToolName,
+						notetools.SaveToolName,
+					} {
+						if !strings.Contains(initialPrompt, want) {
+							return fmt.Errorf("initial prompt missing %q:\n%s", want, initialPrompt)
+						}
+					}
+					return nil
+				},
+			},
+			{
+				Name: "note recall changes the saved template",
+				Check: func(result agenteval.Result) error {
+					toolResults := result.ToolResults()
+					if len(toolResults) != 5 {
+						return fmt.Errorf("tool results = %#v, want exactly search read approval save search", toolResults)
+					}
+					if strings.Contains(toolResults[0].Content, "owner and due-date bullets for every follow-up") {
+						return fmt.Errorf("metadata search leaked full template content: %#v", toolResults[0])
+					}
+					if toolResults[1].IsError || !strings.Contains(toolResults[1].Content, "owner and due-date bullets") {
+						return fmt.Errorf("read result = %#v, want recalled note content", toolResults[1])
+					}
+					if toolResults[2].IsError || toolResults[2].Metadata[approvaltools.MetadataApprovalApproved] != true {
+						return fmt.Errorf("approval result = %#v, want granted approval", toolResults[2])
+					}
+					if toolResults[3].IsError || !strings.Contains(toolResults[3].Content, "meeting follow-up template") {
+						return fmt.Errorf("save result = %#v, want note save success", toolResults[3])
+					}
+					if toolResults[4].IsError || !strings.Contains(toolResults[4].Content, "meeting follow-up template") {
+						return fmt.Errorf("search result = %#v, want saved note metadata", toolResults[4])
+					}
+					item, err := noteStore.ReadNote(context.Background(), notes.ReadRequest{Title: "meeting follow-up template"})
+					if err != nil {
+						return err
+					}
+					if !strings.Contains(item.Content, "owner and due-date bullets") {
+						return fmt.Errorf("saved note content = %q, want recalled style", item.Content)
 					}
 					return nil
 				},

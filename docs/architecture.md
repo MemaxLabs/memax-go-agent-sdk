@@ -89,8 +89,8 @@ Initial `stack/coding` and `stack/personal` packages now exist. `stack/coding`
 assembles workspace, command, verification, approval, task/planner, and policy
 defaults into a reusable coding runtime profile with named workflow presets
 (`safe_local`, `ci_repair`, `interactive_dev`). `stack/personal` assembles
-durable memory, task/planner, approval, skill-disclosure, and scoped
-delegation defaults into personal-intelligence presets
+durable memory, note/document tools, task/planner, approval, skill-disclosure,
+and scoped delegation defaults into personal-intelligence presets
 (`personal_assistant`, `research_partner`). `stack/coding` remains the first
 stack expected to reach competitive maturity; the other stacks should reuse the
 same kernel and adapter seams rather than fork the architecture.
@@ -118,6 +118,8 @@ surface.
 - `skill`: local skill manifests, loaders, and relevance selection.
 - `memory`: prompt-visible host memory loading, mutation contracts, and
   distillation proposals.
+- `notes`: host-owned note and lightweight document search/read/write
+  contracts for personal-intelligence adapters.
 - `planner`: host-owned plan and task-source contracts for strategy injection.
 - `budget`: provider-neutral run-budget contracts and policies.
 - `output`: provider-neutral structured final-output contracts.
@@ -144,6 +146,8 @@ gateway needs a nonstandard route.
 - `toolkit/subagents`: optional delegation tool for bounded child agents with parent/child session correlation.
 - `toolkit/tasktools`: optional task-state tools for planning, progress tracking, and resumable work summaries.
 - `toolkit/skilltools`: optional skill discovery tools over `skill.Source`.
+- `toolkit/notetools`: optional metadata-first note/document search, full-note
+  read, and note mutation tools over `notes` contracts.
 - `toolkit/workspacetools`: optional workspace read/list/patch/diff/checkpoint/restore tools over `workspace.Store`.
 - `toolkit/commandtools`: optional command execution tools over a host-owned
   runner. The reference OS runner launches argv directly without an implicit
@@ -496,6 +500,16 @@ not block `EventResult`; memory persistence is a learning side effect, not part
 of the model's completed answer. Hosts that need transactional all-or-nothing
 learning should provide a custom `memory.CandidateHandler`. This keeps learning
 observable and avoids silently polluting durable memory.
+
+`notes` provides the analogous source-neutral seam for host-owned notes and
+lightweight personal documents that should stay tool-mediated rather than
+prompt-injected by default. `notes.Searcher` returns metadata-first results
+suited for discovery, `notes.Reader` loads full content only when the model
+explicitly asks for it, and `notes.Writer` / `notes.Deleter` remain optional
+mutation capabilities. The optional `toolkit/notetools` package exposes
+`search_notes`, `read_note`, `save_note`, and `delete_note`, keeping larger
+personal knowledge artifacts progressive and transcript-visible instead of
+turning note search into hidden prompt stuffing.
 
 Distillers receive the durable message snapshot already available to the turn,
 including the final assistant message. That avoids a second session-store read

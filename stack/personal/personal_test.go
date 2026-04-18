@@ -9,12 +9,14 @@ import (
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
 	"github.com/MemaxLabs/memax-go-agent-sdk/memory"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
+	"github.com/MemaxLabs/memax-go-agent-sdk/notes"
 	"github.com/MemaxLabs/memax-go-agent-sdk/planner"
 	"github.com/MemaxLabs/memax-go-agent-sdk/skill"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/agentpolicy"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/approvaltools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/memorytools"
+	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/notetools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/subagents"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/tasktools"
 )
@@ -28,6 +30,13 @@ func TestNewAssemblesPersonalRuntime(t *testing.T) {
 		Name:    "note-style",
 		Scope:   memory.ScopeUser,
 		Content: "User prefers concise meeting notes.",
+	}})
+	noteStore := notes.NewNoteStore([]notes.Note{{
+		ID:      "note-1",
+		Title:   "meeting brief style",
+		Kind:    "brief",
+		Summary: "Template for concise meeting briefs",
+		Content: "Use one short summary paragraph followed by owner and due-date bullets.",
 	}})
 	tasks := tasktools.NewMemoryStore([]tasktools.Task{{
 		ID:     "task-1",
@@ -46,6 +55,12 @@ func TestNewAssemblesPersonalRuntime(t *testing.T) {
 			Source:  memories,
 			Writer:  memories,
 			Deleter: memories,
+		},
+		Notes: notetools.Config{
+			Searcher: noteStore,
+			Reader:   noteStore,
+			Writer:   noteStore,
+			Deleter:  noteStore,
 		},
 		Tasks: tasks,
 		SkillSource: skill.StaticSource{{
@@ -70,6 +85,7 @@ func TestNewAssemblesPersonalRuntime(t *testing.T) {
 		},
 		Policies: Policies{
 			RequireMemoryApproval:     true,
+			RequireNoteApproval:       true,
 			RequireDelegationApproval: true,
 			SingleUseApprovals:        true,
 			InputBoundApprovals:       true,
@@ -105,6 +121,10 @@ func TestNewAssemblesPersonalRuntime(t *testing.T) {
 		memorytools.SearchToolName,
 		memorytools.SaveToolName,
 		memorytools.DeleteToolName,
+		notetools.SearchToolName,
+		notetools.ReadToolName,
+		notetools.SaveToolName,
+		notetools.DeleteToolName,
 		tasktools.ListToolName,
 		tasktools.UpsertToolName,
 		tasktools.DeleteToolName,
@@ -158,6 +178,31 @@ func TestNewAssemblesPersonalRuntime(t *testing.T) {
 		t.Fatalf("approved save should succeed: %s", result.Content)
 	}
 
+	noteSaveInput := map[string]any{
+		"title":   "meeting follow-up template",
+		"kind":    "template",
+		"summary": "Template for action-oriented follow-up notes",
+		"content": "List owners and due dates in an action-oriented format.",
+	}
+	result = runTool(t, exec, notetools.SaveToolName, noteSaveInput)
+	if !result.IsError || !strings.Contains(result.Content, agentpolicy.ApprovalBeforeToolReason(notetools.SaveToolName)) {
+		t.Fatalf("expected note approval denial, got error=%v content=%q", result.IsError, result.Content)
+	}
+
+	result = runTool(t, exec, approvaltools.ToolName, map[string]any{
+		"action":     notetools.SaveToolName,
+		"reason":     "save reusable meeting note template",
+		"tool_input": noteSaveInput,
+	})
+	if result.IsError {
+		t.Fatalf("note approval should succeed: %s", result.Content)
+	}
+
+	result = runTool(t, exec, notetools.SaveToolName, noteSaveInput)
+	if result.IsError {
+		t.Fatalf("approved note save should succeed: %s", result.Content)
+	}
+
 	allMemories, err := memories.Memories(ctx, memory.Request{})
 	if err != nil {
 		t.Fatalf("Memories() error = %v", err)
@@ -178,6 +223,10 @@ func TestNewAssemblesPersonalRuntime(t *testing.T) {
 		memorytools.SearchToolName,
 		memorytools.SaveToolName,
 		memorytools.DeleteToolName,
+		notetools.SearchToolName,
+		notetools.ReadToolName,
+		notetools.SaveToolName,
+		notetools.DeleteToolName,
 		tasktools.ListToolName,
 		approvaltools.ToolName,
 		subagents.ToolName,
@@ -208,6 +257,49 @@ func TestPersonalAssistantBuildsWithoutSkills(t *testing.T) {
 	}
 }
 
+func TestConfiguredSubagentsInheritReadOnlyNotesOnly(t *testing.T) {
+	t.Parallel()
+
+	noteStore := notes.NewNoteStore([]notes.Note{{
+		ID:      "note-1",
+		Title:   "meeting brief style",
+		Content: "Use one short summary paragraph followed by owner and due-date bullets.",
+	}})
+
+	cfg, err := configuredSubagents(Config{
+		Base: memaxagent.Options{},
+		Notes: notetools.Config{
+			Searcher: noteStore,
+			Reader:   noteStore,
+			Writer:   noteStore,
+			Deleter:  noteStore,
+		},
+		Subagents: &subagents.Config{
+			Agents: []subagents.Agent{{
+				Name:        "researcher",
+				Description: "Investigates questions.",
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("configuredSubagents() error = %v", err)
+	}
+	if cfg.DefaultOptions.Tools == nil {
+		t.Fatal("configuredSubagents() missing inherited child registry")
+	}
+	names := toolNames(cfg.DefaultOptions.Tools)
+	for _, want := range []string{notetools.SearchToolName, notetools.ReadToolName} {
+		if !contains(names, want) {
+			t.Fatalf("child registry missing %q; got %v", want, names)
+		}
+	}
+	for _, forbidden := range []string{notetools.SaveToolName, notetools.DeleteToolName} {
+		if contains(names, forbidden) {
+			t.Fatalf("child registry unexpectedly inherited %q; got %v", forbidden, names)
+		}
+	}
+}
+
 func TestNewRejectsApprovalGatesWithoutApprover(t *testing.T) {
 	t.Parallel()
 
@@ -221,6 +313,18 @@ func TestNewRejectsApprovalGatesWithoutApprover(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "memory approval requires approval approver") {
 		t.Fatalf("New() error = %v, want memory approval validation", err)
+	}
+
+	_, err = New(Config{
+		Notes: notetools.Config{
+			Writer: notes.NewNoteStore(nil),
+		},
+		Policies: Policies{
+			RequireNoteApproval: true,
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "note approval requires approval approver") {
+		t.Fatalf("New() error = %v, want note approval validation", err)
 	}
 
 	_, err = New(Config{
@@ -243,8 +347,8 @@ func TestPresetsAndDefaultPolicies(t *testing.T) {
 		t.Fatalf("Presets() = %v, want stable personal presets", got)
 	}
 	policies := DefaultPolicies()
-	if !policies.RequireMemoryApproval || !policies.SingleUseApprovals || !policies.InputBoundApprovals || policies.RequireDelegationApproval {
-		t.Fatalf("DefaultPolicies() = %#v, want memory approval on and delegation approval off", policies)
+	if !policies.RequireMemoryApproval || !policies.RequireNoteApproval || !policies.SingleUseApprovals || !policies.InputBoundApprovals || policies.RequireDelegationApproval {
+		t.Fatalf("DefaultPolicies() = %#v, want memory and note approval on and delegation approval off", policies)
 	}
 
 	if _, err := PresetPersonalAssistant.Config(); err != nil {
