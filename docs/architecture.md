@@ -133,6 +133,12 @@ surface.
 - `scheduling/caldavstore`: optional CalDAV-backed scheduling store that maps
   remote calendar objects onto the `scheduling` contracts with metadata-first
   search and optimistic concurrency via ETags.
+- `scheduling/googlecalendarclient`: focused Google Calendar REST client with
+  events list/get/insert/update/delete support, request timeout helpers, and
+  conditional modification via `If-Match`.
+- `scheduling/googlecalendarstore`: optional Google Calendar-backed scheduling
+  store that maps JSON event resources onto the `scheduling` contracts with
+  metadata-first search and bounded retry on update conflicts.
 - `planner`: host-owned plan and task-source contracts for strategy injection.
 - `budget`: provider-neutral run-budget contracts and policies.
 - `output`: provider-neutral structured final-output contracts.

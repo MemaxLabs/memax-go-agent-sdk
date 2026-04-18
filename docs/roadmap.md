@@ -163,9 +163,11 @@ system prompt.
   schedule-approval recovery, and scoped delegation with parent-visible task
   progress. An initial durable `scheduling/sqlitestore` adapter now provides a
   concrete local calendar backend with metadata-first search semantics, and
-  initial `scheduling/caldavclient` plus `scheduling/caldavstore` packages now
-  provide the first remote calendar adapter seam with metadata-first search and
-  ETag-aware mutation retries. Next steps are broader host adapters for
+  initial `scheduling/caldavclient` plus `scheduling/caldavstore` packages and
+  `scheduling/googlecalendarclient` plus `scheduling/googlecalendarstore`
+  packages now provide parallel remote calendar adapter seams over both XML and
+  JSON backends, each preserving metadata-first search and optimistic
+  concurrency for event mutations. Next steps are broader host adapters for
   external personal systems plus more adversarial preset suites for
   privacy-sensitive and long-horizon personal workflows.
 - Add `stack/cloudmanaged` for multi-tenant, server-embedded, remote-execution
