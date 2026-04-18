@@ -26,10 +26,8 @@ import (
 const (
 	defaultConflictRetries = 2
 
-	metadataHref   = "caldav_href"
-	metadataETag   = "caldav_etag"
-	metadataUID    = "caldav_uid"
-	metadataStatus = "caldav_status"
+	metadataAdapter          = "adapter"
+	metadataConcurrencyToken = "concurrency_token"
 )
 
 // Store adapts one CalDAV calendar collection to scheduling.Searcher, Reader,
@@ -138,7 +136,7 @@ func (s *Store) CreateEvent(ctx context.Context, req scheduling.CreateRequest) (
 	}
 	resource := caldavclient.Resource{
 		Href: href,
-		ETag: firstNonEmpty(putResult.ETag, itemMetadataString(item.Metadata, metadataETag)),
+		ETag: putResult.ETag,
 		Event: caldavclient.CalendarEvent{
 			UID:         event.UID,
 			Summary:     event.Summary,
@@ -304,15 +302,12 @@ func (s *Store) resolveResource(ctx context.Context, id, title string) (caldavcl
 
 func (s *Store) toSchedulingEvent(resource caldavclient.Resource, includeDescription bool) scheduling.Event {
 	metadata := filterInternalMetadata(resource.Event.Metadata)
-	metadata = mergeMetadata(metadata, map[string]any{
-		metadataHref: resource.Href,
-		metadataUID:  resource.Event.UID,
-	})
-	if includeDescription && resource.ETag != "" {
-		metadata[metadataETag] = resource.ETag
+	if metadata == nil {
+		metadata = make(map[string]any, 2)
 	}
-	if resource.Event.Status != "" {
-		metadata[metadataStatus] = resource.Event.Status
+	metadata[metadataAdapter] = "caldav"
+	if includeDescription && resource.ETag != "" {
+		metadata[metadataConcurrencyToken] = resource.ETag
 	}
 	item := scheduling.Event{
 		ID:        resource.Event.UID,
@@ -439,21 +434,12 @@ func filterInternalMetadata(metadata map[string]any) map[string]any {
 		return nil
 	}
 	cloned := model.CloneMetadata(metadata)
-	delete(cloned, metadataHref)
-	delete(cloned, metadataETag)
-	delete(cloned, metadataUID)
-	delete(cloned, metadataStatus)
+	delete(cloned, metadataAdapter)
+	delete(cloned, metadataConcurrencyToken)
 	if len(cloned) == 0 {
 		return nil
 	}
 	return cloned
-}
-
-func itemMetadataString(metadata map[string]any, key string) string {
-	if value, ok := metadata[key].(string); ok {
-		return strings.TrimSpace(value)
-	}
-	return ""
 }
 
 func firstNonEmpty(values ...string) string {

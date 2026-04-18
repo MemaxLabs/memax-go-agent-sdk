@@ -50,11 +50,11 @@ func TestStoreSearchAndReadMetadataFirst(t *testing.T) {
 	if items[0].ID != "kickoff-1" {
 		t.Fatalf("ID = %q, want kickoff-1", items[0].ID)
 	}
-	if got := items[0].Metadata[metadataHref]; got == nil {
-		t.Fatalf("SearchEvents() metadata missing %s", metadataHref)
+	if got := items[0].Metadata[metadataAdapter]; got != "caldav" {
+		t.Fatalf("SearchEvents() %s = %#v, want %q", metadataAdapter, got, "caldav")
 	}
-	if got := items[0].Metadata[metadataETag]; got != nil {
-		t.Fatalf("SearchEvents() leaked %s: %#v", metadataETag, got)
+	if got := items[0].Metadata[metadataConcurrencyToken]; got != nil {
+		t.Fatalf("SearchEvents() leaked %s: %#v", metadataConcurrencyToken, got)
 	}
 
 	item, err := store.ReadEvent(context.Background(), scheduling.ReadRequest{ID: "kickoff-1"})
@@ -63,6 +63,9 @@ func TestStoreSearchAndReadMetadataFirst(t *testing.T) {
 	}
 	if item.Description != "Secret agenda" {
 		t.Fatalf("Description = %q, want %q", item.Description, "Secret agenda")
+	}
+	if got := item.Metadata[metadataConcurrencyToken]; got == nil {
+		t.Fatalf("ReadEvent() missing %s", metadataConcurrencyToken)
 	}
 }
 
