@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
@@ -12,6 +13,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/stack/coding"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/agentpolicy"
+	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/approvaltools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/commandtools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/tasktools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/verifytools"
@@ -432,6 +434,251 @@ func CodingPresetCIRepair() agenteval.Case {
 						}
 					}
 					finalPrompt := modelClient.Requests()[5].SystemPrompt
+					for _, want := range []string{"[completed] task-1", "verification:test"} {
+						if !strings.Contains(finalPrompt, want) {
+							return fmt.Errorf("final prompt missing %q:\n%s", want, finalPrompt)
+						}
+					}
+					content, err := workspaceStore.ReadFile(context.Background(), "README.md")
+					if err != nil {
+						return err
+					}
+					if content != "status: fixed" {
+						return fmt.Errorf("README.md = %q, want repaired content", content)
+					}
+					return nil
+				},
+			},
+		},
+	}
+}
+
+// CodingPresetCIRepairApprovalRecovery returns a single-use scenario that
+// exercises the ci_repair preset under an approval denial, then a successful
+// re-request using the same input-bound patch before the repair loop continues.
+func CodingPresetCIRepairApprovalRecovery() agenteval.Case {
+	workspaceStore := workspace.NewMemoryStore(map[string]string{
+		"README.md": "status: broken",
+	})
+	taskStore := tasktools.NewMemoryStore([]tasktools.Task{{
+		ID:     "task-1",
+		Title:  "repair README status from CI failure",
+		Status: tasktools.StatusInProgress,
+		Notes:  "request approval for workspace changes, rerun the relevant check, and verify before final answer",
+	}})
+	commandRunner := commandtools.NewScriptedRunner(
+		commandtools.Result{
+			Argv:     []string{"go", "test", "./..."},
+			ExitCode: 1,
+			Stderr:   "status must be fixed\n",
+		},
+		commandtools.Result{
+			Argv:     []string{"go", "test", "./..."},
+			ExitCode: 0,
+			Stdout:   "ok\n",
+		},
+	)
+	var (
+		approverMu       sync.Mutex
+		approvalRequests []approvaltools.Request
+	)
+	approver := approvaltools.ApproverFunc(func(ctx context.Context, req approvaltools.Request) (approvaltools.Decision, error) {
+		if err := ctx.Err(); err != nil {
+			return approvaltools.Decision{}, err
+		}
+		approverMu.Lock()
+		defer approverMu.Unlock()
+		approvalRequests = append(approvalRequests, req)
+		if len(approvalRequests) == 1 {
+			return approvaltools.Decision{
+				Approved: false,
+				Reason:   "README changes are temporarily frozen pending confirmation",
+			}, nil
+		}
+		return approvaltools.Decision{
+			Approved: true,
+			Reason:   "approved after confirming the exact README patch",
+		}, nil
+	})
+	patchInput := `{"operations":[{"path":"README.md","old_content":"status: broken","new_content":"status: fixed"}]}`
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "cmd-1",
+				Name:  commandtools.ToolName,
+				Input: json.RawMessage(`{"command":["go","test","./..."],"purpose":"reproduce CI failure"}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "checkpoint-1",
+				Name:  "workspace_checkpoint",
+				Input: json.RawMessage(`{"label":"before approved CI repair"}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "patch-1",
+				Name:  "workspace_apply_patch",
+				Input: json.RawMessage(patchInput),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "approval-1",
+				Name:  approvaltools.ToolName,
+				Input: json.RawMessage(`{"action":"workspace_apply_patch","reason":"repairing README.md requires host approval","summary":{"title":"Review README.md CI repair patch","description":"Fix README status so CI passes","risk":"modifies tracked documentation","paths":["README.md"],"changes":1,"modified":1},"tool_input":` + patchInput + `}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "approval-2",
+				Name:  approvaltools.ToolName,
+				Input: json.RawMessage(`{"action":"workspace_apply_patch","reason":"retry the exact README.md CI repair after denial","summary":{"title":"Review README.md CI repair patch","description":"Fix README status so CI passes","risk":"modifies tracked documentation","paths":["README.md"],"changes":1,"modified":1},"tool_input":` + patchInput + `}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "patch-2",
+				Name:  "workspace_apply_patch",
+				Input: json.RawMessage(patchInput),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "cmd-2",
+				Name:  commandtools.ToolName,
+				Input: json.RawMessage(`{"command":["go","test","./..."],"purpose":"confirm CI repair"}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "verify-1",
+				Name: verifytools.ToolName,
+				Input: json.RawMessage(`{
+					"name":"test",
+					"target":"README.md",
+					"metadata":{"task_id":"task-1"}
+				}`),
+			},
+		}},
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "CI repair preset completed after approval recovery."}},
+	)
+
+	config, configErr := coding.PresetCIRepair.Config()
+	config.Workspace = workspaceStore
+	config.Tasks = taskStore
+	config.Command.Runner = commandRunner
+	config.Verifier.Verifier = verifierForReadmeStatus(workspaceStore, "status: fixed")
+	config.Approval.Approver = approver
+	config.Policies.RequirePatchApproval = true
+	stack, stackErr := coding.New(config)
+
+	return agenteval.Case{
+		Name:    "coding_preset_ci_repair_approval_recovery",
+		Prompt:  "Repair the CI failure, request approval for the workspace patch if denied, rerun the check, verify, and finish the task.",
+		Options: stack.WithModel(modelClient),
+		Assertions: []agenteval.Assertion{
+			toolConstructionSucceeded(configErr, stackErr),
+			agenteval.ToolUsed(commandtools.ToolName),
+			agenteval.ToolUsed("workspace_checkpoint"),
+			agenteval.ToolUsed("workspace_apply_patch"),
+			agenteval.ToolUsed(approvaltools.ToolName),
+			agenteval.ToolUsed(verifytools.ToolName),
+			agenteval.EventKindEmitted(memaxagent.EventApprovalRequested),
+			agenteval.EventKindEmitted(memaxagent.EventApprovalDenied),
+			agenteval.EventKindEmitted(memaxagent.EventApprovalGranted),
+			agenteval.EventKindEmitted(memaxagent.EventApprovalConsumed),
+			agenteval.EventKindEmitted(memaxagent.EventCommandFinished),
+			agenteval.EventKindEmitted(memaxagent.EventWorkspaceCheckpoint),
+			agenteval.EventKindEmitted(memaxagent.EventWorkspacePatch),
+			agenteval.EventKindEmitted(memaxagent.EventVerification),
+			agenteval.FinalEquals("CI repair preset completed after approval recovery."),
+			requestCountEquals(modelClient, 9),
+			{
+				Name: "ci repair approval denial recovers through exact reapproval",
+				Check: func(result agenteval.Result) error {
+					toolResults := result.ToolResults()
+					if len(toolResults) != 8 {
+						return fmt.Errorf("tool results = %#v, want 8", toolResults)
+					}
+					if !toolResults[0].IsError || !strings.Contains(toolResults[0].Content, "status must be fixed") {
+						return fmt.Errorf("first command result = %#v, want failing CI output", toolResults[0])
+					}
+					if toolResults[1].IsError || !strings.Contains(toolResults[1].Content, "created workspace checkpoint checkpoint-1") {
+						return fmt.Errorf("checkpoint result = %#v, want checkpoint success", toolResults[1])
+					}
+					if !toolResults[2].IsError || !strings.Contains(toolResults[2].Content, agentpolicy.ApprovalBeforeToolReason("workspace_apply_patch")) {
+						return fmt.Errorf("first patch result = %#v, want approval denial", toolResults[2])
+					}
+					if !toolResults[3].IsError || toolResults[3].Metadata[approvaltools.MetadataApprovalApproved] != false {
+						return fmt.Errorf("first approval result = %#v, want approval denial", toolResults[3])
+					}
+					if toolResults[4].IsError || toolResults[4].Metadata[approvaltools.MetadataApprovalApproved] != true {
+						return fmt.Errorf("second approval result = %#v, want approval granted", toolResults[4])
+					}
+					if toolResults[5].IsError || !strings.Contains(toolResults[5].Content, "modified README.md") {
+						return fmt.Errorf("second patch result = %#v, want patch success", toolResults[5])
+					}
+					if toolResults[6].IsError || !strings.Contains(toolResults[6].Content, "ok") {
+						return fmt.Errorf("second command result = %#v, want passing command output", toolResults[6])
+					}
+					if toolResults[7].IsError || !strings.Contains(toolResults[7].Content, "verification test passed") {
+						return fmt.Errorf("verification result = %#v, want verification success", toolResults[7])
+					}
+					approverMu.Lock()
+					requests := append([]approvaltools.Request(nil), approvalRequests...)
+					approverMu.Unlock()
+					if len(requests) != 2 {
+						return fmt.Errorf("approval requests = %#v, want two approval requests", requests)
+					}
+					if requests[0].Action != "workspace_apply_patch" || requests[1].Action != "workspace_apply_patch" {
+						return fmt.Errorf("approval actions = %#v, want workspace_apply_patch", requests)
+					}
+					if requests[0].ToolInputHash == "" || requests[0].ToolInputHash != requests[1].ToolInputHash {
+						return fmt.Errorf("approval input hashes = %q / %q, want matching non-empty hashes", requests[0].ToolInputHash, requests[1].ToolInputHash)
+					}
+					if requests[0].Summary.Title != "Review README.md CI repair patch" || requests[1].Summary.Title != "Review README.md CI repair patch" {
+						return fmt.Errorf("approval summaries = %#v, want structured CI repair summary", requests)
+					}
+					commandRequests := commandRunner.Requests()
+					if len(commandRequests) != 2 {
+						return fmt.Errorf("command requests = %#v, want 2", commandRequests)
+					}
+					for i, req := range commandRequests {
+						if req.Timeout != 10*time.Minute {
+							return fmt.Errorf("command request %d timeout = %s, want %s", i, req.Timeout, 10*time.Minute)
+						}
+					}
+					workspacePatchEvents := 0
+					for _, event := range result.Events {
+						if event.Kind == memaxagent.EventWorkspacePatch {
+							workspacePatchEvents++
+						}
+					}
+					if workspacePatchEvents != 1 {
+						return fmt.Errorf("workspace patch events = %d, want exactly one successful patch", workspacePatchEvents)
+					}
+					initialPrompt := modelClient.Requests()[0].SystemPrompt
+					for _, want := range []string{
+						"Focus on reproducible repair loops.",
+						"[in_progress] task-1",
+						commandtools.ToolName,
+						verifytools.ToolName,
+					} {
+						if !strings.Contains(initialPrompt, want) {
+							return fmt.Errorf("initial prompt missing %q:\n%s", want, initialPrompt)
+						}
+					}
+					finalPrompt := modelClient.Requests()[8].SystemPrompt
 					for _, want := range []string{"[completed] task-1", "verification:test"} {
 						if !strings.Contains(finalPrompt, want) {
 							return fmt.Errorf("final prompt missing %q:\n%s", want, finalPrompt)

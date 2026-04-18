@@ -62,6 +62,7 @@ func All() []agenteval.Case {
 		CodingPresetSafeLocal(),
 		CodingPresetSafeLocalRollbackRecovery(),
 		CodingPresetCIRepair(),
+		CodingPresetCIRepairApprovalRecovery(),
 		CodingPresetInteractiveDev(),
 		WorkspaceVerificationRepair(),
 		WorkspaceVerificationRollback(),
