@@ -24,10 +24,10 @@ The long-term product has three layers:
   doc, email, calendar, remote execution, and other host-owned integrations.
 - **Opinionated stacks**: batteries-included configurations built on the same
   kernel and adapters, starting with coding workflows and later expanding to
-  personal intelligence and managed cloud agents. An initial `stack/coding`
-  package now assembles the SDK's coding-oriented tools, planner wiring, and
-  common safety policies into one reusable runtime profile, including named
-  workflow presets such as `safe_local`, `ci_repair`, and `interactive_dev`.
+  personal intelligence and managed cloud agents. Initial `stack/coding` and
+  `stack/personal` packages now assemble domain-oriented tools, planner wiring,
+  and common safety policies into reusable runtime profiles, with named
+  workflow presets for each stack.
 
 The SDK is intentionally built so the same kernel can eventually support:
 
@@ -82,6 +82,8 @@ Coding-oriented adapters and toolkits:
 - workspace, patch, diff, restore, verification, and command toolkits over
   host-owned backends
 - initial `stack/coding` assembly for batteries-included coding workflows
+- initial `stack/personal` assembly for durable-memory, task, approval, skill,
+  and delegation-oriented personal workflows
 - skill discovery tools
 
 `stack/coding` now exposes named presets so hosts can start from a workflow
@@ -110,6 +112,30 @@ The current implementation is strongest on coding-agent orchestration because
 that is the most demanding initial domain. The architecture is being hardened
 so those same runtime primitives can later power personal intelligence and
 managed cloud-agent stacks without forking the core.
+
+`stack/personal` now exposes named presets so hosts can start from a
+personal-intelligence workflow profile and then attach only the host-owned
+backends they need:
+
+```go
+cfg := personal.PersonalAssistant()
+cfg.Memory = memorytools.Config{
+    Source: memoryStore,
+    Writer: memoryStore,
+}
+cfg.Tasks = taskStore
+cfg.Approval.Approver = approver
+stack, err := personal.New(cfg)
+```
+
+Preset intent is locked down by deterministic eval coverage. See
+[docs/personal-stack-presets.md](docs/personal-stack-presets.md) for the full
+preset contract, default policy posture, and authoritative eval scenario names.
+
+| Preset | Intended workflow | Eval-backed coverage |
+| --- | --- | --- |
+| `personal_assistant` | careful personal assistance with durable recall and approval-gated memory writes | `personal_preset_personal_assistant`, `personal_preset_personal_assistant_memory_approval_recovery` |
+| `research_partner` | longer-horizon personal research and scoped delegation | `personal_preset_research_partner` |
 
 ## Try It
 

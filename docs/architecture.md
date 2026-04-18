@@ -85,17 +85,20 @@ contracts. The near-term target stacks are:
 
 Each stack should package prompt defaults, tool bundles, policies, evals, and
 embedding examples without introducing special-case logic into the kernel.
-An initial `stack/coding` package now exists and assembles workspace, command,
-verification, approval, task/planner, and policy defaults into a reusable
-coding runtime profile. It now includes named workflow presets
-(`safe_local`, `ci_repair`, `interactive_dev`) so hosts can start from a
-workflow mode and then attach their own backends. `stack/coding` is the first
-stack expected to reach competitive maturity; the other stacks should reuse
-the same kernel and adapter seams rather than fork the architecture.
-Each preset now has deterministic end-to-end eval coverage for both its normal
-workflow and its defining recovery path, so preset behavior is part of the
-public contract rather than informal guidance. The navigable preset contract
-lives in [coding-stack-presets.md](coding-stack-presets.md), including default
+Initial `stack/coding` and `stack/personal` packages now exist. `stack/coding`
+assembles workspace, command, verification, approval, task/planner, and policy
+defaults into a reusable coding runtime profile with named workflow presets
+(`safe_local`, `ci_repair`, `interactive_dev`). `stack/personal` assembles
+durable memory, task/planner, approval, skill-disclosure, and scoped
+delegation defaults into personal-intelligence presets
+(`personal_assistant`, `research_partner`). `stack/coding` remains the first
+stack expected to reach competitive maturity; the other stacks should reuse the
+same kernel and adapter seams rather than fork the architecture.
+Each preset now has deterministic end-to-end eval coverage for its normal
+workflow and its defining recovery or delegation path, so preset behavior is
+part of the public contract rather than informal guidance. The navigable preset
+contracts live in [coding-stack-presets.md](coding-stack-presets.md) and
+[personal-stack-presets.md](personal-stack-presets.md), including default
 policy posture, examples, and the specific eval scenario names that enforce the
 surface.
 
@@ -153,7 +156,7 @@ gateway needs a nonstandard route.
 ### Planned Stack Packages
 
 - `stack/coding`: batteries-included coding workflow assembly.
-- `stack/personal`: personal intelligence workflow assembly.
+- `stack/personal`: batteries-included personal intelligence workflow assembly.
 - `stack/cloudmanaged`: multi-tenant managed-agent assembly.
 
 Expected near-term packages and expansions:

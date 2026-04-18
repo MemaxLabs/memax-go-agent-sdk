@@ -153,8 +153,14 @@ system prompt.
   cleanup coverage for `interactive_dev`. Next steps are broader reference
   embeddings and more adversarial preset suites tuned for competitive coding
   workflows.
-- Add `stack/personal` over the same kernel for docs, notes, messaging,
-  scheduling, memory, and approval-aware personal intelligence workflows.
+- Initial `stack/personal` assembly now exists with durable-memory, task,
+  approval, progressive-skill, and scoped-delegation wiring, plus named
+  workflow presets (`personal_assistant`, `research_partner`). Initial
+  deterministic eval coverage now exercises durable-memory approval recovery
+  and scoped delegation with parent-visible task progress. Next steps are
+  broader host adapters for documents, messaging, and scheduling, plus more
+  adversarial preset suites for privacy-sensitive and long-horizon personal
+  workflows.
 - Add `stack/cloudmanaged` for multi-tenant, server-embedded, remote-execution
   products with durable jobs, tenancy-aware policy, quotas, audit hooks, and
   managed-agent DX.
