@@ -12,8 +12,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/stack/cloudmanaged"
@@ -166,12 +167,25 @@ func (s *Store) counterKey(scope tenant.Scope, sessionID string, counter cloudma
 }
 
 func scopeDigest(scope tenant.Scope) string {
-	payload, err := json.Marshal(scope.Clone())
-	if err != nil {
-		sum := sha256.Sum256([]byte(scope.ID + "\n" + scope.SubjectID))
-		return hex.EncodeToString(sum[:])
+	scope = scope.Clone()
+	var builder strings.Builder
+	builder.WriteString(scope.ID)
+	builder.WriteByte('\n')
+	builder.WriteString(scope.SubjectID)
+	if len(scope.Attributes) > 0 {
+		keys := make([]string, 0, len(scope.Attributes))
+		for key := range scope.Attributes {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			builder.WriteByte('\n')
+			builder.WriteString(key)
+			builder.WriteByte('=')
+			builder.WriteString(scope.Attributes[key])
+		}
 	}
-	sum := sha256.Sum256(payload)
+	sum := sha256.Sum256([]byte(builder.String()))
 	return hex.EncodeToString(sum[:])
 }
 
