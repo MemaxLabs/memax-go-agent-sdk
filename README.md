@@ -95,6 +95,14 @@ cfg.Command.Runner = runner
 stack, err := coding.New(cfg)
 ```
 
+Preset intent is locked down by deterministic eval coverage:
+
+| Preset | Intended workflow | Recovery coverage |
+| --- | --- | --- |
+| `safe_local` | cautious local editing with checkpointing and verification | happy path, rollback-on-failed-verification |
+| `ci_repair` | reproducible repair loops with longer command budgets | happy path, approval denial then recovery |
+| `interactive_dev` | long-lived sessions such as watchers and dev servers | happy path, incremental read + forced stop + cleanup |
+
 The current implementation is strongest on coding-agent orchestration because
 that is the most demanding initial domain. The architecture is being hardened
 so those same runtime primitives can later power personal intelligence and
@@ -134,7 +142,7 @@ go run ./examples/skills_identity
 go run ./examples/eval_scenarios
 ```
 
-`session_resume` shows how to continue a durable transcript by passing `Options.SessionID`. `advanced_stack` composes task state, checkpointing, context budgeting, tool search, and memory-backed file tools in one run. `ci_embedding` shows a bounded, read-only agent run shaped for CI jobs. `skills_identity` shows how an agent profile and relevant skills become deterministic prompt guidance. `eval_scenarios` runs the deterministic autonomy scenario suite and exits non-zero on failure.
+`session_resume` shows how to continue a durable transcript by passing `Options.SessionID`. `advanced_stack` composes task state, checkpointing, context budgeting, tool search, and memory-backed file tools in one run. `coding_stack` now demonstrates a `ci_repair` workflow that hits an approval gate, requests approval explicitly, retries the patch, reruns the check, and verifies before completion. `ci_embedding` shows a bounded, read-only agent run shaped for CI jobs. `skills_identity` shows how an agent profile and relevant skills become deterministic prompt guidance. `eval_scenarios` runs the deterministic autonomy scenario suite and exits non-zero on failure.
 
 To try the embeddable HTTP shape:
 

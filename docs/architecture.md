@@ -92,6 +92,9 @@ coding runtime profile. It now includes named workflow presets
 workflow mode and then attach their own backends. `stack/coding` is the first
 stack expected to reach competitive maturity; the other stacks should reuse
 the same kernel and adapter seams rather than fork the architecture.
+Each preset now has deterministic end-to-end eval coverage for both its normal
+workflow and its defining recovery path, so preset behavior is part of the
+public contract rather than informal guidance.
 
 ## Package Shape
 
