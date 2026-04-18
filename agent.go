@@ -22,6 +22,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/session"
 	skillpkg "github.com/MemaxLabs/memax-go-agent-sdk/skill"
 	"github.com/MemaxLabs/memax-go-agent-sdk/telemetry"
+	"github.com/MemaxLabs/memax-go-agent-sdk/tenant"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
 )
 
@@ -65,8 +66,27 @@ func Query(ctx context.Context, prompt string, opts Options) (<-chan Event, erro
 	if opts.ParentSessionID == "" {
 		opts.ParentSessionID = sess.ParentID
 	}
+	if err := validateTenantBoundary(ctx, opts, sess.ID, opts.ParentSessionID, tenant.BoundarySessionStart); err != nil {
+		if denied, ok := tenantDenied(err); ok {
+			opts.Meter.Add(ctx, "memax.tenant.denials", 1,
+				telemetry.String("memax.session_id", denied.Request.SessionID),
+				telemetry.Int("memax.turn", 0),
+				telemetry.String("memax.tenant.boundary", string(denied.Request.Boundary)),
+			)
+		}
+		if cancel != nil {
+			cancel()
+		}
+		err = fmt.Errorf("tenant validation failed: %w", err)
+		querySpan.RecordError(err)
+		querySpan.End()
+		return nil, err
+	}
 	querySpan.Set(telemetry.String("memax.session_id", sess.ID))
-	if errs := opts.Hooks.SessionStarted(ctx, hook.SessionStartedInput{SessionID: sess.ID}); len(errs) > 0 {
+	if errs := opts.Hooks.SessionStarted(ctx, hook.SessionStartedInput{
+		SessionID: sess.ID,
+		Tenant:    opts.Tenant,
+	}); len(errs) > 0 {
 		if cancel != nil {
 			cancel()
 		}
@@ -77,6 +97,7 @@ func Query(ctx context.Context, prompt string, opts Options) (<-chan Event, erro
 	}
 	promptResult, err := opts.Hooks.UserPrompt(ctx, hook.UserPromptInput{
 		SessionID: sess.ID,
+		Tenant:    opts.Tenant,
 		Prompt:    prompt,
 	})
 	if err != nil {
@@ -137,6 +158,15 @@ func QueryAsync(ctx context.Context, prompt string, opts Options) <-chan Event {
 		defer close(out)
 		events, err := Query(ctx, prompt, opts)
 		if err != nil {
+			if denied, ok := tenantDenied(err); ok {
+				event := newEvent(EventTenantDenied, denied.Request.SessionID, 0)
+				event.ParentSessionID = denied.Request.ParentSessionID
+				event.Tenant = tenantEventFromRequest(denied.Request, denied.Error())
+				select {
+				case <-ctx.Done():
+				case out <- event:
+				}
+			}
 			event := newEvent(EventError, "", 0)
 			event.Err = err
 			select {
@@ -163,6 +193,15 @@ func startSession(ctx context.Context, opts Options) (session.Session, error) {
 	return session.Create(ctx, opts.Sessions, session.CreateOptions{ParentID: opts.ParentSessionID})
 }
 
+func validateTenantBoundary(ctx context.Context, opts Options, sessionID, parentSessionID string, boundary tenant.Boundary) error {
+	return tenant.Check(ctx, opts.TenantValidator, tenant.Request{
+		Boundary:        boundary,
+		Scope:           opts.Tenant,
+		SessionID:       sessionID,
+		ParentSessionID: parentSessionID,
+	})
+}
+
 func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Options, outputValidator output.Validator) {
 	memories := memoryLoader{opts: opts, sessionID: sessionID}
 	skills := skillLoader{opts: opts}
@@ -182,15 +221,18 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 		opts.Tools = registry
 	}
 	executor := tool.Executor{
-		Registry:       opts.Tools,
-		Permissions:    opts.Permissions,
-		Hooks:          opts.Hooks,
-		MaxConcurrency: opts.MaxToolConcurrency,
-		ResultStore:    opts.ResultStore,
+		Registry:        opts.Tools,
+		Permissions:     opts.Permissions,
+		Hooks:           opts.Hooks,
+		TenantValidator: opts.TenantValidator,
+		MaxConcurrency:  opts.MaxToolConcurrency,
+		ResultStore:     opts.ResultStore,
 		Runtime: tool.Runtime{
 			SessionID:       sessionID,
 			ParentSessionID: opts.ParentSessionID,
 			Identity:        opts.Identity,
+			Tenant:          opts.Tenant,
+			TenantValidator: opts.TenantValidator,
 			Sessions:        opts.Sessions,
 		},
 		Tracer: opts.Tracer,
@@ -213,6 +255,7 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 		finalErr := err
 		if errs := opts.Hooks.Stop(ctx, hook.StopInput{
 			SessionID: sessionID,
+			Tenant:    opts.Tenant,
 			Turn:      turn,
 			Reason:    reason,
 			Err:       err,
@@ -225,6 +268,7 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 		}
 		if errs := opts.Hooks.SessionEnded(ctx, hook.SessionEndedInput{
 			SessionID: sessionID,
+			Tenant:    opts.Tenant,
 			Reason:    reason,
 			Err:       err,
 		}); len(errs) > 0 && finalErr == nil {
@@ -341,19 +385,6 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 			}
 			turnSpan.Set(telemetry.Int("memax.model.messages", len(messages)))
 
-			if err := checkBudget(turnCtx, opts, sessionID, turn, budgetState.withModelCalls(1)); err != nil {
-				turnSpan.RecordError(err)
-				emitError(turnCtx, emit, sessionID, turn, err)
-				_ = finish(turn, hook.StopReasonBudget, err)
-				shouldStop = true
-				return
-			}
-			budgetState.modelCalls++
-			if !emit(newEvent(EventModelRequest, sessionID, turn)) {
-				shouldStop = true
-				return
-			}
-
 			toolSpecs, err := selectedToolSpecs(turnCtx, opts, messages)
 			if err != nil {
 				err = fmt.Errorf("select tools: %w", err)
@@ -382,6 +413,30 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 					telemetry.Int("memax.prompt.parts", len(promptResult.Parts)),
 				)
 			}
+			if err := validateTenantBoundary(turnCtx, opts, sessionID, opts.ParentSessionID, tenant.BoundaryModelRequest); err != nil {
+				if !emitTenantDeniedError(turnCtx, emit, opts, sessionID, turn, err) {
+					shouldStop = true
+					return
+				}
+				err = fmt.Errorf("tenant validation failed: %w", err)
+				turnSpan.RecordError(err)
+				emitError(turnCtx, emit, sessionID, turn, err)
+				_ = finish(turn, hook.StopReasonPolicy, err)
+				shouldStop = true
+				return
+			}
+			if err := checkBudget(turnCtx, opts, sessionID, turn, budgetState.withModelCalls(1)); err != nil {
+				turnSpan.RecordError(err)
+				emitError(turnCtx, emit, sessionID, turn, err)
+				_ = finish(turn, hook.StopReasonBudget, err)
+				shouldStop = true
+				return
+			}
+			budgetState.modelCalls++
+			if !emit(newEvent(EventModelRequest, sessionID, turn)) {
+				shouldStop = true
+				return
+			}
 			if !emitSkillDiscovery(turnCtx, emit, opts, sessionID, turn, promptResult.SkillDiscovery) {
 				shouldStop = true
 				return
@@ -401,6 +456,7 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 			)
 			stream, err := opts.Model.Stream(modelCtx, model.Request{
 				SessionID:          sessionID,
+				Tenant:             opts.Tenant,
 				Messages:           messages,
 				Tools:              toolSpecs,
 				SystemPrompt:       promptResult.SystemPrompt,
@@ -456,6 +512,7 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 						budgetState.modelCalls++
 						stream, err = opts.Model.Stream(modelCtx, model.Request{
 							SessionID:          sessionID,
+							Tenant:             opts.Tenant,
 							Messages:           messages,
 							Tools:              toolSpecs,
 							SystemPrompt:       promptResult.SystemPrompt,
@@ -578,6 +635,7 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 				result := assistant.PlainText()
 				finalGate, err := opts.Hooks.BeforeFinal(turnCtx, hook.BeforeFinalInput{
 					SessionID: sessionID,
+					Tenant:    opts.Tenant,
 					Turn:      turn,
 					Answer:    result,
 				})
@@ -703,6 +761,10 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 				event := newEvent(EventToolResult, sessionID, turn)
 				event.ToolResult = &result
 				if !emit(event) {
+					shouldStop = true
+					return false
+				}
+				if !emitTenantToolEvent(turnCtx, emit, opts, sessionID, turn, result) {
 					shouldStop = true
 					return false
 				}
@@ -1572,6 +1634,7 @@ func emitContextApplied(
 	}
 	if errs := opts.Hooks.ContextApplied(ctx, hook.ContextAppliedInput{
 		SessionID:        sessionID,
+		Tenant:           opts.Tenant,
 		Turn:             turn,
 		OriginalMessages: originalCount,
 		SentMessages:     sentCount,
@@ -1863,6 +1926,82 @@ func emitApprovalToolEvent(ctx context.Context, emit func(Event) bool, opts Opti
 		telemetry.Bool("memax.approval.input_bound", inputBound),
 	)
 	return true
+}
+
+func emitTenantToolEvent(ctx context.Context, emit func(Event) bool, opts Options, sessionID string, turn int, result model.ToolResult) bool {
+	if result.Metadata == nil || !metadatavalues.Bool(result.Metadata, model.MetadataTenantDenied) {
+		return true
+	}
+	req := tenant.Request{
+		Boundary:        tenant.Boundary(metadatavalues.String(result.Metadata, model.MetadataTenantDeniedBoundary)),
+		Scope:           opts.Tenant,
+		SessionID:       sessionID,
+		ParentSessionID: opts.ParentSessionID,
+		ToolUseID:       result.ToolUseID,
+		ToolName:        result.Name,
+	}
+	return emitTenantDenied(ctx, emit, opts, sessionID, turn, req, metadatavalues.String(result.Metadata, model.MetadataTenantDeniedReason))
+}
+
+func emitTenantDeniedError(ctx context.Context, emit func(Event) bool, opts Options, sessionID string, turn int, err error) bool {
+	denied, ok := tenantDenied(err)
+	if !ok {
+		return true
+	}
+	if denied.Request.SessionID == "" {
+		denied.Request.SessionID = sessionID
+	}
+	if denied.Request.ParentSessionID == "" {
+		denied.Request.ParentSessionID = opts.ParentSessionID
+	}
+	if denied.Request.Scope.IsZero() {
+		denied.Request.Scope = opts.Tenant.Clone()
+	}
+	return emitTenantDenied(ctx, emit, opts, denied.Request.SessionID, turn, denied.Request, denied.Error())
+}
+
+func emitTenantDenied(ctx context.Context, emit func(Event) bool, opts Options, sessionID string, turn int, req tenant.Request, reason string) bool {
+	event := newEvent(EventTenantDenied, sessionID, turn)
+	event.ParentSessionID = req.ParentSessionID
+	event.Tenant = tenantEventFromRequest(req, reason)
+	if !emit(event) {
+		return false
+	}
+	opts.Meter.Add(ctx, "memax.tenant.denials", 1,
+		telemetry.String("memax.session_id", sessionID),
+		telemetry.Int("memax.turn", turn),
+		telemetry.String("memax.tenant.boundary", string(req.Boundary)),
+	)
+	return true
+}
+
+func tenantEventFromRequest(req tenant.Request, reason string) *TenantEvent {
+	return &TenantEvent{
+		Boundary:   string(req.Boundary),
+		TenantID:   req.Scope.ID,
+		SubjectID:  req.Scope.SubjectID,
+		Attributes: cloneStringMap(req.Scope.Attributes),
+		Reason:     reason,
+	}
+}
+
+func tenantDenied(err error) (*tenant.DeniedError, bool) {
+	var denied *tenant.DeniedError
+	if !errors.As(err, &denied) {
+		return nil, false
+	}
+	return denied, true
+}
+
+func cloneStringMap(values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(values))
+	for key, value := range values {
+		out[key] = value
+	}
+	return out
 }
 
 func approvalSummaryFromMetadata(metadata map[string]any) ApprovalSummaryEvent {

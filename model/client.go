@@ -3,6 +3,8 @@ package model
 import (
 	"context"
 	"errors"
+
+	"github.com/MemaxLabs/memax-go-agent-sdk/tenant"
 )
 
 var ErrEndOfStream = errors.New("model stream ended")
@@ -21,6 +23,7 @@ type Client interface {
 type Request struct {
 	SessionID          string
 	ParentSessionID    string
+	Tenant             tenant.Scope
 	Messages           []Message
 	Tools              []ToolSpec
 	SystemPrompt       string

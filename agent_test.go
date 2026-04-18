@@ -21,6 +21,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/session"
 	"github.com/MemaxLabs/memax-go-agent-sdk/skill"
 	"github.com/MemaxLabs/memax-go-agent-sdk/telemetry"
+	"github.com/MemaxLabs/memax-go-agent-sdk/tenant"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/agentpolicy"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/approvaltools"
@@ -810,6 +811,116 @@ func TestQueryFeedsHookDenialBackToModel(t *testing.T) {
 	last := fake.requests[1].Messages[len(fake.requests[1].Messages)-1]
 	if last.ToolResult == nil || !last.ToolResult.IsError || last.ToolResult.Content != "writes are disabled" {
 		t.Fatalf("last message before recovery = %#v, want hook denial tool error", last)
+	}
+}
+
+func TestQueryPropagatesTenantToModelAndValidation(t *testing.T) {
+	registry := tool.NewRegistry(tool.Definition{
+		ToolSpec: model.ToolSpec{Name: "read", ReadOnly: true},
+		Handler: func(context.Context, tool.Call) (model.ToolResult, error) {
+			return model.ToolResult{Content: "ok"}, nil
+		},
+	})
+	scope := tenant.Scope{
+		ID:        "tenant-1",
+		SubjectID: "user-1",
+		Attributes: map[string]string{
+			"region": "us",
+		},
+	}
+	var requests []tenant.Request
+	fake := &fakeModel{turns: [][]model.StreamEvent{
+		{{Kind: model.StreamToolUse, ToolUse: model.ToolUse{ID: "tool-1", Name: "read", Input: json.RawMessage(`{}`)}}},
+		{{Kind: model.StreamText, Text: "done"}},
+	}}
+
+	events, err := Query(context.Background(), "start", Options{
+		Model:  fake,
+		Tools:  registry,
+		Tenant: scope,
+		TenantValidator: tenant.ValidatorFunc(func(_ context.Context, req tenant.Request) error {
+			requests = append(requests, req)
+			return nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+	result, err := Drain(events)
+	if err != nil {
+		t.Fatalf("Drain returned error: %v", err)
+	}
+	if result != "done" {
+		t.Fatalf("result = %q, want done", result)
+	}
+	if len(fake.requests) != 2 {
+		t.Fatalf("len(fake.requests) = %d, want 2", len(fake.requests))
+	}
+	for i, req := range fake.requests {
+		if req.Tenant.ID != "tenant-1" || req.Tenant.SubjectID != "user-1" || req.Tenant.Attributes["region"] != "us" {
+			t.Fatalf("request %d tenant = %#v, want propagated scope", i, req.Tenant)
+		}
+	}
+	if len(requests) != 4 {
+		t.Fatalf("len(tenant requests) = %d, want 4", len(requests))
+	}
+	if requests[0].Boundary != tenant.BoundarySessionStart {
+		t.Fatalf("requests[0].Boundary = %q, want session_start", requests[0].Boundary)
+	}
+	if requests[1].Boundary != tenant.BoundaryModelRequest {
+		t.Fatalf("requests[1].Boundary = %q, want model_request", requests[1].Boundary)
+	}
+	if requests[2].Boundary != tenant.BoundaryToolUse || requests[2].ToolName != "read" || !requests[2].ToolReadOnly {
+		t.Fatalf("requests[2] = %#v, want read-only tool_use", requests[2])
+	}
+	if requests[3].Boundary != tenant.BoundaryModelRequest {
+		t.Fatalf("requests[3].Boundary = %q, want model_request", requests[3].Boundary)
+	}
+}
+
+func TestQueryTenantValidatorCanDenySessionStart(t *testing.T) {
+	_, err := Query(context.Background(), "start", Options{
+		Model:  &fakeModel{},
+		Tenant: tenant.Scope{ID: "tenant-1"},
+		TenantValidator: tenant.ValidatorFunc(func(_ context.Context, req tenant.Request) error {
+			if req.Boundary == tenant.BoundarySessionStart {
+				return errors.New("tenant mismatch")
+			}
+			return nil
+		}),
+	})
+	if err == nil || err.Error() != "tenant validation failed: tenant mismatch" {
+		t.Fatalf("Query error = %v, want tenant validation failure", err)
+	}
+}
+
+func TestQueryAsyncEmitsTenantDeniedBeforeStartupError(t *testing.T) {
+	events := QueryAsync(context.Background(), "start", Options{
+		Model:  &fakeModel{},
+		Tenant: tenant.Scope{ID: "tenant-1", SubjectID: "user-1"},
+		TenantValidator: tenant.ValidatorFunc(func(_ context.Context, req tenant.Request) error {
+			if req.Boundary == tenant.BoundarySessionStart {
+				return errors.New("tenant mismatch")
+			}
+			return nil
+		}),
+	})
+
+	var got []Event
+	for event := range events {
+		got = append(got, event)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len(events) = %d, want 2", len(got))
+	}
+	if got[0].Kind != EventTenantDenied {
+		t.Fatalf("events[0].Kind = %q, want tenant_denied", got[0].Kind)
+	}
+	if got[0].Tenant == nil || got[0].Tenant.Boundary != "session_start" || got[0].Tenant.TenantID != "tenant-1" || got[0].Tenant.SubjectID != "user-1" || got[0].Tenant.Reason != "tenant mismatch" {
+		t.Fatalf("tenant event = %#v, want structured startup denial", got[0].Tenant)
+	}
+	if got[1].Kind != EventError || got[1].Err == nil || got[1].Err.Error() != "tenant validation failed: tenant mismatch" {
+		t.Fatalf("events[1] = %#v, want startup error", got[1])
 	}
 }
 

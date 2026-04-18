@@ -183,6 +183,12 @@ func (t *subagentTool) Execute(ctx context.Context, call tool.Call) (model.ToolR
 	}
 
 	opts := t.defaultOptions.Merge(agent.Options)
+	if opts.Tenant.IsZero() && !call.Runtime.Tenant.IsZero() {
+		opts.Tenant = call.Runtime.Tenant.Clone()
+	}
+	if opts.TenantValidator == nil {
+		opts.TenantValidator = call.Runtime.TenantValidator
+	}
 	if t.planSource != nil && in.TaskID != "" {
 		plan, err := t.planSource.SubagentPlan(ctx, PlanRequest{
 			Agent:           agent.Name,

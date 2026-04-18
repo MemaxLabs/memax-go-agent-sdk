@@ -2,6 +2,7 @@ package tool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/resultstore"
 	"github.com/MemaxLabs/memax-go-agent-sdk/telemetry"
+	"github.com/MemaxLabs/memax-go-agent-sdk/tenant"
 )
 
 const DefaultMaxConcurrency = 10
@@ -24,14 +26,15 @@ type Decision struct {
 }
 
 type Executor struct {
-	Registry       *Registry
-	Permissions    PermissionChecker
-	Hooks          *hook.Runner
-	MaxConcurrency int
-	ResultStore    resultstore.Store
-	Runtime        Runtime
-	Tracer         telemetry.Tracer
-	Meter          telemetry.Meter
+	Registry        *Registry
+	Permissions     PermissionChecker
+	Hooks           *hook.Runner
+	TenantValidator tenant.Validator
+	MaxConcurrency  int
+	ResultStore     resultstore.Store
+	Runtime         Runtime
+	Tracer          telemetry.Tracer
+	Meter           telemetry.Meter
 }
 
 func (e Executor) Run(ctx context.Context, uses []model.ToolUse) <-chan model.ToolResult {
@@ -163,10 +166,24 @@ func (e Executor) runOne(ctx context.Context, use model.ToolUse) model.ToolResul
 		telemetry.Bool("memax.tool.destructive", spec.Destructive),
 		telemetry.Bool("memax.tool.concurrency_safe", spec.ConcurrencySafe),
 	)
+	if err := tenant.Check(ctx, e.TenantValidator, tenant.Request{
+		Boundary:            tenant.BoundaryToolUse,
+		Scope:               e.Runtime.Tenant,
+		SessionID:           e.Runtime.SessionID,
+		ParentSessionID:     e.Runtime.ParentSessionID,
+		ToolUseID:           use.ID,
+		ToolName:            use.Name,
+		ToolReadOnly:        spec.ReadOnly,
+		ToolDestructive:     spec.Destructive,
+		ToolConcurrencySafe: spec.ConcurrencySafe,
+	}); err != nil {
+		return fail(fmt.Errorf("tenant validation failed: %w", err))
+	}
 	var beforeMetadata map[string]any
 	if e.Hooks != nil {
 		result, err := e.Hooks.BeforeToolUse(ctx, hook.BeforeToolUseInput{
 			SessionID: e.Runtime.SessionID,
+			Tenant:    e.Runtime.Tenant,
 			Use:       use,
 			Spec:      spec,
 		})
@@ -212,6 +229,7 @@ func (e Executor) runOne(ctx context.Context, use model.ToolUse) model.ToolResul
 	if e.Hooks != nil {
 		errs := e.Hooks.AfterToolUse(ctx, hook.AfterToolUseInput{
 			SessionID: e.Runtime.SessionID,
+			Tenant:    e.Runtime.Tenant,
 			Use:       use,
 			Spec:      spec,
 			Result:    result,
@@ -348,12 +366,21 @@ func errorResult(use model.ToolUse, err error) model.ToolResult {
 	if err != nil {
 		msg = err.Error()
 	}
-	return model.ToolResult{
+	result := model.ToolResult{
 		ToolUseID: use.ID,
 		Name:      use.Name,
 		Content:   msg,
 		IsError:   true,
 	}
+	var denied *tenant.DeniedError
+	if errors.As(err, &denied) {
+		result.Metadata = map[string]any{
+			model.MetadataTenantDenied:         true,
+			model.MetadataTenantDeniedBoundary: string(denied.Request.Boundary),
+			model.MetadataTenantDeniedReason:   denied.Error(),
+		}
+	}
+	return result
 }
 
 func durationMilliseconds(d time.Duration) float64 {

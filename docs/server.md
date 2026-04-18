@@ -102,3 +102,14 @@ For multi-tenant servers, consider adding host-level limits outside the SDK:
 - per-tenant context deadlines
 - queueing for long-running background jobs
 - streaming APIs for long-running foreground jobs
+
+The kernel now also exposes a first-class tenant seam for server products:
+
+- set `Options.Tenant` with the opaque tenant and subject identifiers for the run
+- set `Options.TenantValidator` to enforce admission on session start or resume,
+  outbound model requests, and tool use
+- use hooks, permissions, budgets, and tool registries as the policy layers
+  that sit behind that tenant admission decision
+
+This keeps multi-tenant routing and enforcement explicit at the SDK boundary
+instead of relying on every adapter to rediscover the same validation logic.

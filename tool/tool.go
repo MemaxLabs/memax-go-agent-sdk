@@ -8,12 +8,15 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/identity"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/session"
+	"github.com/MemaxLabs/memax-go-agent-sdk/tenant"
 )
 
 type Runtime struct {
 	SessionID       string
 	ParentSessionID string
 	Identity        identity.Identity
+	Tenant          tenant.Scope
+	TenantValidator tenant.Validator
 	Sessions        session.Store
 }
 

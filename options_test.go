@@ -14,6 +14,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/planner"
 	"github.com/MemaxLabs/memax-go-agent-sdk/session"
 	"github.com/MemaxLabs/memax-go-agent-sdk/skill"
+	"github.com/MemaxLabs/memax-go-agent-sdk/tenant"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
 )
 
@@ -25,6 +26,8 @@ func TestOptionsMergeAppliesOverridesAndCopiesSlices(t *testing.T) {
 		Output:          output.Contract{Schema: map[string]any{"type": "string"}},
 		Budget:          budget.Policy{MaxTurns: 1},
 		Identity:        identity.Identity{Name: "base"},
+		Tenant:          tenant.Scope{ID: "tenant-base", SubjectID: "subject-base", Attributes: map[string]string{"region": "us"}},
+		TenantValidator: tenant.AllowAll{},
 		Planner:         planner.Static(planner.Plan{Goal: "base"}),
 		MemoryDistiller: memory.StaticDistiller{{Memory: memory.Memory{Name: "base-distilled", Content: "base"}}},
 		MemoryCandidateHandler: memory.CandidateHandlerFunc(func(context.Context, memory.CandidateRequest) error {
@@ -47,6 +50,8 @@ func TestOptionsMergeAppliesOverridesAndCopiesSlices(t *testing.T) {
 		Output:          output.Contract{MaxRetries: -1},
 		Budget:          budget.Policy{MaxModelCalls: 1},
 		Identity:        identity.Identity{Name: "override"},
+		Tenant:          tenant.Scope{ID: "tenant-override", SubjectID: "subject-override", Attributes: map[string]string{"region": "eu"}},
+		TenantValidator: tenant.ValidatorFunc(func(context.Context, tenant.Request) error { return errors.New("override validator") }),
 		Planner:         planner.Static(planner.Plan{Goal: "override"}),
 		MemoryDistiller: memory.StaticDistiller{{Memory: memory.Memory{Name: "override-distilled", Content: "override"}}},
 		MemoryCandidateHandler: memory.CandidateHandlerFunc(func(context.Context, memory.CandidateRequest) error {
@@ -66,6 +71,7 @@ func TestOptionsMergeAppliesOverridesAndCopiesSlices(t *testing.T) {
 	got := base.Merge(override)
 	overrideMemories[0].Name = "mutated"
 	overrideSkills[0].Name = "mutated"
+	override.Tenant.Attributes["region"] = "mutated"
 
 	if got.Model.(*staticClient).id != "override" {
 		t.Fatalf("Model override not applied")
@@ -78,6 +84,12 @@ func TestOptionsMergeAppliesOverridesAndCopiesSlices(t *testing.T) {
 	}
 	if got.Identity.Name != "override" {
 		t.Fatalf("Identity = %#v, want override", got.Identity)
+	}
+	if got.Tenant.ID != "tenant-override" || got.Tenant.SubjectID != "subject-override" || got.Tenant.Attributes["region"] != "eu" {
+		t.Fatalf("Tenant = %#v, want override copy", got.Tenant)
+	}
+	if err := got.TenantValidator.Validate(context.Background(), tenant.Request{}); err == nil || err.Error() != "override validator" {
+		t.Fatalf("TenantValidator error = %v, want override validator", err)
 	}
 	plan, err := got.Planner.Prepare(context.Background(), planner.Request{})
 	if err != nil {

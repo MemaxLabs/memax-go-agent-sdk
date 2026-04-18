@@ -29,6 +29,7 @@ configured:
    results can be followed by `EventApprovalRequested` and either
    `EventApprovalGranted` or `EventApprovalDenied`. A later tool result that
    consumes an approval grant can be followed by `EventApprovalConsumed`.
+   Tenant-denied tool results can be followed by `EventTenantDenied`.
    Command tool results can be followed by `EventCommandFinished`,
    `EventCommandStarted`, `EventCommandInput`, `EventCommandOutput`, or
    `EventCommandStopped`.
@@ -41,7 +42,11 @@ configured:
 9. Optional non-terminal `EventMemoryCandidateHandlerError` if the opt-in
    candidate handler fails.
 10. `EventResult` for successful completion, or `EventError` for terminal
-   failures.
+    failures.
+
+When startup fails before `Query` can return an event channel, only `QueryAsync`
+can emit structured startup denials. In that case a tenant denial at session
+start is emitted as `EventTenantDenied` before the terminal `EventError`.
 
 Tool-use lifecycle events are paired by `ToolUse.ID`. The complete
 `EventToolUse` remains the executable contract; `EventToolUseStart` and
@@ -72,6 +77,7 @@ orphaned `EventToolUse`.
   `EventWorkspaceRestore`: `Workspace`
 - `EventApprovalRequested`, `EventApprovalGranted`, `EventApprovalDenied`,
   `EventApprovalConsumed`: `Approval`
+- `EventTenantDenied`: `Tenant`
 - `EventCommandFinished`, `EventCommandStarted`, `EventCommandInput`, `EventCommandOutput`,
   `EventCommandStopped`: `Command`
 - `EventResult`: `Result` and optional aggregate `Usage`
@@ -124,6 +130,11 @@ whether the grant was single-use, and whether it was input-bound. This keeps
 approval UI and audit logs out of generic tool-result parsing while preserving
 the transcript-visible approval contract.
 
+Tenant denial events are emitted from explicit tenant-validation seams rather
+than generic string parsing. They include the denied boundary (`session_start`,
+`model_request`, or `tool_use`), the opaque tenant and subject identifiers, the
+string-typed tenant attributes, and the host-visible denial reason.
+
 ## Metrics And Spans
 
 The core loop records stable counters and histograms for query lifecycle, turn
@@ -153,6 +164,7 @@ Important metric names include:
   `memax.command.stopped`, `memax.command.duration_ms`
 - `memax.approval.requests`, `memax.approval.grants`,
   `memax.approval.denials`, `memax.approval.consumed`
+- `memax.tenant.denials`
 
 Telemetry complements events; it should not be the only source of application
 state. Use events for ordered behavior and spans/metrics for aggregate
@@ -173,6 +185,8 @@ The public event contract is protected by golden tests:
   patch, diff, and restore event ordering.
 - `testdata/golden/verification_event_stream.json` covers failed verification
   as a tool error plus verification event ordering.
+- `testdata/golden/tenant_denial_event_stream.json` covers tenant-denied tool
+  execution ordering and structured tenant denial payloads.
 - `testdata/golden/command_session_event_stream.json` covers managed command
   session start, PTY-backed interactive stdin write, resize, and stop ordering.
 

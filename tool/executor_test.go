@@ -12,6 +12,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/resultstore"
 	"github.com/MemaxLabs/memax-go-agent-sdk/telemetry"
+	"github.com/MemaxLabs/memax-go-agent-sdk/tenant"
 )
 
 func TestExecutorRunsConcurrentBatchInInputOrder(t *testing.T) {
@@ -142,6 +143,9 @@ func TestExecutorBeforeHookDeniesBeforePermissionAndHandler(t *testing.T) {
 		if input.SessionID != "session-1" {
 			t.Fatalf("SessionID = %q, want session-1", input.SessionID)
 		}
+		if input.Tenant.ID != "tenant-1" {
+			t.Fatalf("Tenant = %#v, want tenant-1", input.Tenant)
+		}
 		return hook.BeforeToolUseResult{DenyReason: "blocked by hook"}, nil
 	}))
 
@@ -152,7 +156,7 @@ func TestExecutorBeforeHookDeniesBeforePermissionAndHandler(t *testing.T) {
 			return Decision{Allow: true}
 		}),
 		Hooks:   hooks,
-		Runtime: Runtime{SessionID: "session-1"},
+		Runtime: Runtime{SessionID: "session-1", Tenant: tenant.Scope{ID: "tenant-1"}},
 	}.Run(context.Background(), []model.ToolUse{{ID: "1", Name: "write"}}))
 
 	if permissionCalled {
@@ -162,6 +166,53 @@ func TestExecutorBeforeHookDeniesBeforePermissionAndHandler(t *testing.T) {
 		t.Fatalf("len(results) = %d, want %d", got, want)
 	}
 	if !results[0].IsError || results[0].Content != "blocked by hook" {
+		t.Fatalf("unexpected result: %#v", results[0])
+	}
+}
+
+func TestExecutorTenantValidatorDeniesBeforeHooksPermissionAndHandler(t *testing.T) {
+	reg := NewRegistry(Definition{
+		ToolSpec: model.ToolSpec{Name: "write", Destructive: true},
+		Handler: func(context.Context, Call) (model.ToolResult, error) {
+			t.Fatal("handler should not run")
+			return model.ToolResult{}, nil
+		},
+	})
+
+	beforeCalled := false
+	permissionCalled := false
+	results := collect(Executor{
+		Registry: reg,
+		TenantValidator: tenant.ValidatorFunc(func(_ context.Context, req tenant.Request) error {
+			if req.Boundary != tenant.BoundaryToolUse {
+				t.Fatalf("Boundary = %q, want tool_use", req.Boundary)
+			}
+			if req.Scope.ID != "tenant-1" || req.ToolName != "write" || !req.ToolDestructive {
+				t.Fatalf("request = %#v, want tenant/tool metadata", req)
+			}
+			return errors.New("cross-tenant tool denied")
+		}),
+		Hooks: hook.NewRunner(hook.WithBeforeToolUse(func(context.Context, hook.BeforeToolUseInput) (hook.BeforeToolUseResult, error) {
+			beforeCalled = true
+			return hook.BeforeToolUseResult{}, nil
+		})),
+		Permissions: permissionFunc(func(context.Context, model.ToolUse, model.ToolSpec) Decision {
+			permissionCalled = true
+			return Decision{Allow: true}
+		}),
+		Runtime: Runtime{SessionID: "session-1", Tenant: tenant.Scope{ID: "tenant-1"}},
+	}.Run(context.Background(), []model.ToolUse{{ID: "1", Name: "write"}}))
+
+	if beforeCalled {
+		t.Fatal("before-tool hook should not run after tenant denial")
+	}
+	if permissionCalled {
+		t.Fatal("permission checker should not run after tenant denial")
+	}
+	if got, want := len(results), 1; got != want {
+		t.Fatalf("len(results) = %d, want %d", got, want)
+	}
+	if !results[0].IsError || results[0].Content != "tenant validation failed: cross-tenant tool denied" {
 		t.Fatalf("unexpected result: %#v", results[0])
 	}
 }

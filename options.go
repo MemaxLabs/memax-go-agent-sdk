@@ -17,6 +17,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/session"
 	"github.com/MemaxLabs/memax-go-agent-sdk/skill"
 	"github.com/MemaxLabs/memax-go-agent-sdk/telemetry"
+	"github.com/MemaxLabs/memax-go-agent-sdk/tenant"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
 )
 
@@ -44,6 +45,8 @@ type Options struct {
 	PromptBuilder   prompt.Builder
 	PromptProfile   prompt.Profile
 	Identity        identity.Identity
+	Tenant          tenant.Scope
+	TenantValidator tenant.Validator
 	Planner         planner.Policy
 	MemorySource    memory.Source
 	MemoryDistiller memory.Distiller
@@ -123,6 +126,12 @@ func (o Options) Merge(override Options) Options {
 	}
 	if !override.Identity.IsZero() {
 		o.Identity = override.Identity
+	}
+	if !override.Tenant.IsZero() {
+		o.Tenant = override.Tenant.Clone()
+	}
+	if override.TenantValidator != nil {
+		o.TenantValidator = override.TenantValidator
 	}
 	if override.Planner != nil {
 		o.Planner = override.Planner

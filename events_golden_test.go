@@ -3,6 +3,7 @@ package memaxagent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/memory"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/skill"
+	"github.com/MemaxLabs/memax-go-agent-sdk/tenant"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/commandtools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/skilltools"
@@ -456,73 +458,139 @@ func TestQueryVerificationEventStreamGolden(t *testing.T) {
 	}
 }
 
+func TestQueryTenantDenialEventStreamGolden(t *testing.T) {
+	registry := tool.NewRegistry(tool.Definition{
+		ToolSpec: model.ToolSpec{Name: "read", ReadOnly: true},
+		Handler: func(context.Context, tool.Call) (model.ToolResult, error) {
+			return model.ToolResult{Content: "content"}, nil
+		},
+	})
+	events, err := Query(context.Background(), "read the file", Options{
+		Model: &fakeModel{turns: [][]model.StreamEvent{
+			{{
+				Kind: model.StreamToolUse,
+				ToolUse: model.ToolUse{
+					ID:    "tool-1",
+					Name:  "read",
+					Input: json.RawMessage(`{"path":"README.md"}`),
+				},
+			}},
+			{{Kind: model.StreamText, Text: "recovered"}},
+		}},
+		Tools: registry,
+		Tenant: tenant.Scope{
+			ID:        "tenant-1",
+			SubjectID: "user-1",
+			Attributes: map[string]string{
+				"region": "us",
+			},
+		},
+		TenantValidator: tenant.ValidatorFunc(func(_ context.Context, req tenant.Request) error {
+			if req.Boundary == tenant.BoundaryToolUse {
+				return errors.New("tool not allowed for tenant")
+			}
+			return nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+
+	var got []goldenEvent
+	for event := range events {
+		if event.Kind == EventError {
+			t.Fatalf("query error: %v", event.Err)
+		}
+		got = append(got, normalizeGoldenEvent(event))
+	}
+
+	data, err := json.MarshalIndent(got, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal golden events: %v", err)
+	}
+	data = append(data, '\n')
+
+	want, err := os.ReadFile("testdata/golden/tenant_denial_event_stream.json")
+	if err != nil {
+		t.Fatalf("read golden file: %v", err)
+	}
+	if strings.TrimSpace(string(data)) != strings.TrimSpace(string(want)) {
+		t.Fatalf("tenant denial event stream golden mismatch\n got:\n%s\nwant:\n%s", data, want)
+	}
+}
+
 type goldenEvent struct {
-	Kind                 EventKind `json:"kind"`
-	Turn                 int       `json:"turn,omitempty"`
-	Text                 string    `json:"text,omitempty"`
-	ToolID               string    `json:"tool_id,omitempty"`
-	ToolName             string    `json:"tool_name,omitempty"`
-	ToolUseDelta         string    `json:"tool_use_delta,omitempty"`
-	ToolResult           string    `json:"tool_result,omitempty"`
-	UsageInputTokens     int       `json:"usage_input_tokens,omitempty"`
-	UsageOutputTokens    int       `json:"usage_output_tokens,omitempty"`
-	UsageTotalTokens     int       `json:"usage_total_tokens,omitempty"`
-	UsageProvider        string    `json:"usage_provider,omitempty"`
-	UsageModel           string    `json:"usage_model,omitempty"`
-	ContextPolicy        string    `json:"context_policy,omitempty"`
-	ContextReason        string    `json:"context_reason,omitempty"`
-	ContextOriginal      int       `json:"context_original,omitempty"`
-	ContextSent          int       `json:"context_sent,omitempty"`
-	ContextSummaryHash   string    `json:"context_summary_hash,omitempty"`
-	SkillAction          string    `json:"skill_action,omitempty"`
-	SkillName            string    `json:"skill_name,omitempty"`
-	SkillResource        string    `json:"skill_resource,omitempty"`
-	SkillQuery           string    `json:"skill_query,omitempty"`
-	SkillSelectedNames   []string  `json:"skill_selected_names,omitempty"`
-	SkillSelected        int       `json:"skill_selected,omitempty"`
-	SkillOmitted         int       `json:"skill_omitted,omitempty"`
-	SkillMatches         int       `json:"skill_matches,omitempty"`
-	SkillMetadataOnly    bool      `json:"skill_metadata_only,omitempty"`
-	SkillPromptBytesSet  bool      `json:"skill_prompt_bytes_set,omitempty"`
-	MemoryCandidates     []string  `json:"memory_candidates,omitempty"`
-	WorkspaceOperation   string    `json:"workspace_operation,omitempty"`
-	WorkspacePaths       []string  `json:"workspace_paths,omitempty"`
-	WorkspaceChanges     int       `json:"workspace_changes,omitempty"`
-	WorkspaceAdded       int       `json:"workspace_added,omitempty"`
-	WorkspaceModified    int       `json:"workspace_modified,omitempty"`
-	WorkspaceDeleted     int       `json:"workspace_deleted,omitempty"`
-	WorkspaceByteDelta   int       `json:"workspace_byte_delta,omitempty"`
-	WorkspaceCheckpoint  string    `json:"workspace_checkpoint,omitempty"`
-	WorkspaceBase        string    `json:"workspace_base,omitempty"`
-	VerificationName     string    `json:"verification_name,omitempty"`
-	VerificationPassed   bool      `json:"verification_passed,omitempty"`
-	VerificationDiag     int       `json:"verification_diagnostics,omitempty"`
-	VerificationPaths    []string  `json:"verification_paths,omitempty"`
-	ApprovalAction       string    `json:"approval_action,omitempty"`
-	ApprovalReason       string    `json:"approval_reason,omitempty"`
-	ApprovalInputHash    string    `json:"approval_input_hash,omitempty"`
-	ApprovalSummary      string    `json:"approval_summary,omitempty"`
-	ApprovalSummaryRisk  string    `json:"approval_summary_risk,omitempty"`
-	ApprovalSummaryPaths []string  `json:"approval_summary_paths,omitempty"`
-	ApprovalRequested    bool      `json:"approval_requested,omitempty"`
-	ApprovalApproved     bool      `json:"approval_approved,omitempty"`
-	ApprovalConsumed     bool      `json:"approval_consumed,omitempty"`
-	ApprovalSingleUse    bool      `json:"approval_single_use,omitempty"`
-	ApprovalInputBound   bool      `json:"approval_input_bound,omitempty"`
-	CommandOperation     string    `json:"command_operation,omitempty"`
-	CommandID            string    `json:"command_id,omitempty"`
-	CommandStatus        string    `json:"command_status,omitempty"`
-	CommandPID           int       `json:"command_pid,omitempty"`
-	CommandTTY           bool      `json:"command_tty,omitempty"`
-	CommandCols          int       `json:"command_cols,omitempty"`
-	CommandRows          int       `json:"command_rows,omitempty"`
-	CommandInputBytes    int       `json:"command_input_bytes,omitempty"`
-	CommandNextSeq       int       `json:"command_next_seq,omitempty"`
-	CommandOutputChunks  int       `json:"command_output_chunks,omitempty"`
-	CommandDroppedChunks int       `json:"command_dropped_chunks,omitempty"`
-	CommandDroppedBytes  int       `json:"command_dropped_bytes,omitempty"`
-	Result               string    `json:"result,omitempty"`
-	Error                string    `json:"error,omitempty"`
+	Kind                 EventKind         `json:"kind"`
+	Turn                 int               `json:"turn,omitempty"`
+	Text                 string            `json:"text,omitempty"`
+	ToolID               string            `json:"tool_id,omitempty"`
+	ToolName             string            `json:"tool_name,omitempty"`
+	ToolUseDelta         string            `json:"tool_use_delta,omitempty"`
+	ToolResult           string            `json:"tool_result,omitempty"`
+	UsageInputTokens     int               `json:"usage_input_tokens,omitempty"`
+	UsageOutputTokens    int               `json:"usage_output_tokens,omitempty"`
+	UsageTotalTokens     int               `json:"usage_total_tokens,omitempty"`
+	UsageProvider        string            `json:"usage_provider,omitempty"`
+	UsageModel           string            `json:"usage_model,omitempty"`
+	ContextPolicy        string            `json:"context_policy,omitempty"`
+	ContextReason        string            `json:"context_reason,omitempty"`
+	ContextOriginal      int               `json:"context_original,omitempty"`
+	ContextSent          int               `json:"context_sent,omitempty"`
+	ContextSummaryHash   string            `json:"context_summary_hash,omitempty"`
+	SkillAction          string            `json:"skill_action,omitempty"`
+	SkillName            string            `json:"skill_name,omitempty"`
+	SkillResource        string            `json:"skill_resource,omitempty"`
+	SkillQuery           string            `json:"skill_query,omitempty"`
+	SkillSelectedNames   []string          `json:"skill_selected_names,omitempty"`
+	SkillSelected        int               `json:"skill_selected,omitempty"`
+	SkillOmitted         int               `json:"skill_omitted,omitempty"`
+	SkillMatches         int               `json:"skill_matches,omitempty"`
+	SkillMetadataOnly    bool              `json:"skill_metadata_only,omitempty"`
+	SkillPromptBytesSet  bool              `json:"skill_prompt_bytes_set,omitempty"`
+	MemoryCandidates     []string          `json:"memory_candidates,omitempty"`
+	WorkspaceOperation   string            `json:"workspace_operation,omitempty"`
+	WorkspacePaths       []string          `json:"workspace_paths,omitempty"`
+	WorkspaceChanges     int               `json:"workspace_changes,omitempty"`
+	WorkspaceAdded       int               `json:"workspace_added,omitempty"`
+	WorkspaceModified    int               `json:"workspace_modified,omitempty"`
+	WorkspaceDeleted     int               `json:"workspace_deleted,omitempty"`
+	WorkspaceByteDelta   int               `json:"workspace_byte_delta,omitempty"`
+	WorkspaceCheckpoint  string            `json:"workspace_checkpoint,omitempty"`
+	WorkspaceBase        string            `json:"workspace_base,omitempty"`
+	VerificationName     string            `json:"verification_name,omitempty"`
+	VerificationPassed   bool              `json:"verification_passed,omitempty"`
+	VerificationDiag     int               `json:"verification_diagnostics,omitempty"`
+	VerificationPaths    []string          `json:"verification_paths,omitempty"`
+	ApprovalAction       string            `json:"approval_action,omitempty"`
+	ApprovalReason       string            `json:"approval_reason,omitempty"`
+	ApprovalInputHash    string            `json:"approval_input_hash,omitempty"`
+	ApprovalSummary      string            `json:"approval_summary,omitempty"`
+	ApprovalSummaryRisk  string            `json:"approval_summary_risk,omitempty"`
+	ApprovalSummaryPaths []string          `json:"approval_summary_paths,omitempty"`
+	ApprovalRequested    bool              `json:"approval_requested,omitempty"`
+	ApprovalApproved     bool              `json:"approval_approved,omitempty"`
+	ApprovalConsumed     bool              `json:"approval_consumed,omitempty"`
+	ApprovalSingleUse    bool              `json:"approval_single_use,omitempty"`
+	ApprovalInputBound   bool              `json:"approval_input_bound,omitempty"`
+	TenantBoundary       string            `json:"tenant_boundary,omitempty"`
+	TenantID             string            `json:"tenant_id,omitempty"`
+	TenantSubjectID      string            `json:"tenant_subject_id,omitempty"`
+	TenantAttributes     map[string]string `json:"tenant_attributes,omitempty"`
+	TenantReason         string            `json:"tenant_reason,omitempty"`
+	CommandOperation     string            `json:"command_operation,omitempty"`
+	CommandID            string            `json:"command_id,omitempty"`
+	CommandStatus        string            `json:"command_status,omitempty"`
+	CommandPID           int               `json:"command_pid,omitempty"`
+	CommandTTY           bool              `json:"command_tty,omitempty"`
+	CommandCols          int               `json:"command_cols,omitempty"`
+	CommandRows          int               `json:"command_rows,omitempty"`
+	CommandInputBytes    int               `json:"command_input_bytes,omitempty"`
+	CommandNextSeq       int               `json:"command_next_seq,omitempty"`
+	CommandOutputChunks  int               `json:"command_output_chunks,omitempty"`
+	CommandDroppedChunks int               `json:"command_dropped_chunks,omitempty"`
+	CommandDroppedBytes  int               `json:"command_dropped_bytes,omitempty"`
+	Result               string            `json:"result,omitempty"`
+	Error                string            `json:"error,omitempty"`
 }
 
 func normalizeGoldenEvent(event Event) goldenEvent {
@@ -613,6 +681,14 @@ func normalizeGoldenEvent(event Event) goldenEvent {
 			out.ApprovalConsumed = event.Approval.Consumed
 			out.ApprovalSingleUse = event.Approval.SingleUse
 			out.ApprovalInputBound = event.Approval.InputBound
+		}
+	case EventTenantDenied:
+		if event.Tenant != nil {
+			out.TenantBoundary = event.Tenant.Boundary
+			out.TenantID = event.Tenant.TenantID
+			out.TenantSubjectID = event.Tenant.SubjectID
+			out.TenantAttributes = cloneStringMap(event.Tenant.Attributes)
+			out.TenantReason = event.Tenant.Reason
 		}
 	case EventCommandFinished, EventCommandStarted, EventCommandInput, EventCommandOutput, EventCommandStopped, EventCommandResized:
 		if event.Command != nil {

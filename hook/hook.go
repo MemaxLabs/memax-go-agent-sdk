@@ -5,10 +5,12 @@ import (
 	"sync"
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
+	"github.com/MemaxLabs/memax-go-agent-sdk/tenant"
 )
 
 type BeforeToolUseInput struct {
 	SessionID string
+	Tenant    tenant.Scope
 	Use       model.ToolUse
 	Spec      model.ToolSpec
 }
@@ -29,6 +31,7 @@ type BeforeToolUseFunc func(context.Context, BeforeToolUseInput) (BeforeToolUseR
 
 type AfterToolUseInput struct {
 	SessionID string
+	Tenant    tenant.Scope
 	Use       model.ToolUse
 	Spec      model.ToolSpec
 	Result    model.ToolResult
@@ -43,6 +46,7 @@ type AfterToolUseFunc func(context.Context, AfterToolUseInput) error
 
 type BeforeFinalInput struct {
 	SessionID string
+	Tenant    tenant.Scope
 	Turn      int
 	Answer    string
 }
@@ -61,12 +65,14 @@ type BeforeFinalFunc func(context.Context, BeforeFinalInput) (BeforeFinalResult,
 
 type SessionStartedInput struct {
 	SessionID string
+	Tenant    tenant.Scope
 }
 
 type SessionStartedFunc func(context.Context, SessionStartedInput) error
 
 type SessionEndedInput struct {
 	SessionID string
+	Tenant    tenant.Scope
 	Reason    StopReason
 	Err       error
 }
@@ -75,6 +81,7 @@ type SessionEndedFunc func(context.Context, SessionEndedInput) error
 
 type UserPromptInput struct {
 	SessionID string
+	Tenant    tenant.Scope
 	Prompt    string
 }
 
@@ -98,6 +105,7 @@ const (
 
 type StopInput struct {
 	SessionID string
+	Tenant    tenant.Scope
 	Turn      int
 	Reason    StopReason
 	Err       error
@@ -107,6 +115,7 @@ type StopFunc func(context.Context, StopInput) error
 
 type ContextAppliedInput struct {
 	SessionID        string
+	Tenant           tenant.Scope
 	Turn             int
 	OriginalMessages int
 	SentMessages     int

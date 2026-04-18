@@ -73,6 +73,9 @@ const (
 	// EventApprovalConsumed is emitted when a later tool result carries metadata
 	// showing that an approval grant was consumed for that attempt.
 	EventApprovalConsumed EventKind = "approval_consumed"
+	// EventTenantDenied is emitted when a tenant validator denies a session
+	// start, model request, or tool use.
+	EventTenantDenied EventKind = "tenant_denied"
 	// EventCommandFinished is emitted when a command tool returns process
 	// status and retained output metadata.
 	EventCommandFinished EventKind = "command_finished"
@@ -115,6 +118,7 @@ type Event struct {
 	Workspace    *WorkspaceEvent
 	Verification *VerificationEvent
 	Approval     *ApprovalEvent
+	Tenant       *TenantEvent
 	Command      *CommandEvent
 	Result       string
 	Err          error
@@ -200,6 +204,17 @@ type ApprovalSummaryEvent struct {
 	Modified    int
 	Deleted     int
 	ByteDelta   int
+}
+
+// TenantEvent describes one tenant-policy denial. QueryAsync can emit this
+// before EventError for startup denials that happen before an event stream
+// would otherwise exist.
+type TenantEvent struct {
+	Boundary   string
+	TenantID   string
+	SubjectID  string
+	Attributes map[string]string
+	Reason     string
 }
 
 // CommandEvent describes one host-owned command lifecycle observation.

@@ -11,6 +11,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/planner"
 	"github.com/MemaxLabs/memax-go-agent-sdk/session"
+	"github.com/MemaxLabs/memax-go-agent-sdk/tenant"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
 )
 
@@ -102,6 +103,63 @@ func TestToolUsesRuntimeSessionStoreWhenAgentDoesNotSetOne(t *testing.T) {
 	}
 	if _, err := store.Messages(context.Background(), childSessionID); err != nil {
 		t.Fatalf("runtime store did not receive child session: %v", err)
+	}
+}
+
+func TestToolInheritsRuntimeTenantScopeAndValidator(t *testing.T) {
+	store := session.NewMemoryStore()
+	childModel := &fakeModel{turns: [][]model.StreamEvent{{{Kind: model.StreamText, Text: "ok"}}}}
+	var tenantRequests []tenant.Request
+	delegate, err := NewTool(Config{
+		Agents: []Agent{{
+			Name: "worker",
+			Options: memaxagent.Options{
+				Model: childModel,
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("NewTool returned error: %v", err)
+	}
+
+	result, err := delegate.Execute(context.Background(), tool.Call{
+		Use: model.ToolUse{
+			Name:  delegate.Spec().Name,
+			Input: json.RawMessage(`{"prompt":"inherit tenant"}`),
+		},
+		Runtime: tool.Runtime{
+			SessionID: "parent-session",
+			Sessions:  store,
+			Tenant: tenant.Scope{
+				ID:        "tenant-1",
+				SubjectID: "user-1",
+				Attributes: map[string]string{
+					"plan": "pro",
+				},
+			},
+			TenantValidator: tenant.ValidatorFunc(func(_ context.Context, req tenant.Request) error {
+				tenantRequests = append(tenantRequests, req)
+				return nil
+			}),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("result = %#v, want success", result)
+	}
+	if len(childModel.requests) != 1 {
+		t.Fatalf("len(childModel.requests) = %d, want 1", len(childModel.requests))
+	}
+	if childModel.requests[0].Tenant.ID != "tenant-1" || childModel.requests[0].Tenant.SubjectID != "user-1" || childModel.requests[0].Tenant.Attributes["plan"] != "pro" {
+		t.Fatalf("child request tenant = %#v, want inherited scope", childModel.requests[0].Tenant)
+	}
+	if len(tenantRequests) == 0 {
+		t.Fatal("tenant validator was not called")
+	}
+	if tenantRequests[0].Boundary != tenant.BoundarySessionStart || tenantRequests[0].Scope.ID != "tenant-1" {
+		t.Fatalf("tenant request = %#v, want inherited session-start scope", tenantRequests[0])
 	}
 }
 

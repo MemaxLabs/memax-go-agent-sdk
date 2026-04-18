@@ -1,0 +1,47 @@
+[
+  {
+    "kind": "session_started"
+  },
+  {
+    "kind": "model_request",
+    "turn": 1
+  },
+  {
+    "kind": "tool_use",
+    "turn": 1,
+    "tool_id": "tool-1",
+    "tool_name": "read"
+  },
+  {
+    "kind": "tool_result",
+    "turn": 1,
+    "tool_id": "tool-1",
+    "tool_name": "read",
+    "tool_result": "tenant validation failed: tool not allowed for tenant"
+  },
+  {
+    "kind": "tenant_denied",
+    "turn": 1,
+    "tenant_boundary": "tool_use",
+    "tenant_id": "tenant-1",
+    "tenant_subject_id": "user-1",
+    "tenant_attributes": {
+      "region": "us"
+    },
+    "tenant_reason": "tool not allowed for tenant"
+  },
+  {
+    "kind": "model_request",
+    "turn": 2
+  },
+  {
+    "kind": "assistant",
+    "turn": 2,
+    "text": "recovered"
+  },
+  {
+    "kind": "result",
+    "turn": 2,
+    "result": "recovered"
+  }
+]

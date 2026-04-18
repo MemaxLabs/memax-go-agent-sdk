@@ -174,6 +174,12 @@ const (
 	// MetadataApprovalSingleUse marks whether the consumed approval grant was
 	// single-use.
 	MetadataApprovalSingleUse = "approval_single_use"
+	// MetadataTenantDenied marks a tool result as a tenant-policy denial.
+	MetadataTenantDenied = "tenant_denied"
+	// MetadataTenantDeniedBoundary carries the denied boundary name.
+	MetadataTenantDeniedBoundary = "tenant_denied_boundary"
+	// MetadataTenantDeniedReason carries the host-visible denial reason.
+	MetadataTenantDeniedReason = "tenant_denied_reason"
 	// MetadataCommandOperation identifies command tool results that should
 	// produce command lifecycle events.
 	MetadataCommandOperation = "command_operation"
