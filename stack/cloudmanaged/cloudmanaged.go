@@ -35,6 +35,7 @@ type Config struct {
 	Base     memaxagent.Options
 	Sessions session.Store
 	Policies Policies
+	Audit    AuditConfig
 }
 
 // Policies configures optional tenant-aware governance for the cloud-managed
@@ -77,11 +78,14 @@ func DefaultPolicies() Policies {
 // Stack is one assembled cloud-managed runtime profile.
 type Stack struct {
 	options memaxagent.Options
+	audit   AuditConfig
 }
 
 // New assembles a cloud-managed stack from the configured host-owned
 // capabilities. Returned options are ready to pass to memaxagent.Query after
-// the caller sets a model and the run's tenant scope.
+// the caller sets a model. Stack.Query and Stack.QueryAsync accept the
+// tenant scope explicitly per run so one assembled stack can serve many
+// tenants without rebuilding shared registries, hooks, or validators.
 func New(config Config) (Stack, error) {
 	opts := config.Base
 	opts.Hooks = cloneHooks(opts.Hooks)
@@ -92,7 +96,7 @@ func New(config Config) (Stack, error) {
 	if err := installTenantControls(&opts, config.Policies); err != nil {
 		return Stack{}, err
 	}
-	return Stack{options: opts}, nil
+	return Stack{options: opts, audit: config.Audit}, nil
 }
 
 // Options returns the assembled agent options. The returned value is a copy of
@@ -117,6 +121,29 @@ func (s Stack) Registry() *tool.Registry {
 // Hooks returns the assembled hook runner.
 func (s Stack) Hooks() *hook.Runner {
 	return s.options.Hooks
+}
+
+func (s Stack) optionsForTenant(scope tenant.Scope) memaxagent.Options {
+	opts := s.options
+	opts.Tenant = scope.Clone()
+	return opts
+}
+
+// Query runs the assembled cloud-managed stack and, when configured, mirrors
+// the emitted event stream to the stack's audit sink. The tenant scope is
+// explicit per run so managed hosts can reuse one stack across tenants.
+func (s Stack) Query(ctx context.Context, prompt string, scope tenant.Scope) (<-chan memaxagent.Event, error) {
+	opts := s.optionsForTenant(scope)
+	ctx = memaxagent.WithEventObserver(ctx, s.audit)
+	return memaxagent.Query(ctx, prompt, opts)
+}
+
+// QueryAsync runs the assembled cloud-managed stack through QueryAsync so
+// startup denials also become auditable events. When configured, the stack's
+// audit sink receives every emitted event in order. The tenant scope is
+// explicit per run so managed hosts can reuse one stack across tenants.
+func (s Stack) QueryAsync(ctx context.Context, prompt string, scope tenant.Scope) <-chan memaxagent.Event {
+	return memaxagent.QueryAsync(memaxagent.WithEventObserver(ctx, s.audit), prompt, s.optionsForTenant(scope))
 }
 
 // QuotaValidator enforces tenant-aware per-session model/tool quotas through

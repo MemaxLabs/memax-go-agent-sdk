@@ -87,7 +87,8 @@ Coding-oriented adapters and toolkits:
   scheduling tools, task, approval, skill, and delegation-oriented personal
   workflows
 - initial `stack/cloudmanaged` assembly for tenant-scoped managed-worker
-  workflows with explicit tenant admission and per-session quota validation
+  workflows with explicit tenant admission, per-session quota validation, and
+  host-owned audit sinks
 - initial SQLite-backed scheduling adapter for durable local calendar backends
 - skill discovery tools
 

@@ -101,7 +101,14 @@ same kernel and adapter seams rather than fork the architecture.
 Initial `stack/cloudmanaged` now exists as a deliberately narrow managed-worker
 assembly: it layers tenant-scope enforcement and per-session quota validation
 onto the kernel's explicit tenant seam without hard-coding billing, remote
-execution, or policy-service semantics into the runtime.
+execution, or policy-service semantics into the runtime. It now also provides
+an audit subscriber plus reference memory and JSONL sinks so managed hosts can
+persist the ordered event stream without parsing transcript text or wrapping
+`Query` by hand. The stack now accepts tenant scope explicitly per run so one
+assembled managed-worker stack can serve many tenants without rebuilding shared
+registries, hooks, or validators. Managed audit observation now follows
+delegated child-agent runs automatically through the same runtime seam, so
+bounded subagent work does not disappear from a hosted audit trail.
 Each preset now has deterministic end-to-end eval coverage for its normal
 workflow and its defining recovery or delegation path, so preset behavior is
 part of the public contract rather than informal guidance. The navigable preset
@@ -109,8 +116,10 @@ contracts live in [coding-stack-presets.md](coding-stack-presets.md) and
 [personal-stack-presets.md](personal-stack-presets.md), including default
 policy posture, examples, and the specific eval scenario names that enforce the
 surface. `stack/cloudmanaged` is earlier in maturity: the initial quota-denial
-eval locks the tenant-admission contract, while richer managed-host presets and
-audit surfaces remain follow-on work.
+coverage locks the tenant-admission contract, and the first audit subscriber
+locks a host-owned persistence path for managed event streams. Richer
+managed-host presets, distributed quota validators, and remote-execution
+backends remain follow-on work.
 
 ## Package Shape
 

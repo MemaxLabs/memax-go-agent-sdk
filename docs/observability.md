@@ -170,6 +170,14 @@ Telemetry complements events; it should not be the only source of application
 state. Use events for ordered behavior and spans/metrics for aggregate
 monitoring.
 
+For managed-host products, `stack/cloudmanaged` now exposes a host-owned audit
+subscriber over the same event stream plus reference memory and JSONL sinks.
+This keeps audit persistence ordered with the emitted events while leaving sink
+durability, buffering, and replication policy under host control. Because the
+runtime now carries event observation through delegated child-agent runs,
+managed audit trails can cover parent and child sessions without special-case
+subagent plumbing in application code.
+
 ## Regression Coverage
 
 The public event contract is protected by golden tests:

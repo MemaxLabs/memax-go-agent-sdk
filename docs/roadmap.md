@@ -144,9 +144,11 @@ system prompt.
 - Initial tenant scope and admission seams now exist through `tenant.Scope`,
   `Options.Tenant`, and `Options.TenantValidator`, covering session start,
   model-request, and tool-use boundaries. Initial `stack/cloudmanaged`
-  quota wiring and adversarial eval coverage now exist through the
-  `managed_worker` preset. Next steps are richer cloudmanaged presets, audit
-  surfaces, and remote-execution backends built on top of the same tenant seam.
+  quota wiring and adversarial coverage now exist through the
+  `managed_worker` preset, and initial host-owned audit sinks now exist through
+  the cloudmanaged audit subscriber plus memory/JSONL sinks. Next steps are
+  richer cloudmanaged presets, distributed quota validators, and
+  remote-execution backends built on top of the same tenant seam.
 
 ## Phase 7: Opinionated Stacks
 
