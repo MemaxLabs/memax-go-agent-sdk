@@ -6,15 +6,20 @@
 // normal host-owned validator on the explicit tenant seam; this package simply
 // provides a batteries-included validator and preset for managed products.
 //
-// QuotaValidator keeps per-session state in memory. Single-process managed
-// hosts can use it directly; distributed deployments need either session-affine
-// routing or a host-owned distributed tenant.Validator backed by shared state.
+// QuotaValidator uses a host-owned QuotaStore. Single-process managed hosts can
+// use the reference MemoryQuotaStore directly; distributed deployments can
+// attach a shared QuotaStore without reimplementing the validator logic.
+//
+// Quota reservations are admission-time accounting, not billing-accurate usage
+// tracking: once reserved, quota is not automatically released if the run later
+// aborts. Store errors are treated as denials so managed hosts fail closed by
+// default; hosts that prefer degrade-to-allow semantics should wrap the store
+// or validator explicitly.
 package cloudmanaged
 
 import (
 	"context"
 	"fmt"
-	"sync"
 
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
 	"github.com/MemaxLabs/memax-go-agent-sdk/hook"
@@ -34,8 +39,11 @@ import (
 type Config struct {
 	Base     memaxagent.Options
 	Sessions session.Store
-	Policies Policies
-	Audit    AuditConfig
+	// QuotaStore overrides the reference in-memory quota backend used by the
+	// managed validator. Nil keeps the default MemoryQuotaStore.
+	QuotaStore QuotaStore
+	Policies   Policies
+	Audit      AuditConfig
 }
 
 // Policies configures optional tenant-aware governance for the cloud-managed
@@ -93,7 +101,7 @@ func New(config Config) (Stack, error) {
 	if config.Sessions != nil {
 		opts.Sessions = config.Sessions
 	}
-	if err := installTenantControls(&opts, config.Policies); err != nil {
+	if err := installTenantControls(&opts, config.Policies, config.QuotaStore); err != nil {
 		return Stack{}, err
 	}
 	return Stack{options: opts, audit: config.Audit}, nil
@@ -156,14 +164,7 @@ type QuotaValidator struct {
 	requireTenantScope bool
 	maxModelRequests   int
 	maxToolUses        int
-
-	mu       sync.RWMutex
-	sessions map[string]quotaState
-}
-
-type quotaState struct {
-	ModelRequests int
-	ToolUses      int
+	store              QuotaStore
 }
 
 // QuotaValidatorOption configures a QuotaValidator.
@@ -179,11 +180,22 @@ func WithRequiredTenantScope() QuotaValidatorOption {
 	}
 }
 
-// NewQuotaValidator constructs a tenant validator for the given quota limits.
+// NewQuotaValidator constructs a tenant validator for the given quota limits
+// using the reference in-memory quota store.
 func NewQuotaValidator(quota Quota, options ...QuotaValidatorOption) *QuotaValidator {
+	return NewQuotaValidatorWithStore(nil, quota, options...)
+}
+
+// NewQuotaValidatorWithStore constructs a tenant validator for the given quota
+// limits over store. Nil uses the reference in-memory quota store.
+func NewQuotaValidatorWithStore(store QuotaStore, quota Quota, options ...QuotaValidatorOption) *QuotaValidator {
+	if store == nil {
+		store = NewMemoryQuotaStore()
+	}
 	v := &QuotaValidator{
 		maxModelRequests: quota.MaxModelRequests,
 		maxToolUses:      quota.MaxToolUses,
+		store:            store,
 	}
 	for _, option := range options {
 		if option != nil {
@@ -209,12 +221,11 @@ func (v *QuotaValidator) Validate(ctx context.Context, req tenant.Request) error
 	}
 	switch req.Boundary {
 	case tenant.BoundarySessionStart:
-		v.ensureSession(req.SessionID)
-		return nil
+		return v.ensureSession(ctx, req.Scope, req.SessionID)
 	case tenant.BoundaryModelRequest:
-		return v.recordModelRequest(req.SessionID)
+		return v.recordModelRequest(ctx, req.Scope, req.SessionID)
 	case tenant.BoundaryToolUse:
-		return v.recordToolUse(req.SessionID)
+		return v.recordToolUse(ctx, req.Scope, req.SessionID)
 	default:
 		return nil
 	}
@@ -225,15 +236,12 @@ func (v *QuotaValidator) Reset(sessionID string) {
 	if v == nil || sessionID == "" {
 		return
 	}
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	delete(v.sessions, sessionID)
+	_ = v.resetSession(context.Background(), tenant.Scope{}, sessionID)
 }
 
 // SessionEnded releases session-scoped quota state when a run ends.
-func (v *QuotaValidator) SessionEnded(_ context.Context, input hook.SessionEndedInput) error {
-	v.Reset(input.SessionID)
-	return nil
+func (v *QuotaValidator) SessionEnded(ctx context.Context, input hook.SessionEndedInput) error {
+	return v.resetSession(ctx, input.Tenant, input.SessionID)
 }
 
 // Options returns hook options that keep session-scoped quota state bounded.
@@ -244,58 +252,50 @@ func (v *QuotaValidator) Options() []hook.Option {
 	return []hook.Option{hook.WithSessionEnded(v.SessionEnded)}
 }
 
-func (v *QuotaValidator) ensureSession(sessionID string) {
-	if sessionID == "" {
-		return
+func (v *QuotaValidator) ensureSession(ctx context.Context, scope tenant.Scope, sessionID string) error {
+	if v == nil || sessionID == "" || v.store == nil {
+		return nil
 	}
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	if v.sessions == nil {
-		v.sessions = make(map[string]quotaState)
-	}
-	if _, ok := v.sessions[sessionID]; !ok {
-		v.sessions[sessionID] = quotaState{}
-	}
+	return v.store.EnsureSession(ctx, scope, sessionID)
 }
 
-func (v *QuotaValidator) recordModelRequest(sessionID string) error {
+func (v *QuotaValidator) resetSession(ctx context.Context, scope tenant.Scope, sessionID string) error {
+	if v == nil || sessionID == "" || v.store == nil {
+		return nil
+	}
+	return v.store.ResetSession(ctx, scope, sessionID)
+}
+
+func (v *QuotaValidator) recordModelRequest(ctx context.Context, scope tenant.Scope, sessionID string) error {
 	if v.maxModelRequests <= 0 || sessionID == "" {
 		return nil
 	}
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	if v.sessions == nil {
-		v.sessions = make(map[string]quotaState)
+	_, granted, err := v.store.Reserve(ctx, scope, sessionID, QuotaCounterModelRequests, v.maxModelRequests)
+	if err != nil {
+		return fmt.Errorf("reserve model request quota: %w", err)
 	}
-	state := v.sessions[sessionID]
-	if state.ModelRequests >= v.maxModelRequests {
+	if !granted {
 		return fmt.Errorf("tenant quota exceeded: max model requests reached (%d)", v.maxModelRequests)
 	}
-	state.ModelRequests++
-	v.sessions[sessionID] = state
 	return nil
 }
 
-func (v *QuotaValidator) recordToolUse(sessionID string) error {
+func (v *QuotaValidator) recordToolUse(ctx context.Context, scope tenant.Scope, sessionID string) error {
 	if v.maxToolUses <= 0 || sessionID == "" {
 		return nil
 	}
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	if v.sessions == nil {
-		v.sessions = make(map[string]quotaState)
+	_, granted, err := v.store.Reserve(ctx, scope, sessionID, QuotaCounterToolUses, v.maxToolUses)
+	if err != nil {
+		return fmt.Errorf("reserve tool quota: %w", err)
 	}
-	state := v.sessions[sessionID]
-	if state.ToolUses >= v.maxToolUses {
+	if !granted {
 		return fmt.Errorf("tenant quota exceeded: max tool uses reached (%d)", v.maxToolUses)
 	}
-	state.ToolUses++
-	v.sessions[sessionID] = state
 	return nil
 }
 
-func installTenantControls(opts *memaxagent.Options, policies Policies) error {
-	validator := newManagedValidator(policies)
+func installTenantControls(opts *memaxagent.Options, policies Policies, store QuotaStore) error {
+	validator := newManagedValidator(policies, store)
 	if validator != nil {
 		opts.TenantValidator = combineValidators(opts.TenantValidator, validator)
 		for _, option := range validator.Options() {
@@ -311,7 +311,7 @@ func installTenantControls(opts *memaxagent.Options, policies Policies) error {
 	return nil
 }
 
-func newManagedValidator(policies Policies) *QuotaValidator {
+func newManagedValidator(policies Policies, store QuotaStore) *QuotaValidator {
 	if !policies.RequireTenantScope && policies.Quota.IsZero() {
 		return nil
 	}
@@ -319,7 +319,7 @@ func newManagedValidator(policies Policies) *QuotaValidator {
 	if policies.RequireTenantScope {
 		options = append(options, WithRequiredTenantScope())
 	}
-	return NewQuotaValidator(policies.Quota, options...)
+	return NewQuotaValidatorWithStore(store, policies.Quota, options...)
 }
 
 func combineValidators(validators ...tenant.Validator) tenant.Validator {

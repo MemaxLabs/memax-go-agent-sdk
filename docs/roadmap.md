@@ -146,8 +146,10 @@ system prompt.
   model-request, and tool-use boundaries. Initial `stack/cloudmanaged`
   quota wiring and adversarial coverage now exist through the
   `managed_worker` preset, and initial host-owned audit sinks now exist through
-  the cloudmanaged audit subscriber plus memory/JSONL sinks. Next steps are
-  richer cloudmanaged presets, distributed quota validators, and
+  the cloudmanaged audit subscriber plus memory/JSONL sinks. Initial
+  host-owned quota state now sits behind a `QuotaStore` seam with the
+  reference `MemoryQuotaStore`; next steps are richer cloudmanaged presets,
+  shared distributed quota backends, and
   remote-execution backends built on top of the same tenant seam.
 
 ## Phase 7: Opinionated Stacks

@@ -109,6 +109,10 @@ assembled managed-worker stack can serve many tenants without rebuilding shared
 registries, hooks, or validators. Managed audit observation now follows
 delegated child-agent runs automatically through the same runtime seam, so
 bounded subagent work does not disappear from a hosted audit trail.
+Managed quotas now sit behind a host-owned `QuotaStore` seam: the reference
+`MemoryQuotaStore` keeps the zero-config path for local or single-process
+deployments, while distributed hosts can attach a shared backend without
+rewriting tenant validation or session-end cleanup logic.
 Each preset now has deterministic end-to-end eval coverage for its normal
 workflow and its defining recovery or delegation path, so preset behavior is
 part of the public contract rather than informal guidance. The navigable preset

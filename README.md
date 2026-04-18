@@ -119,6 +119,11 @@ that is the most demanding initial domain. The architecture is being hardened
 so those same runtime primitives can later power personal intelligence and
 managed cloud-agent stacks without forking the core.
 
+`stack/cloudmanaged` now keeps quota state behind a host-owned `QuotaStore`
+seam. The reference `MemoryQuotaStore` keeps the zero-config path for local or
+single-process managed hosts, while distributed deployments can attach a shared
+quota backend without reimplementing tenant validation or session-end cleanup.
+
 `stack/personal` now exposes named presets so hosts can start from a
 personal-intelligence workflow profile and then attach only the host-owned
 backends they need:

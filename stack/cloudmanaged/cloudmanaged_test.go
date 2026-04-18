@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -74,6 +75,82 @@ func TestQuotaValidatorSessionScopedLimitsAndCleanup(t *testing.T) {
 		Scope:     scope,
 	}); err != nil {
 		t.Fatalf("model request after cleanup error = %v", err)
+	}
+}
+
+func TestMemoryQuotaStoreReserveAndReset(t *testing.T) {
+	t.Parallel()
+
+	store := NewMemoryQuotaStore()
+	scope := tenant.Scope{ID: "tenant-1", SubjectID: "user-1"}
+	if err := store.EnsureSession(context.Background(), scope, "session-1"); err != nil {
+		t.Fatalf("EnsureSession() error = %v", err)
+	}
+	if used, granted, err := store.Reserve(context.Background(), scope, "session-1", QuotaCounterModelRequests, 1); err != nil || !granted || used != 1 {
+		t.Fatalf("Reserve(first model) = (%d, %t, %v), want (1, true, nil)", used, granted, err)
+	}
+	if used, granted, err := store.Reserve(context.Background(), scope, "session-1", QuotaCounterModelRequests, 1); err != nil || granted || used != 1 {
+		t.Fatalf("Reserve(second model) = (%d, %t, %v), want (1, false, nil)", used, granted, err)
+	}
+	if used, granted, err := store.Reserve(context.Background(), scope, "session-1", QuotaCounterToolUses, 1); err != nil || !granted || used != 1 {
+		t.Fatalf("Reserve(first tool) = (%d, %t, %v), want (1, true, nil)", used, granted, err)
+	}
+	if err := store.ResetSession(context.Background(), scope, "session-1"); err != nil {
+		t.Fatalf("ResetSession() error = %v", err)
+	}
+	if used, granted, err := store.Reserve(context.Background(), scope, "session-1", QuotaCounterModelRequests, 1); err != nil || !granted || used != 1 {
+		t.Fatalf("Reserve(after reset) = (%d, %t, %v), want (1, true, nil)", used, granted, err)
+	}
+}
+
+func TestMemoryQuotaStoreRejectsUnknownCounter(t *testing.T) {
+	t.Parallel()
+
+	store := NewMemoryQuotaStore()
+	scope := tenant.Scope{ID: "tenant-1", SubjectID: "user-1"}
+	if err := store.EnsureSession(context.Background(), scope, "session-1"); err != nil {
+		t.Fatalf("EnsureSession() error = %v", err)
+	}
+	if used, granted, err := store.Reserve(context.Background(), scope, "session-1", QuotaCounter("unknown"), 1); err == nil || granted || used != 0 {
+		t.Fatalf("Reserve(unknown) = (%d, %t, %v), want (0, false, error)", used, granted, err)
+	}
+}
+
+func TestMemoryQuotaStoreReserveIsAtomic(t *testing.T) {
+	t.Parallel()
+
+	store := NewMemoryQuotaStore()
+	scope := tenant.Scope{ID: "tenant-1", SubjectID: "user-1"}
+	if err := store.EnsureSession(context.Background(), scope, "session-1"); err != nil {
+		t.Fatalf("EnsureSession() error = %v", err)
+	}
+
+	const goroutines = 16
+	var wg sync.WaitGroup
+	granted := make(chan bool, goroutines)
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, ok, err := store.Reserve(context.Background(), scope, "session-1", QuotaCounterModelRequests, 1)
+			if err != nil {
+				t.Errorf("Reserve() error = %v", err)
+				return
+			}
+			granted <- ok
+		}()
+	}
+	wg.Wait()
+	close(granted)
+
+	var grantedCount int
+	for ok := range granted {
+		if ok {
+			grantedCount++
+		}
+	}
+	if grantedCount != 1 {
+		t.Fatalf("granted count = %d, want 1", grantedCount)
 	}
 }
 
@@ -154,6 +231,64 @@ func TestNewComposesBaseTenantValidator(t *testing.T) {
 		Scope:     scope,
 	}); err != nil {
 		t.Fatalf("tenant.Check(model request after cleanup) error = %v", err)
+	}
+}
+
+func TestNewUsesConfiguredQuotaStore(t *testing.T) {
+	t.Parallel()
+
+	store := &quotaSpyStore{}
+	stack, err := New(Config{
+		QuotaStore: store,
+		Policies: Policies{
+			RequireTenantScope: true,
+			Quota: Quota{
+				MaxModelRequests: 2,
+				MaxToolUses:      3,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	opts := stack.Options()
+	scope := tenant.Scope{ID: "tenant-1", SubjectID: "user-1"}
+	for _, req := range []tenant.Request{
+		{Boundary: tenant.BoundarySessionStart, SessionID: "session-1", Scope: scope},
+		{Boundary: tenant.BoundaryModelRequest, SessionID: "session-1", Scope: scope},
+		{Boundary: tenant.BoundaryToolUse, SessionID: "session-1", Scope: scope},
+	} {
+		if err := tenant.Check(context.Background(), opts.TenantValidator, req); err != nil {
+			t.Fatalf("tenant.Check(%s) error = %v", req.Boundary, err)
+		}
+	}
+	if store.ensureCalls != 1 {
+		t.Fatalf("ensure calls = %d, want 1", store.ensureCalls)
+	}
+	if len(store.reserveCalls) != 2 {
+		t.Fatalf("reserve calls = %#v, want 2", store.reserveCalls)
+	}
+	if store.reserveCalls[0].counter != QuotaCounterModelRequests || store.reserveCalls[0].limit != 2 {
+		t.Fatalf("reserve call 0 = %#v, want model request limit 2", store.reserveCalls[0])
+	}
+	if store.reserveCalls[1].counter != QuotaCounterToolUses || store.reserveCalls[1].limit != 3 {
+		t.Fatalf("reserve call 1 = %#v, want tool use limit 3", store.reserveCalls[1])
+	}
+	if opts.Hooks == nil {
+		t.Fatal("stack hooks = nil, want cleanup hook")
+	}
+	if errs := opts.Hooks.SessionEnded(context.Background(), hook.SessionEndedInput{
+		SessionID: "session-1",
+		Tenant:    scope,
+	}); len(errs) != 0 {
+		t.Fatalf("SessionEnded() errors = %v, want none", errs)
+	}
+	if store.resetCalls != 1 {
+		t.Fatalf("reset calls = %d, want 1", store.resetCalls)
+	}
+	if store.resetScope.ID != scope.ID || store.resetScope.SubjectID != scope.SubjectID {
+		t.Fatalf("reset scope = %#v, want tenant %q subject %q", store.resetScope, scope.ID, scope.SubjectID)
 	}
 }
 
@@ -517,6 +652,39 @@ type quotaTestModel struct {
 	requests []model.Request
 	turns    [][]model.StreamEvent
 	err      error
+}
+
+type quotaReserveCall struct {
+	sessionID string
+	counter   QuotaCounter
+	limit     int
+}
+
+type quotaSpyStore struct {
+	ensureCalls  int
+	resetCalls   int
+	resetScope   tenant.Scope
+	reserveCalls []quotaReserveCall
+}
+
+func (s *quotaSpyStore) EnsureSession(context.Context, tenant.Scope, string) error {
+	s.ensureCalls++
+	return nil
+}
+
+func (s *quotaSpyStore) Reserve(_ context.Context, _ tenant.Scope, sessionID string, counter QuotaCounter, limit int) (int, bool, error) {
+	s.reserveCalls = append(s.reserveCalls, quotaReserveCall{
+		sessionID: sessionID,
+		counter:   counter,
+		limit:     limit,
+	})
+	return 1, true, nil
+}
+
+func (s *quotaSpyStore) ResetSession(_ context.Context, scope tenant.Scope, _ string) error {
+	s.resetCalls++
+	s.resetScope = scope
+	return nil
 }
 
 func (m *quotaTestModel) Stream(_ context.Context, req model.Request) (model.Stream, error) {
