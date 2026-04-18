@@ -67,11 +67,7 @@ func CodingPresetSafeLocal() agenteval.Case {
 	config := coding.SafeLocal()
 	config.Workspace = workspaceStore
 	config.Tasks = taskStore
-	config.Verifier.Verifier = tasktools.NewVerificationProgressVerifier(
-		taskStore,
-		verifierForReadmeStatus(workspaceStore, "after\n"),
-		tasktools.WithVerificationFailStatus(tasktools.StatusInProgress),
-	)
+	config.Verifier.Verifier = verifierForReadmeStatus(workspaceStore, "after\n")
 	stack, stackErr := coding.New(config)
 
 	return agenteval.Case{
@@ -214,11 +210,7 @@ func CodingPresetCIRepair() agenteval.Case {
 	config.Workspace = workspaceStore
 	config.Tasks = taskStore
 	config.Command.Runner = commandRunner
-	config.Verifier.Verifier = tasktools.NewVerificationProgressVerifier(
-		taskStore,
-		verifierForReadmeStatus(workspaceStore, "status: fixed"),
-		tasktools.WithVerificationFailStatus(tasktools.StatusInProgress),
-	)
+	config.Verifier.Verifier = verifierForReadmeStatus(workspaceStore, "status: fixed")
 	stack, stackErr := coding.New(config)
 
 	return agenteval.Case{
@@ -413,11 +405,7 @@ func CodingPresetInteractiveDev() agenteval.Case {
 	config.Workspace = workspaceStore
 	config.Tasks = taskStore
 	config.CommandSessions = manager
-	config.Verifier.Verifier = tasktools.NewVerificationProgressVerifier(
-		taskStore,
-		verifierForReadmeStatus(workspaceStore, "status: fixed"),
-		tasktools.WithVerificationFailStatus(tasktools.StatusInProgress),
-	)
+	config.Verifier.Verifier = verifierForReadmeStatus(workspaceStore, "status: fixed")
 	stack, stackErr := coding.New(config)
 
 	return agenteval.Case{
