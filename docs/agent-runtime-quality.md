@@ -33,24 +33,24 @@ code or implementation text.
 
 ## Current Maturity Map
 
-| Subsystem | Current State | Target |
-| --- | --- | --- |
-| Agent loop | Foundation | Competitive |
-| Provider adapters | Foundation | Competitive |
-| Tool contract | Competitive foundation | Leading |
-| Tool execution scheduling | Foundation | Competitive |
-| Permissions and hooks | Competitive foundation | Competitive |
-| Sessions and resume | Competitive foundation | Competitive |
-| Context management | Foundation | Competitive |
-| Skills | Foundation | Competitive |
-| Memory | Foundation | Competitive |
-| Planner and tasks | Foundation | Competitive |
-| Subagents | Foundation | Competitive |
+| Subsystem                 | Current State          | Target      |
+| ------------------------- | ---------------------- | ----------- |
+| Agent loop                | Foundation             | Competitive |
+| Provider adapters         | Foundation             | Competitive |
+| Tool contract             | Competitive foundation | Leading     |
+| Tool execution scheduling | Foundation             | Competitive |
+| Permissions and hooks     | Competitive foundation | Competitive |
+| Sessions and resume       | Competitive foundation | Competitive |
+| Context management        | Foundation             | Competitive |
+| Skills                    | Foundation             | Competitive |
+| Memory                    | Foundation             | Competitive |
+| Planner and tasks         | Foundation             | Competitive |
+| Subagents                 | Foundation             | Competitive |
 | Workspace and checkpoints | Competitive foundation | Competitive |
-| Budgets and usage | Competitive foundation | Competitive |
-| Evals | Strong foundation | Leading |
-| Observability | Competitive foundation | Competitive |
-| Domain stacks/presets | Foundation | Competitive |
+| Budgets and usage         | Competitive foundation | Competitive |
+| Evals                     | Strong foundation      | Leading     |
+| Observability             | Competitive foundation | Competitive |
+| Domain stacks/presets     | Foundation             | Competitive |
 
 `Tool contract` targets Leading only in a narrow sense: the interface should
 stay minimal and host-owned while supporting production-grade lifecycle
