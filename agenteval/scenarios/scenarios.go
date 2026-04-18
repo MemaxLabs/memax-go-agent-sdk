@@ -69,6 +69,7 @@ func All() []agenteval.Case {
 		PersonalPresetAssistantScheduleConflictRecovery(),
 		PersonalPresetResearchPartner(),
 		CloudManagedPresetManagedWorkerQuotaDenial(),
+		CloudManagedPresetManagedWorkerDelegatedAuditTrail(),
 		CodingPresetSafeLocal(),
 		CodingPresetSafeLocalRollbackRecovery(),
 		CodingPresetCIRepair(),

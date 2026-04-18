@@ -27,6 +27,10 @@ type Case struct {
 	Options    memaxagent.Options
 	Assertions []Assertion
 	Timeout    time.Duration
+	// Run overrides the default memaxagent.Query execution path. This is useful
+	// for stack-owned entrypoints that need extra per-run parameters, such as
+	// explicit tenant scope or host-wired event observers.
+	Run func(context.Context) (<-chan memaxagent.Event, error)
 	// AllowError lets assertions inspect an expected agent/query error without
 	// making the case fail before assertions run. Unexpected errors are still
 	// recorded as Result.RunErr and become Result.Err when AllowError is false.
@@ -168,7 +172,15 @@ func (r Runner) runCase(ctx context.Context, c Case) (result Result) {
 		defer cancel()
 	}
 
-	events, err := memaxagent.Query(ctx, c.Prompt, r.Options.Merge(c.Options))
+	var (
+		events <-chan memaxagent.Event
+		err    error
+	)
+	if c.Run != nil {
+		events, err = c.Run(ctx)
+	} else {
+		events, err = memaxagent.Query(ctx, c.Prompt, r.Options.Merge(c.Options))
+	}
 	if err != nil {
 		result.RunErr = err
 		if !c.AllowError {
