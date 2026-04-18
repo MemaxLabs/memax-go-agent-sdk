@@ -25,6 +25,10 @@ func main() {
 	}
 }
 
+// runExample is a human-oriented walkthrough of the CI repair preset. The
+// authoritative behavioral spec lives in the deterministic eval scenarios,
+// especially coding_preset_ci_repair and
+// coding_preset_ci_repair_approval_recovery.
 func runExample(ctx context.Context, w io.Writer) error {
 	ws := workspace.NewMemoryStore(map[string]string{
 		"README.md": "status: broken",

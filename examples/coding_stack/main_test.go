@@ -5,6 +5,9 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/agentpolicy"
+	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/workspacetools"
 )
 
 func TestRunExampleShowsApprovalRepairFlow(t *testing.T) {
@@ -17,6 +20,7 @@ func TestRunExampleShowsApprovalRepairFlow(t *testing.T) {
 	got := out.String()
 	for _, want := range []string{
 		"tool use: run_command",
+		agentpolicy.ApprovalBeforeToolReason(workspacetools.ApplyPatchToolName),
 		"tool use: request_approval",
 		"approval requested: workspace_apply_patch",
 		"approval granted: workspace_apply_patch",

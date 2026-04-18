@@ -95,13 +95,16 @@ cfg.Command.Runner = runner
 stack, err := coding.New(cfg)
 ```
 
-Preset intent is locked down by deterministic eval coverage:
+Preset intent is locked down by deterministic eval coverage. See
+[docs/coding-stack-presets.md](docs/coding-stack-presets.md) for the full
+preset contract, default policy posture, runnable examples, and the
+authoritative eval scenario names.
 
-| Preset | Intended workflow | Recovery coverage |
+| Preset | Intended workflow | Eval-backed recovery coverage |
 | --- | --- | --- |
-| `safe_local` | cautious local editing with checkpointing and verification | happy path, rollback-on-failed-verification |
-| `ci_repair` | reproducible repair loops with longer command budgets | happy path, approval denial then recovery |
-| `interactive_dev` | long-lived sessions such as watchers and dev servers | happy path, incremental read + forced stop + cleanup |
+| `safe_local` | cautious local editing with checkpointing and verification | `coding_preset_safe_local`, `coding_preset_safe_local_rollback_recovery` |
+| `ci_repair` | reproducible repair loops with longer command budgets | `coding_preset_ci_repair`, `coding_preset_ci_repair_approval_recovery` |
+| `interactive_dev` | long-lived sessions such as watchers and dev servers | `coding_preset_interactive_dev`, `coding_preset_interactive_dev_session_cleanup` |
 
 The current implementation is strongest on coding-agent orchestration because
 that is the most demanding initial domain. The architecture is being hardened

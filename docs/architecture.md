@@ -94,7 +94,10 @@ stack expected to reach competitive maturity; the other stacks should reuse
 the same kernel and adapter seams rather than fork the architecture.
 Each preset now has deterministic end-to-end eval coverage for both its normal
 workflow and its defining recovery path, so preset behavior is part of the
-public contract rather than informal guidance.
+public contract rather than informal guidance. The navigable preset contract
+lives in [coding-stack-presets.md](coding-stack-presets.md), including default
+policy posture, examples, and the specific eval scenario names that enforce the
+surface.
 
 ## Package Shape
 
