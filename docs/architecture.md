@@ -128,6 +128,11 @@ surface.
   reschedule/cancel contracts for personal-intelligence adapters.
 - `scheduling/sqlitestore`: optional SQLite-backed scheduling store for
   embedded durable agents and local calendar-style backends.
+- `scheduling/caldavclient`: focused CalDAV protocol client with XML REPORT
+  handling, VEVENT parsing, and ETag-aware PUT/DELETE support.
+- `scheduling/caldavstore`: optional CalDAV-backed scheduling store that maps
+  remote calendar objects onto the `scheduling` contracts with metadata-first
+  search and optimistic concurrency via ETags.
 - `planner`: host-owned plan and task-source contracts for strategy injection.
 - `budget`: provider-neutral run-budget contracts and policies.
 - `output`: provider-neutral structured final-output contracts.
