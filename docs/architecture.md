@@ -124,6 +124,10 @@ surface.
   contracts for personal-intelligence adapters.
 - `messaging`: host-owned message-thread search/read/send contracts for
   personal-intelligence adapters.
+- `scheduling`: host-owned calendar and scheduling search/read/create/
+  reschedule/cancel contracts for personal-intelligence adapters.
+- `scheduling/sqlitestore`: optional SQLite-backed scheduling store for
+  embedded durable agents and local calendar-style backends.
 - `planner`: host-owned plan and task-source contracts for strategy injection.
 - `budget`: provider-neutral run-budget contracts and policies.
 - `output`: provider-neutral structured final-output contracts.
@@ -154,6 +158,8 @@ gateway needs a nonstandard route.
   read, and note mutation tools over `notes` contracts.
 - `toolkit/messagetools`: optional metadata-first message-thread search,
   full-thread read, and outbound send tools over `messaging` contracts.
+- `toolkit/scheduletools`: optional metadata-first schedule-event search,
+  full-event read, and calendar mutation tools over `scheduling` contracts.
 - `toolkit/workspacetools`: optional workspace read/list/patch/diff/checkpoint/restore tools over `workspace.Store`.
 - `toolkit/commandtools`: optional command execution tools over a host-owned
   runner. The reference OS runner launches argv directly without an implicit
@@ -526,6 +532,20 @@ package exposes `search_message_threads`, `read_message_thread`, and
 `send_message`, so recall and reply flows stay progressive, transcript-visible,
 and approval-gated through normal tool and hook policy instead of hidden prompt
 stuffing or direct transport access.
+
+`scheduling` provides the analogous seam for host-owned calendar and scheduling
+backends. `scheduling.Searcher` returns metadata-first event results suited for
+discovery, `scheduling.Reader` loads full event detail only when the model
+explicitly asks for it, and `scheduling.Creator` / `Rescheduler` /
+`Canceller` remain optional mutation capabilities. The optional
+`toolkit/scheduletools` package exposes `search_schedule_events`,
+`read_schedule_event`, `create_schedule_event`, `reschedule_schedule_event`,
+and `cancel_schedule_event`, so calendar discovery and change flows remain
+progressive, transcript-visible, and approval-gated through normal tool and
+hook policy rather than hidden prompt stuffing or direct transport access. The
+adapter contract is metadata-first on both sides: adapters should return only
+metadata fields from `Searcher`, and the tool layer formats search results
+without full descriptions as a defensive backstop.
 
 Distillers receive the durable message snapshot already available to the turn,
 including the final assistant message. That avoids a second session-store read

@@ -83,8 +83,10 @@ Coding-oriented adapters and toolkits:
   host-owned backends
 - initial `stack/coding` assembly for batteries-included coding workflows
 - initial `stack/personal` assembly for durable-memory, metadata-first
-  note/document tools, metadata-first messaging tools, task, approval, skill,
-  and delegation-oriented personal workflows
+  note/document tools, metadata-first messaging tools, metadata-first
+  scheduling tools, task, approval, skill, and delegation-oriented personal
+  workflows
+- initial SQLite-backed scheduling adapter for durable local calendar backends
 - skill discovery tools
 
 `stack/coding` now exposes named presets so hosts can start from a workflow

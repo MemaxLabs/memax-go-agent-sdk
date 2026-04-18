@@ -161,9 +161,11 @@ system prompt.
   coverage now exercises durable-memory approval recovery, note-first recall,
   message-thread recall, message approval recovery, schedule recall,
   schedule-approval recovery, and scoped delegation with parent-visible task
-  progress. Next steps are broader host adapters for external personal systems
-  plus more adversarial preset suites for privacy-sensitive and long-horizon
-  personal workflows.
+  progress. An initial durable `scheduling/sqlitestore` adapter now provides a
+  concrete local calendar backend with metadata-first search semantics. Next
+  steps are broader host adapters for external personal systems plus more
+  adversarial preset suites for privacy-sensitive and long-horizon personal
+  workflows.
 - Add `stack/cloudmanaged` for multi-tenant, server-embedded, remote-execution
   products with durable jobs, tenancy-aware policy, quotas, audit hooks, and
   managed-agent DX.
