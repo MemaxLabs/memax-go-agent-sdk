@@ -148,8 +148,9 @@ system prompt.
   verification, managed session, approval, checkpointing, and planner/task
   wiring, plus named workflow presets (`safe_local`, `ci_repair`,
   `interactive_dev`). Initial deterministic eval coverage now exercises all
-  three presets end to end. Next steps are broader reference embeddings and
-  more adversarial preset suites tuned for competitive coding workflows.
+  three presets end to end, with adversarial rollback recovery coverage for
+  `safe_local`. Next steps are broader reference embeddings and more
+  adversarial preset suites tuned for competitive coding workflows.
 - Add `stack/personal` over the same kernel for docs, notes, messaging,
   scheduling, memory, and approval-aware personal intelligence workflows.
 - Add `stack/cloudmanaged` for multi-tenant, server-embedded, remote-execution

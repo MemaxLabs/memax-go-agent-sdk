@@ -60,6 +60,7 @@ func All() []agenteval.Case {
 		PlannerTaskProgressFromVerification(),
 		PlannerWorkspaceCommandRepairLoop(),
 		CodingPresetSafeLocal(),
+		CodingPresetSafeLocalRollbackRecovery(),
 		CodingPresetCIRepair(),
 		CodingPresetInteractiveDev(),
 		WorkspaceVerificationRepair(),

@@ -11,6 +11,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/agenteval"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/stack/coding"
+	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/agentpolicy"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/commandtools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/tasktools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/verifytools"
@@ -123,6 +124,162 @@ func CodingPresetSafeLocal() agenteval.Case {
 					}
 					if content != "after\n" {
 						return fmt.Errorf("README.md = %q, want %q", content, "after\n")
+					}
+					return nil
+				},
+			},
+		},
+	}
+}
+
+// CodingPresetSafeLocalRollbackRecovery returns a single-use scenario that
+// exercises the safe_local preset under a failed verification: the preset's
+// rollback guidance is surfaced, the model restores explicitly, re-verifies,
+// and only then finalizes.
+func CodingPresetSafeLocalRollbackRecovery() agenteval.Case {
+	workspaceStore := workspace.NewMemoryStore(map[string]string{
+		"README.md": "status: good",
+	})
+	taskStore := tasktools.NewMemoryStore([]tasktools.Task{{
+		ID:     "task-1",
+		Title:  "ship README update safely",
+		Status: tasktools.StatusInProgress,
+		Notes:  "checkpoint before edits, roll back on failed verification, then verify before final answer",
+	}})
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "checkpoint-1",
+				Name:  "workspace_checkpoint",
+				Input: json.RawMessage(`{"label":"before risky edit"}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "patch-1",
+				Name: "workspace_apply_patch",
+				Input: json.RawMessage(`{"operations":[
+					{"path":"README.md","old_content":"status: good","new_content":"status: bad"}
+				]}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "verify-1",
+				Name: verifytools.ToolName,
+				Input: json.RawMessage(`{
+					"name":"test",
+					"target":"README.md",
+					"metadata":{"task_id":"task-1"}
+				}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "restore-1",
+				Name:  "workspace_restore",
+				Input: json.RawMessage(`{"id":"checkpoint-1"}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "verify-2",
+				Name: verifytools.ToolName,
+				Input: json.RawMessage(`{
+					"name":"test",
+					"target":"README.md",
+					"metadata":{"task_id":"task-1"}
+				}`),
+			},
+		}},
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "Safe local preset restored and verified clean state."}},
+	)
+
+	config, configErr := coding.PresetSafeLocal.Config()
+	config.Workspace = workspaceStore
+	config.Tasks = taskStore
+	config.Verifier.Verifier = verifierForReadmeStatus(workspaceStore, "status: good")
+	stack, stackErr := coding.New(config)
+
+	return agenteval.Case{
+		Name:    "coding_preset_safe_local_rollback_recovery",
+		Prompt:  "Attempt the README change safely, and if verification fails, follow the preset's rollback guidance before finishing the task.",
+		Options: stack.WithModel(modelClient),
+		Assertions: []agenteval.Assertion{
+			toolConstructionSucceeded(configErr, stackErr),
+			agenteval.ToolUsed("workspace_checkpoint"),
+			agenteval.ToolUsed("workspace_apply_patch"),
+			agenteval.ToolUsed(verifytools.ToolName),
+			agenteval.ToolUsed("workspace_restore"),
+			agenteval.EventKindEmitted(memaxagent.EventWorkspaceCheckpoint),
+			agenteval.EventKindEmitted(memaxagent.EventWorkspacePatch),
+			agenteval.EventKindEmitted(memaxagent.EventVerification),
+			agenteval.EventKindEmitted(memaxagent.EventWorkspaceRestore),
+			agenteval.FinalEquals("Safe local preset restored and verified clean state."),
+			requestCountEquals(modelClient, 6),
+			{
+				Name: "safe local rollback guidance drives explicit restore and re-verification",
+				Check: func(result agenteval.Result) error {
+					toolResults := result.ToolResults()
+					if len(toolResults) != 5 {
+						return fmt.Errorf("tool results = %#v, want checkpoint patch verify restore verify", toolResults)
+					}
+					if toolResults[2].Metadata == nil {
+						return fmt.Errorf("verification metadata = nil, want rollback recommendation")
+					}
+					if !toolResults[2].IsError || !strings.Contains(toolResults[2].Content, "restore workspace checkpoint checkpoint-1") {
+						return fmt.Errorf("failed verification result = %#v, want rollback guidance", toolResults[2])
+					}
+					if toolResults[2].Metadata[agentpolicy.MetadataRollbackRecommended] != true {
+						return fmt.Errorf("verification metadata = %#v, want rollback recommendation", toolResults[2].Metadata)
+					}
+					if toolResults[2].Metadata[agentpolicy.MetadataRollbackCheckpointID] != "checkpoint-1" {
+						return fmt.Errorf("verification metadata = %#v, want checkpoint-1", toolResults[2].Metadata)
+					}
+					if toolResults[3].IsError || !strings.Contains(toolResults[3].Content, "restored workspace checkpoint checkpoint-1") {
+						return fmt.Errorf("restore result = %#v, want successful restore", toolResults[3])
+					}
+					if toolResults[4].IsError || !strings.Contains(toolResults[4].Content, "verification test passed") {
+						return fmt.Errorf("second verification result = %#v, want verification success", toolResults[4])
+					}
+					requests := modelClient.Requests()
+					if len(requests) != 6 {
+						return fmt.Errorf("requests = %d, want 6", len(requests))
+					}
+					initialPrompt := requests[0].SystemPrompt
+					for _, want := range []string{
+						"Operate cautiously in the local workspace.",
+						"[in_progress] task-1",
+						"roll back on failed verification",
+					} {
+						if !strings.Contains(initialPrompt, want) {
+							return fmt.Errorf("initial prompt missing %q:\n%s", want, initialPrompt)
+						}
+					}
+					finalPrompt := requests[5].SystemPrompt
+					for _, want := range []string{"[completed] task-1", "verification:test"} {
+						if !strings.Contains(finalPrompt, want) {
+							return fmt.Errorf("final prompt missing %q:\n%s", want, finalPrompt)
+						}
+					}
+					content, err := workspaceStore.ReadFile(context.Background(), "README.md")
+					if err != nil {
+						return err
+					}
+					if content != "status: good" {
+						return fmt.Errorf("README.md = %q, want restored content", content)
+					}
+					tasks, err := taskStore.List(context.Background())
+					if err != nil {
+						return err
+					}
+					if len(tasks) != 1 || tasks[0].Status != tasktools.StatusCompleted {
+						return fmt.Errorf("tasks = %#v, want completed task after rollback recovery", tasks)
 					}
 					return nil
 				},
