@@ -190,6 +190,53 @@ func TestStoreGetRunReturnsNotFound(t *testing.T) {
 	}
 }
 
+func TestStoreClaimHeartbeatAndFailStaleRuns(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	scope := tenant.Scope{ID: "tenant-1", SubjectID: "user-1"}
+	record, err := store.CreateRun(context.Background(), cloudmanaged.CreateRunRequest{
+		Prompt: "Read README.md",
+		Tenant: scope,
+	})
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	record, err = store.ClaimRun(context.Background(), record.ID, "worker-1")
+	if err != nil {
+		t.Fatalf("ClaimRun() error = %v", err)
+	}
+	if record.Status != cloudmanaged.RunStatusRunning || record.WorkerID != "worker-1" || record.HeartbeatAt.IsZero() {
+		t.Fatalf("ClaimRun() = %#v, want running record with worker and heartbeat", record)
+	}
+	before := record.HeartbeatAt
+	time.Sleep(2 * time.Millisecond)
+	record, err = store.HeartbeatRun(context.Background(), record.ID, "worker-1")
+	if err != nil {
+		t.Fatalf("HeartbeatRun() error = %v", err)
+	}
+	if !record.HeartbeatAt.After(before) {
+		t.Fatalf("HeartbeatRun() heartbeat = %s, want after %s", record.HeartbeatAt, before)
+	}
+	if _, err := store.HeartbeatRun(context.Background(), record.ID, "worker-2"); !errors.Is(err, cloudmanaged.ErrRunWorkerMismatch) {
+		t.Fatalf("HeartbeatRun(worker-2) error = %v, want ErrRunWorkerMismatch", err)
+	}
+	failed, err := store.FailStaleRuns(context.Background(), time.Now().UTC().Add(time.Hour), "worker heartbeat expired")
+	if err != nil {
+		t.Fatalf("FailStaleRuns() error = %v", err)
+	}
+	if failed != 1 {
+		t.Fatalf("FailStaleRuns() = %d, want 1", failed)
+	}
+	record, err = store.GetRun(context.Background(), record.ID)
+	if err != nil {
+		t.Fatalf("GetRun() error = %v", err)
+	}
+	if record.Status != cloudmanaged.RunStatusFailed || record.Error != "worker heartbeat expired" || record.CompletedAt.IsZero() {
+		t.Fatalf("GetRun() = %#v, want failed stale record", record)
+	}
+}
+
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
 

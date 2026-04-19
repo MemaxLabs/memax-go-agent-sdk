@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/stack/cloudmanaged"
@@ -70,9 +71,9 @@ func (s *Store) CreateRun(ctx context.Context, req cloudmanaged.CreateRunRequest
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO memax_cloudmanaged_runs (
 			id, status, prompt, tenant_id, subject_id, tenant_attributes_json,
-			created_at_unix_ms, updated_at_unix_ms
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-	`, record.ID, string(record.Status), record.Prompt, record.Tenant.ID, record.Tenant.SubjectID, attrs, unixMillis(now), unixMillis(now))
+			worker_id, created_at_unix_ms, updated_at_unix_ms
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, record.ID, string(record.Status), record.Prompt, record.Tenant.ID, record.Tenant.SubjectID, attrs, "", unixMillis(now), unixMillis(now))
 	if err != nil {
 		return cloudmanaged.RunRecord{}, fmt.Errorf("create sqlite managed run: %w", err)
 	}
@@ -109,11 +110,17 @@ func (s *Store) UpdateRun(ctx context.Context, update cloudmanaged.RunUpdate) (c
 		if update.ParentSessionID != "" {
 			current.ParentSessionID = update.ParentSessionID
 		}
+		if update.WorkerID != "" {
+			current.WorkerID = update.WorkerID
+		}
 		if update.Result != nil {
 			current.Result = *update.Result
 		}
 		if update.Error != nil {
 			current.Error = *update.Error
+		}
+		if update.HeartbeatAt != nil {
+			current.HeartbeatAt = update.HeartbeatAt.UTC()
 		}
 		if update.CompletedAt != nil {
 			current.CompletedAt = update.CompletedAt.UTC()
@@ -128,12 +135,16 @@ func (s *Store) UpdateRun(ctx context.Context, update cloudmanaged.RunUpdate) (c
 		if !current.CompletedAt.IsZero() {
 			completedAt = unixMillis(current.CompletedAt)
 		}
+		var heartbeatAt any
+		if !current.HeartbeatAt.IsZero() {
+			heartbeatAt = unixMillis(current.HeartbeatAt)
+		}
 		_, err = conn.ExecContext(ctx, `
 			UPDATE memax_cloudmanaged_runs
-			SET status = ?, session_id = ?, parent_session_id = ?, result = ?, error = ?,
-				started_at_unix_ms = ?, completed_at_unix_ms = ?, updated_at_unix_ms = ?
+			SET status = ?, session_id = ?, parent_session_id = ?, worker_id = ?, result = ?, error = ?,
+				started_at_unix_ms = ?, heartbeat_at_unix_ms = ?, completed_at_unix_ms = ?, updated_at_unix_ms = ?
 			WHERE id = ?
-		`, string(current.Status), current.SessionID, current.ParentSessionID, current.Result, current.Error, startedAt, completedAt, unixMillis(current.UpdatedAt), current.ID)
+		`, string(current.Status), current.SessionID, current.ParentSessionID, current.WorkerID, current.Result, current.Error, startedAt, heartbeatAt, completedAt, unixMillis(current.UpdatedAt), current.ID)
 		if err != nil {
 			return fmt.Errorf("update sqlite managed run: %w", err)
 		}
@@ -160,6 +171,102 @@ func (s *Store) GetRun(ctx context.Context, id string) (cloudmanaged.RunRecord, 
 	}
 	defer conn.Close()
 	return s.getRunConn(ctx, conn, id)
+}
+
+// ClaimRun implements cloudmanaged.RunStoreWithClaim.
+func (s *Store) ClaimRun(ctx context.Context, id, workerID string) (cloudmanaged.RunRecord, error) {
+	if err := contextError(ctx); err != nil {
+		return cloudmanaged.RunRecord{}, err
+	}
+	if s == nil {
+		return cloudmanaged.RunRecord{}, fmt.Errorf("sqlite run store is nil")
+	}
+	var record cloudmanaged.RunRecord
+	err := s.withImmediateTx(ctx, func(conn *sql.Conn) error {
+		current, err := s.getRunConn(ctx, conn, id)
+		if err != nil {
+			return err
+		}
+		if current.Status != cloudmanaged.RunStatusQueued {
+			return cloudmanaged.ErrRunNotQueued
+		}
+		now := time.Now().UTC()
+		current.Status = cloudmanaged.RunStatusRunning
+		current.WorkerID = workerID
+		current.StartedAt = now
+		if workerID != "" {
+			current.HeartbeatAt = now
+		}
+		current.UpdatedAt = now
+		if err := s.updateRunConn(ctx, conn, current); err != nil {
+			return err
+		}
+		record = current
+		return nil
+	})
+	if err != nil {
+		return cloudmanaged.RunRecord{}, err
+	}
+	return record, nil
+}
+
+// HeartbeatRun implements cloudmanaged.RunStoreWithHeartbeat.
+func (s *Store) HeartbeatRun(ctx context.Context, id, workerID string) (cloudmanaged.RunRecord, error) {
+	if err := contextError(ctx); err != nil {
+		return cloudmanaged.RunRecord{}, err
+	}
+	if s == nil {
+		return cloudmanaged.RunRecord{}, fmt.Errorf("sqlite run store is nil")
+	}
+	var record cloudmanaged.RunRecord
+	err := s.withImmediateTx(ctx, func(conn *sql.Conn) error {
+		current, err := s.getRunConn(ctx, conn, id)
+		if err != nil {
+			return err
+		}
+		if current.Status != cloudmanaged.RunStatusRunning {
+			return cloudmanaged.ErrRunNotActive
+		}
+		if current.WorkerID != "" && workerID != "" && current.WorkerID != workerID {
+			return cloudmanaged.ErrRunWorkerMismatch
+		}
+		now := time.Now().UTC()
+		current.WorkerID = workerID
+		current.HeartbeatAt = now
+		current.UpdatedAt = now
+		if err := s.updateRunConn(ctx, conn, current); err != nil {
+			return err
+		}
+		record = current
+		return nil
+	})
+	if err != nil {
+		return cloudmanaged.RunRecord{}, err
+	}
+	return record, nil
+}
+
+// FailStaleRuns implements cloudmanaged.RunStoreWithHeartbeat.
+func (s *Store) FailStaleRuns(ctx context.Context, staleBefore time.Time, reason string) (int64, error) {
+	if err := contextError(ctx); err != nil {
+		return 0, err
+	}
+	if s == nil {
+		return 0, fmt.Errorf("sqlite run store is nil")
+	}
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE memax_cloudmanaged_runs
+		SET status = ?, error = ?, completed_at_unix_ms = ?, updated_at_unix_ms = ?
+		WHERE status = ? AND heartbeat_at_unix_ms IS NOT NULL AND heartbeat_at_unix_ms < ?
+	`, string(cloudmanaged.RunStatusFailed), reason, unixMillis(time.Now().UTC()), unixMillis(time.Now().UTC()), string(cloudmanaged.RunStatusRunning), unixMillis(staleBefore.UTC()))
+	if err != nil {
+		return 0, fmt.Errorf("fail stale sqlite managed runs: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("fail stale sqlite managed runs rows affected: %w", err)
+	}
+	return rows, nil
 }
 
 // EnsureSession implements cloudmanaged.QuotaStore.
@@ -327,10 +434,12 @@ func (s *Store) init(ctx context.Context) error {
 			tenant_attributes_json TEXT NOT NULL,
 			session_id TEXT NOT NULL DEFAULT '',
 			parent_session_id TEXT NOT NULL DEFAULT '',
+			worker_id TEXT NOT NULL DEFAULT '',
 			result TEXT NOT NULL DEFAULT '',
 			error TEXT NOT NULL DEFAULT '',
 			created_at_unix_ms INTEGER NOT NULL,
 			started_at_unix_ms INTEGER,
+			heartbeat_at_unix_ms INTEGER,
 			completed_at_unix_ms INTEGER,
 			updated_at_unix_ms INTEGER NOT NULL
 		)
@@ -344,6 +453,12 @@ func (s *Store) init(ctx context.Context) error {
 	`)
 	if err != nil {
 		return fmt.Errorf("init sqlite run updated index: %w", err)
+	}
+	if err := s.ensureRunColumn(ctx, "worker_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := s.ensureRunColumn(ctx, "heartbeat_at_unix_ms", "INTEGER"); err != nil {
+		return err
 	}
 	return nil
 }
@@ -421,12 +536,13 @@ func (s *Store) getRunConn(ctx context.Context, conn *sql.Conn, id string) (clou
 		status            string
 		tenantAttrsJSON   string
 		startedAtUnixMS   sql.NullInt64
+		heartbeatAtUnixMS sql.NullInt64
 		completedAtUnixMS sql.NullInt64
 	)
 	err := conn.QueryRowContext(ctx, `
 		SELECT id, status, prompt, tenant_id, subject_id, tenant_attributes_json,
-			session_id, parent_session_id, result, error, created_at_unix_ms,
-			started_at_unix_ms, completed_at_unix_ms, updated_at_unix_ms
+			session_id, parent_session_id, worker_id, result, error, created_at_unix_ms,
+			started_at_unix_ms, heartbeat_at_unix_ms, completed_at_unix_ms, updated_at_unix_ms
 		FROM memax_cloudmanaged_runs
 		WHERE id = ?
 		LIMIT 1
@@ -439,10 +555,12 @@ func (s *Store) getRunConn(ctx context.Context, conn *sql.Conn, id string) (clou
 		&tenantAttrsJSON,
 		&record.SessionID,
 		&record.ParentSessionID,
+		&record.WorkerID,
 		&record.Result,
 		&record.Error,
 		(*unixMillisTime)(&record.CreatedAt),
 		&startedAtUnixMS,
+		&heartbeatAtUnixMS,
 		&completedAtUnixMS,
 		(*unixMillisTime)(&record.UpdatedAt),
 	)
@@ -461,10 +579,48 @@ func (s *Store) getRunConn(ctx context.Context, conn *sql.Conn, id string) (clou
 	if startedAtUnixMS.Valid {
 		record.StartedAt = time.UnixMilli(startedAtUnixMS.Int64).UTC()
 	}
+	if heartbeatAtUnixMS.Valid {
+		record.HeartbeatAt = time.UnixMilli(heartbeatAtUnixMS.Int64).UTC()
+	}
 	if completedAtUnixMS.Valid {
 		record.CompletedAt = time.UnixMilli(completedAtUnixMS.Int64).UTC()
 	}
 	return record, nil
+}
+
+func (s *Store) updateRunConn(ctx context.Context, conn *sql.Conn, current cloudmanaged.RunRecord) error {
+	var startedAt any
+	if !current.StartedAt.IsZero() {
+		startedAt = unixMillis(current.StartedAt)
+	}
+	var heartbeatAt any
+	if !current.HeartbeatAt.IsZero() {
+		heartbeatAt = unixMillis(current.HeartbeatAt)
+	}
+	var completedAt any
+	if !current.CompletedAt.IsZero() {
+		completedAt = unixMillis(current.CompletedAt)
+	}
+	if _, err := conn.ExecContext(ctx, `
+		UPDATE memax_cloudmanaged_runs
+		SET status = ?, session_id = ?, parent_session_id = ?, worker_id = ?, result = ?, error = ?,
+			started_at_unix_ms = ?, heartbeat_at_unix_ms = ?, completed_at_unix_ms = ?, updated_at_unix_ms = ?
+		WHERE id = ?
+	`, string(current.Status), current.SessionID, current.ParentSessionID, current.WorkerID, current.Result, current.Error, startedAt, heartbeatAt, completedAt, unixMillis(current.UpdatedAt), current.ID); err != nil {
+		return fmt.Errorf("update sqlite managed run: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) ensureRunColumn(ctx context.Context, name, definition string) error {
+	_, err := s.db.ExecContext(ctx, fmt.Sprintf(`ALTER TABLE memax_cloudmanaged_runs ADD COLUMN %s %s`, name, definition))
+	if err == nil {
+		return nil
+	}
+	if sqliteDuplicateColumn(err) {
+		return nil
+	}
+	return fmt.Errorf("ensure sqlite run column %s: %w", name, err)
 }
 
 func marshalAttributes(attributes map[string]string) (string, error) {
@@ -513,4 +669,8 @@ func (t *unixMillisTime) Scan(value any) error {
 	default:
 		return fmt.Errorf("scan unix millis time: unsupported %T", value)
 	}
+}
+
+func sqliteDuplicateColumn(err error) bool {
+	return err != nil && (strings.Contains(err.Error(), "duplicate column name") || strings.Contains(err.Error(), "already exists"))
 }

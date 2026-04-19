@@ -976,6 +976,52 @@ func TestMemoryRunStoreCreateUpdateAndGet(t *testing.T) {
 	}
 }
 
+func TestMemoryRunStoreClaimHeartbeatAndFailStaleRuns(t *testing.T) {
+	t.Parallel()
+
+	store := NewMemoryRunStore()
+	record, err := store.CreateRun(context.Background(), CreateRunRequest{
+		Prompt: "Read README.md",
+		Tenant: tenant.Scope{ID: "tenant-1", SubjectID: "user-1"},
+	})
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	record, err = store.ClaimRun(context.Background(), record.ID, "worker-1")
+	if err != nil {
+		t.Fatalf("ClaimRun() error = %v", err)
+	}
+	if record.Status != RunStatusRunning || record.WorkerID != "worker-1" || record.HeartbeatAt.IsZero() {
+		t.Fatalf("ClaimRun() = %#v, want running record with worker and heartbeat", record)
+	}
+	before := record.HeartbeatAt
+	time.Sleep(2 * time.Millisecond)
+	record, err = store.HeartbeatRun(context.Background(), record.ID, "worker-1")
+	if err != nil {
+		t.Fatalf("HeartbeatRun() error = %v", err)
+	}
+	if !record.HeartbeatAt.After(before) {
+		t.Fatalf("HeartbeatRun() = %#v, want heartbeat after %s", record, before)
+	}
+	if _, err := store.HeartbeatRun(context.Background(), record.ID, "worker-2"); !errors.Is(err, ErrRunWorkerMismatch) {
+		t.Fatalf("HeartbeatRun(worker-2) error = %v, want ErrRunWorkerMismatch", err)
+	}
+	failed, err := store.FailStaleRuns(context.Background(), time.Now().UTC().Add(time.Hour), "worker heartbeat expired")
+	if err != nil {
+		t.Fatalf("FailStaleRuns() error = %v", err)
+	}
+	if failed != 1 {
+		t.Fatalf("FailStaleRuns() = %d, want 1", failed)
+	}
+	record, err = store.GetRun(context.Background(), record.ID)
+	if err != nil {
+		t.Fatalf("GetRun() error = %v", err)
+	}
+	if record.Status != RunStatusFailed || record.Error != "worker heartbeat expired" || record.CompletedAt.IsZero() {
+		t.Fatalf("GetRun() = %#v, want failed stale record", record)
+	}
+}
+
 func TestStackStartRunPersistsSucceededLifecycle(t *testing.T) {
 	t.Parallel()
 
@@ -1130,6 +1176,66 @@ func TestStackCancelRunMarksCanceled(t *testing.T) {
 	close(modelClient.release)
 	if err := stack.CancelRun(context.Background(), record.ID); !errors.Is(err, ErrRunNotActive) {
 		t.Fatalf("CancelRun(after completion) error = %v, want ErrRunNotActive", err)
+	}
+}
+
+func TestStackEnqueueAndExecuteRun(t *testing.T) {
+	t.Parallel()
+
+	modelClient := &quotaTestModel{
+		turns: [][]model.StreamEvent{
+			{{
+				Kind: model.StreamToolUse,
+				ToolUse: model.ToolUse{
+					ID:    "tool-1",
+					Name:  "read_file",
+					Input: json.RawMessage(`{"path":"README.md"}`),
+				},
+			}},
+			{{Kind: model.StreamText, Text: "remote worker complete"}},
+		},
+	}
+	runStore := NewMemoryRunStore()
+	stack, err := New(Config{
+		Base: memaxagent.Options{
+			Model: modelClient,
+			Tools: tool.NewRegistry(readFileTool()),
+		},
+		RunStore: runStore,
+		Policies: Policies{
+			RequireTenantScope: true,
+			Quota: Quota{
+				MaxModelRequests: 4,
+				MaxToolUses:      4,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	record, err := stack.EnqueueRun(context.Background(), "Read README.md and finish.", tenant.Scope{ID: "tenant-1", SubjectID: "user-1"})
+	if err != nil {
+		t.Fatalf("EnqueueRun() error = %v", err)
+	}
+	if record.Status != RunStatusQueued {
+		t.Fatalf("EnqueueRun() = %#v, want queued record", record)
+	}
+	final, err := stack.ExecuteRun(context.Background(), record.ID, WorkerOptions{
+		ID:                "worker-1",
+		HeartbeatInterval: time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("ExecuteRun() error = %v", err)
+	}
+	if final.Status != RunStatusSucceeded || final.WorkerID != "worker-1" || final.Result != "remote worker complete" {
+		t.Fatalf("ExecuteRun() = %#v, want succeeded worker-owned run", final)
+	}
+	if final.HeartbeatAt.IsZero() {
+		t.Fatalf("ExecuteRun() = %#v, want heartbeat timestamp", final)
+	}
+	if _, err := stack.ExecuteRun(context.Background(), record.ID, WorkerOptions{ID: "worker-2"}); !errors.Is(err, ErrRunNotQueued) {
+		t.Fatalf("ExecuteRun(second worker) error = %v, want ErrRunNotQueued", err)
 	}
 }
 

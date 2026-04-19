@@ -150,7 +150,10 @@ their own job wrapper around `QueryAsync`. The same
 embedded managed hosts can keep quota state and durable run lifecycle in one
 SQLite database. Durable runs now also emit explicit `run_state_changed`
 observer events so audit sinks and managed dashboards can follow lifecycle
-transitions without polling alone.
+transitions without polling alone. The managed stack now also exposes an
+explicit queued worker path through `EnqueueRun`, `ExecuteRun`, and
+`FailStaleRuns`, so hosts can build worker fleets on top of the same durable
+run seam instead of inventing a second job abstraction.
 
 `stack/personal` now exposes named presets so hosts can start from a
 personal-intelligence workflow profile and then attach only the host-owned

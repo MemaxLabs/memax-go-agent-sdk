@@ -20,6 +20,17 @@ var (
 	ErrRunNotFound = errors.New("cloudmanaged run not found")
 	// ErrRunNotActive reports that a durable run is not currently executing.
 	ErrRunNotActive = errors.New("cloudmanaged run is not active")
+	// ErrRunNotQueued reports that a worker can only claim queued runs.
+	ErrRunNotQueued = errors.New("cloudmanaged run is not queued")
+	// ErrRunWorkerMismatch reports that a heartbeat or claim came from a
+	// different worker than the run is currently assigned to.
+	ErrRunWorkerMismatch = errors.New("cloudmanaged run worker mismatch")
+	// ErrRunStoreClaimRequired reports that worker-driven execution needs a store
+	// that can atomically claim queued runs.
+	ErrRunStoreClaimRequired = errors.New("cloudmanaged run store does not support claiming queued runs")
+	// ErrRunStoreHeartbeatUnsupported reports that stale-run failure handling
+	// needs a store that persists worker heartbeats.
+	ErrRunStoreHeartbeatUnsupported = errors.New("cloudmanaged run store does not support worker heartbeats")
 )
 
 // RunStatus is one durable managed-run lifecycle state.
@@ -43,10 +54,12 @@ type RunRecord struct {
 	Tenant          tenant.Scope
 	SessionID       string
 	ParentSessionID string
+	WorkerID        string
 	Result          string
 	Error           string
 	CreatedAt       time.Time
 	StartedAt       time.Time
+	HeartbeatAt     time.Time
 	CompletedAt     time.Time
 	UpdatedAt       time.Time
 }
@@ -73,8 +86,10 @@ type RunUpdate struct {
 	Status          RunStatus
 	SessionID       string
 	ParentSessionID string
+	WorkerID        string
 	Result          *string
 	Error           *string
+	HeartbeatAt     *time.Time
 	CompletedAt     *time.Time
 }
 
@@ -83,6 +98,25 @@ type RunStore interface {
 	CreateRun(context.Context, CreateRunRequest) (RunRecord, error)
 	UpdateRun(context.Context, RunUpdate) (RunRecord, error)
 	GetRun(context.Context, string) (RunRecord, error)
+}
+
+// RunStoreWithClaim atomically transitions queued runs into a claimed running
+// state for one worker.
+type RunStoreWithClaim interface {
+	ClaimRun(context.Context, string, string) (RunRecord, error)
+}
+
+// RunStoreWithHeartbeat persists worker liveness for running runs and can mark
+// stale runs as failed when hosts decide a worker has died.
+type RunStoreWithHeartbeat interface {
+	HeartbeatRun(context.Context, string, string) (RunRecord, error)
+	FailStaleRuns(context.Context, time.Time, string) (int64, error)
+}
+
+// WorkerOptions configure one explicit worker-side execution attempt.
+type WorkerOptions struct {
+	ID                string
+	HeartbeatInterval time.Duration
 }
 
 // MemoryRunStore is the reference in-memory durable run backend.
@@ -146,11 +180,17 @@ func (s *MemoryRunStore) UpdateRun(_ context.Context, update RunUpdate) (RunReco
 	if update.ParentSessionID != "" {
 		record.ParentSessionID = update.ParentSessionID
 	}
+	if update.WorkerID != "" {
+		record.WorkerID = update.WorkerID
+	}
 	if update.Result != nil {
 		record.Result = *update.Result
 	}
 	if update.Error != nil {
 		record.Error = *update.Error
+	}
+	if update.HeartbeatAt != nil {
+		record.HeartbeatAt = update.HeartbeatAt.UTC()
 	}
 	if update.CompletedAt != nil {
 		record.CompletedAt = update.CompletedAt.UTC()
@@ -174,12 +214,82 @@ func (s *MemoryRunStore) GetRun(_ context.Context, id string) (RunRecord, error)
 	return cloneRunRecord(record), nil
 }
 
-// StartRun begins one durable background run and persists lifecycle transitions
-// into the configured RunStore. The run executes on a detached context so it is
-// not canceled when the caller's request context ends. Once started, the run
-// continues until it terminates naturally or CancelRun requests explicit
-// host-driven interruption.
-func (s Stack) StartRun(ctx context.Context, prompt string, scope tenant.Scope) (RunRecord, error) {
+// ClaimRun implements RunStoreWithClaim.
+func (s *MemoryRunStore) ClaimRun(_ context.Context, id, workerID string) (RunRecord, error) {
+	if s == nil {
+		return RunRecord{}, fmt.Errorf("memory run store is nil")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record, ok := s.runs[id]
+	if !ok {
+		return RunRecord{}, ErrRunNotFound
+	}
+	if record.Status != RunStatusQueued {
+		return RunRecord{}, ErrRunNotQueued
+	}
+	now := time.Now().UTC()
+	record.Status = RunStatusRunning
+	record.WorkerID = workerID
+	record.StartedAt = now
+	if workerID != "" {
+		record.HeartbeatAt = now
+	}
+	record.UpdatedAt = now
+	s.runs[id] = record
+	return cloneRunRecord(record), nil
+}
+
+// HeartbeatRun implements RunStoreWithHeartbeat.
+func (s *MemoryRunStore) HeartbeatRun(_ context.Context, id, workerID string) (RunRecord, error) {
+	if s == nil {
+		return RunRecord{}, fmt.Errorf("memory run store is nil")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record, ok := s.runs[id]
+	if !ok {
+		return RunRecord{}, ErrRunNotFound
+	}
+	if record.Status != RunStatusRunning {
+		return RunRecord{}, ErrRunNotActive
+	}
+	if record.WorkerID != "" && workerID != "" && record.WorkerID != workerID {
+		return RunRecord{}, ErrRunWorkerMismatch
+	}
+	now := time.Now().UTC()
+	record.WorkerID = workerID
+	record.HeartbeatAt = now
+	record.UpdatedAt = now
+	s.runs[id] = record
+	return cloneRunRecord(record), nil
+}
+
+// FailStaleRuns implements RunStoreWithHeartbeat.
+func (s *MemoryRunStore) FailStaleRuns(_ context.Context, staleBefore time.Time, reason string) (int64, error) {
+	if s == nil {
+		return 0, fmt.Errorf("memory run store is nil")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var failed int64
+	now := time.Now().UTC()
+	for id, record := range s.runs {
+		if record.Status != RunStatusRunning || record.HeartbeatAt.IsZero() || !record.HeartbeatAt.Before(staleBefore) {
+			continue
+		}
+		record.Status = RunStatusFailed
+		record.Error = reason
+		record.CompletedAt = now
+		record.UpdatedAt = now
+		s.runs[id] = record
+		failed++
+	}
+	return failed, nil
+}
+
+// EnqueueRun persists one queued durable run without starting execution.
+func (s Stack) EnqueueRun(ctx context.Context, prompt string, scope tenant.Scope) (RunRecord, error) {
 	if err := ctx.Err(); err != nil {
 		return RunRecord{}, err
 	}
@@ -197,11 +307,32 @@ func (s Stack) StartRun(ctx context.Context, prompt string, scope tenant.Scope) 
 		return RunRecord{}, fmt.Errorf("create managed run: %w", err)
 	}
 	observeRunState(ctx, record)
+	return record, nil
+}
+
+// StartRun begins one durable background run and persists lifecycle transitions
+// into the configured RunStore. The run executes on a detached context so it is
+// not canceled when the caller's request context ends. Once started, the run
+// continues until it terminates naturally or CancelRun requests explicit
+// host-driven interruption.
+func (s Stack) StartRun(ctx context.Context, prompt string, scope tenant.Scope) (RunRecord, error) {
+	if s.audit.Sink != nil {
+		ctx = memaxagent.WithEventObserver(ctx, s.audit)
+	}
+	record, err := s.EnqueueRun(ctx, prompt, scope)
+	if err != nil {
+		return RunRecord{}, err
+	}
+	if _, ok := s.runs.(RunStoreWithClaim); !ok {
+		return RunRecord{}, ErrRunStoreClaimRequired
+	}
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	if s.active != nil {
 		s.active.set(record.ID, cancel)
 	}
-	go s.executeRun(runCtx, record.ID, prompt, scope)
+	go func() {
+		_, _ = s.ExecuteRun(runCtx, record.ID, WorkerOptions{})
+	}()
 	return record, nil
 }
 
@@ -230,34 +361,69 @@ func (s Stack) CancelRun(_ context.Context, id string) error {
 	return nil
 }
 
-func (s Stack) executeRun(ctx context.Context, runID, prompt string, scope tenant.Scope) {
-	if s.active != nil {
-		defer s.active.delete(runID)
+// ExecuteRun claims one queued run for the worker identified by options and
+// executes it synchronously. This is the foundation remote-execution seam:
+// workers explicitly dequeue by run ID, and a dead worker is expected to be
+// surfaced as a failed run via heartbeat timeout rather than implicit resume.
+func (s Stack) ExecuteRun(ctx context.Context, runID string, options WorkerOptions) (RunRecord, error) {
+	if err := ctx.Err(); err != nil {
+		return RunRecord{}, err
 	}
-	record, _ := s.runs.UpdateRun(ctx, RunUpdate{
-		ID:     runID,
-		Status: RunStatusRunning,
-	})
+	if s.runs == nil {
+		return RunRecord{}, ErrRunStoreRequired
+	}
+	claiming, ok := s.runs.(RunStoreWithClaim)
+	if !ok {
+		return RunRecord{}, ErrRunStoreClaimRequired
+	}
+	record, err := claiming.ClaimRun(ctx, runID, options.ID)
+	if err != nil {
+		return RunRecord{}, fmt.Errorf("claim managed run %s: %w", runID, err)
+	}
 	observeRunState(ctx, record)
 
+	stopHeartbeat := startRunHeartbeat(ctx, s.runs, record.ID, options)
+	if stopHeartbeat != nil {
+		defer stopHeartbeat()
+	}
+	return s.executeRun(ctx, record)
+}
+
+// FailStaleRuns marks running runs whose persisted heartbeat is older than
+// staleBefore as failed. Hosts can use this from their own liveness monitor to
+// turn worker death into explicit terminal run state.
+func (s Stack) FailStaleRuns(ctx context.Context, staleBefore time.Time, reason string) (int64, error) {
+	if s.runs == nil {
+		return 0, ErrRunStoreRequired
+	}
+	heartbeats, ok := s.runs.(RunStoreWithHeartbeat)
+	if !ok {
+		return 0, ErrRunStoreHeartbeatUnsupported
+	}
+	failed, err := heartbeats.FailStaleRuns(ctx, staleBefore, reason)
+	if err != nil {
+		return 0, fmt.Errorf("fail stale managed runs: %w", err)
+	}
+	return failed, nil
+}
+
+func (s Stack) executeRun(ctx context.Context, record RunRecord) (RunRecord, error) {
+	if s.active != nil {
+		defer s.active.delete(record.ID)
+	}
 	var (
 		finalResult string
 		sawResult   bool
 		runErr      error
-		sessionID   string
-		parentID    string
 	)
-	for event := range s.QueryAsync(ctx, prompt, scope) {
+	for event := range s.QueryAsync(ctx, record.Prompt, record.Tenant) {
 		switch event.Kind {
 		case memaxagent.EventSessionStarted:
-			sessionID = event.SessionID
-			parentID = event.ParentSessionID
 			record, _ = s.runs.UpdateRun(ctx, RunUpdate{
-				ID:              runID,
-				SessionID:       sessionID,
-				ParentSessionID: parentID,
+				ID:              record.ID,
+				SessionID:       event.SessionID,
+				ParentSessionID: event.ParentSessionID,
 			})
-			_ = record
 		case memaxagent.EventResult:
 			finalResult = event.Result
 			sawResult = true
@@ -268,9 +434,9 @@ func (s Stack) executeRun(ctx context.Context, runID, prompt string, scope tenan
 
 	now := time.Now().UTC()
 	update := RunUpdate{
-		ID:              runID,
-		SessionID:       sessionID,
-		ParentSessionID: parentID,
+		ID:              record.ID,
+		SessionID:       record.SessionID,
+		ParentSessionID: record.ParentSessionID,
 		CompletedAt:     &now,
 	}
 	switch {
@@ -296,6 +462,14 @@ func (s Stack) executeRun(ctx context.Context, runID, prompt string, scope tenan
 	}
 	record, _ = s.runs.UpdateRun(ctx, update)
 	observeRunState(ctx, record)
+	switch record.Status {
+	case RunStatusSucceeded, RunStatusCanceled:
+		return record, nil
+	case RunStatusFailed:
+		return record, errors.New(record.Error)
+	default:
+		return record, nil
+	}
 }
 
 func cloneRunRecord(record RunRecord) RunRecord {
@@ -350,6 +524,34 @@ func (a *activeRuns) delete(id string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	delete(a.cancels, id)
+}
+
+func startRunHeartbeat(ctx context.Context, store RunStore, runID string, options WorkerOptions) func() {
+	if options.ID == "" {
+		return nil
+	}
+	heartbeats, ok := store.(RunStoreWithHeartbeat)
+	if !ok {
+		return nil
+	}
+	interval := options.HeartbeatInterval
+	if interval <= 0 {
+		interval = 5 * time.Second
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	ticker := time.NewTicker(interval)
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				_, _ = heartbeats.HeartbeatRun(context.Background(), runID, options.ID)
+			}
+		}
+	}()
+	return cancel
 }
 
 func observeRunState(ctx context.Context, record RunRecord) {

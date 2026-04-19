@@ -492,6 +492,135 @@ func CloudManagedPresetManagedWorkerDurableRunLifecycle() agenteval.Case {
 	}
 }
 
+// CloudManagedPresetManagedWorkerExecuteQueuedRun returns a managed-stack
+// scenario where a host enqueues a durable run and an explicit worker later
+// claims and executes it with worker identity and heartbeats recorded.
+func CloudManagedPresetManagedWorkerExecuteQueuedRun() agenteval.Case {
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "tool-1",
+				Name:  "read_file",
+				Input: json.RawMessage(`{"path":"README.md"}`),
+			},
+		}},
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "managed queued run complete"}},
+	)
+	config, configErr := cloudmanaged.PresetManagedWorker.Config()
+	if configErr == nil {
+		config.Base.Model = modelClient
+		config.Base.Tools = tool.NewRegistry(readFileTool())
+		config.RunStore = cloudmanaged.NewMemoryRunStore()
+		config.Policies.Quota.MaxModelRequests = 4
+		config.Policies.Quota.MaxToolUses = 4
+	}
+	stack, stackErr := cloudmanaged.New(config)
+	scope := tenant.Scope{
+		ID:        "tenant-1",
+		SubjectID: "user-1",
+		Attributes: map[string]string{
+			"plan": "managed",
+		},
+	}
+
+	var (
+		runID    string
+		finalRun cloudmanaged.RunRecord
+		mu       sync.Mutex
+		observed []memaxagent.Event
+	)
+
+	return agenteval.Case{
+		Name:   "cloudmanaged_preset_managed_worker_execute_queued_run",
+		Prompt: "Read README.md and finish through the queued worker path.",
+		Run: func(ctx context.Context) (<-chan memaxagent.Event, error) {
+			if stackErr != nil {
+				return nil, stackErr
+			}
+			out := make(chan memaxagent.Event, 64)
+			observer := memaxagent.EventObserverFunc(func(_ context.Context, event memaxagent.Event) {
+				mu.Lock()
+				defer mu.Unlock()
+				observed = append(observed, event)
+			})
+			record, err := stack.EnqueueRun(memaxagent.WithEventObserver(ctx, observer), "Read README.md and finish through the queued worker path.", scope)
+			if err != nil {
+				close(out)
+				return nil, err
+			}
+			runID = record.ID
+			go func() {
+				defer close(out)
+				final, _ := stack.ExecuteRun(memaxagent.WithEventObserver(ctx, observer), runID, cloudmanaged.WorkerOptions{
+					ID:                "worker-1",
+					HeartbeatInterval: time.Millisecond,
+				})
+				finalRun = final
+				mu.Lock()
+				defer mu.Unlock()
+				for _, event := range observed {
+					select {
+					case out <- event:
+					case <-ctx.Done():
+						return
+					}
+				}
+			}()
+			return out, nil
+		},
+		Assertions: []agenteval.Assertion{
+			toolConstructionSucceeded(configErr, stackErr),
+			agenteval.EventKindEmitted(memaxagent.EventRunStateChanged),
+			requestCountEquals(modelClient, 2),
+			{
+				Name: "queued worker path emits queued running succeeded transitions",
+				Check: func(result agenteval.Result) error {
+					var statuses []string
+					for _, event := range result.Events {
+						if event.Kind != memaxagent.EventRunStateChanged || event.Run == nil {
+							continue
+						}
+						if event.Run.RunID != runID {
+							return fmt.Errorf("run event = %#v, want run id %q", event.Run, runID)
+						}
+						statuses = append(statuses, event.Run.Status)
+					}
+					want := []string{
+						string(cloudmanaged.RunStatusQueued),
+						string(cloudmanaged.RunStatusRunning),
+						string(cloudmanaged.RunStatusSucceeded),
+					}
+					if len(statuses) != len(want) {
+						return fmt.Errorf("run statuses = %#v, want %#v", statuses, want)
+					}
+					for i := range want {
+						if statuses[i] != want[i] {
+							return fmt.Errorf("run statuses = %#v, want %#v", statuses, want)
+						}
+					}
+					return nil
+				},
+			},
+			{
+				Name: "queued worker path stores worker ownership and heartbeat",
+				Check: func(result agenteval.Result) error {
+					if finalRun.ID == "" || finalRun.ID != runID {
+						return fmt.Errorf("final run = %#v, want run id %q", finalRun, runID)
+					}
+					if finalRun.Status != cloudmanaged.RunStatusSucceeded || finalRun.WorkerID != "worker-1" {
+						return fmt.Errorf("final run = %#v, want succeeded worker-owned record", finalRun)
+					}
+					if finalRun.HeartbeatAt.IsZero() || finalRun.CompletedAt.IsZero() {
+						return fmt.Errorf("final run = %#v, want heartbeat and completion timestamps", finalRun)
+					}
+					return nil
+				},
+			},
+		},
+	}
+}
+
 type scenarioBlockingAuditSink struct {
 	mu      sync.Mutex
 	release chan struct{}

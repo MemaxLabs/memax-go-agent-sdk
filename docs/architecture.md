@@ -130,7 +130,12 @@ explicit queued/running/succeeded/failed/canceled lifecycle without coupling
 job state to transcript parsing or ad hoc goroutine wrappers. Those lifecycle
 transitions now emit explicit `run_state_changed` observer events, so the same
 audit seam can cover tenant denials, delegated child work, and managed-run
-state changes without a second notification channel.
+state changes without a second notification channel. The same seam now also
+supports explicit queued worker execution through `EnqueueRun`, `ExecuteRun`,
+and `FailStaleRuns`: foundation remote execution stays host-owned, worker death
+maps to explicit failed terminal state via heartbeat timeout, and automatic
+resume is intentionally deferred until the runtime has real checkpointed work
+to resume.
 Each preset now has deterministic end-to-end eval coverage for its normal
 workflow and its defining recovery or delegation path, so preset behavior is
 part of the public contract rather than informal guidance. The navigable preset

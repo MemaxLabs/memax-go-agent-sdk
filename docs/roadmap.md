@@ -157,9 +157,11 @@ system prompt.
   through `stack/cloudmanaged`, with reference in-memory tracking plus explicit
   start/get/cancel helpers for queued/running/succeeded/failed/canceled
   lifecycle, and those transitions now emit explicit lifecycle observer events.
-  Next steps are richer cloudmanaged presets, additional distributed quota
-  backends, durable run backends, and remote-execution backends built on top
-  of the same tenant seam.
+  Initial queued worker execution now also exists through
+  `EnqueueRun`, `ExecuteRun`, and `FailStaleRuns`, with worker heartbeats and
+  explicit stale-run failure handling. Next steps are richer cloudmanaged
+  presets, additional distributed quota backends, richer durable run backends,
+  and fuller remote-execution backends built on top of the same tenant seam.
 
 ## Phase 7: Opinionated Stacks
 
