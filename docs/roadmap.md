@@ -160,10 +160,14 @@ system prompt.
   Initial queued worker execution now also exists through
   `EnqueueRun`, `ExecuteRun`, `FailStaleRuns`, and `WatchStaleRuns`, with worker
   heartbeats, explicit stale-run failure handling, and deterministic revocation
-  coverage for mid-run tenant denial on queued workers. Next steps are richer
-  cloudmanaged presets, additional distributed quota backends, richer durable
-  run backends, and fuller remote-execution backends built on top of the same
-  tenant seam.
+  coverage for mid-run tenant denial on queued workers. Remote workers are
+  expected to run with the same tenant-validator configuration as the
+  enqueueing side rather than a signed worker-token subsystem in the SDK, and
+  an initial host-owned helper now exists through `stack/cloudmanaged/remote`
+  for claim discovery plus reference HTTP polling over the same `ExecuteRun`
+  path. Next steps are richer cloudmanaged presets, additional distributed
+  quota backends, richer durable run backends, and fuller remote-execution
+  backends built on top of the same tenant seam.
 
 ## Phase 7: Opinionated Stacks
 

@@ -16,6 +16,12 @@
 // aborts. Store errors are treated as denials so managed hosts fail closed by
 // default; hosts that prefer degrade-to-allow semantics should wrap the store
 // or validator explicitly.
+//
+// Remote workers build on the same tenant-validator configuration as the
+// enqueueing side. The SDK intentionally does not mint or verify signed worker
+// delegation tokens: cross-process execution remains host-owned coordination on
+// top of ExecuteRun, while tenant admission keeps using the same validator seam
+// at worker execution time.
 package cloudmanaged
 
 import (

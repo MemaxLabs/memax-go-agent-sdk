@@ -154,9 +154,14 @@ transitions without polling alone. The managed stack now also exposes an
 explicit queued worker path through `EnqueueRun`, `ExecuteRun`, and
 `FailStaleRuns`, plus a `WatchStaleRuns` monitor loop for heartbeat timeout
 failure detection, so hosts can build worker fleets on top of the same durable
-run seam instead of inventing a second job abstraction. The managed eval suite
-now also locks in mid-run tenant revocation as a first-class failure path for
-queued workers.
+run seam instead of inventing a second job abstraction. A reference
+`stack/cloudmanaged/remote` package now layers host-owned claim discovery and
+HTTP polling on top of the same `ExecuteRun` path, keeping remote workers on
+the same tenant-validator configuration as the enqueueing side instead of
+introducing SDK-level worker delegation tokens. The managed eval suite now
+also locks in mid-run tenant revocation as a first-class failure path for
+queued workers, plus a host-owned remote HTTP poll path over the same run
+contract.
 
 `stack/personal` now exposes named presets so hosts can start from a
 personal-intelligence workflow profile and then attach only the host-owned

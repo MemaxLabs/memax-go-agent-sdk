@@ -136,7 +136,14 @@ supports explicit queued worker execution through `EnqueueRun`, `ExecuteRun`,
 host-owned, worker death maps to explicit failed terminal state via heartbeat
 timeout, mid-run tenant revocation is eval-backed on the queued-worker path,
 and automatic resume is intentionally deferred until the runtime has real
-checkpointed work to resume.
+checkpointed work to resume. Cross-process workers follow the same
+tenant-validator-config model as in-process workers: the SDK intentionally does
+not introduce signed worker-delegation tokens or key-management machinery, so
+hosts coordinate remote claiming separately while worker-side execution still
+flows through the existing tenant seam. An initial host-owned helper now also
+exists through `stack/cloudmanaged/remote`, which keeps claim discovery and
+reference HTTP polling outside the core stack while routing actual execution
+through `ExecuteRun`.
 Each preset now has deterministic end-to-end eval coverage for its normal
 workflow and its defining recovery or delegation path, so preset behavior is
 part of the public contract rather than informal guidance. The navigable preset
