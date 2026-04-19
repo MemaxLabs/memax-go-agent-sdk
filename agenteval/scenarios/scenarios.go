@@ -81,6 +81,7 @@ func All() []agenteval.Case {
 		CloudManagedPresetManagedWorkerDurableRunLifecycle(),
 		CloudManagedPresetManagedWorkerExecuteQueuedRun(),
 		CloudManagedPresetManagedWorkerRemoteHTTPPoll(),
+		CloudManagedPresetManagedWorkerRemoteHTTPStaleFailure(),
 		CloudManagedPresetManagedWorkerTenantRevocation(),
 		CodingPresetSafeLocal(),
 		CodingPresetSafeLocalRollbackRecovery(),

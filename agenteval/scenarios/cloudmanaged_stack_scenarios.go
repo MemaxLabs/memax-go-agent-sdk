@@ -783,6 +783,204 @@ func CloudManagedPresetManagedWorkerRemoteHTTPPoll() agenteval.Case {
 	}
 }
 
+// CloudManagedPresetManagedWorkerRemoteHTTPStaleFailure returns a managed-stack
+// scenario where a remote polling worker claims one queued run, stops
+// heartbeating before finishing, and the stale-run watcher marks the durable
+// run failed before a second worker can pick it up.
+func CloudManagedPresetManagedWorkerRemoteHTTPStaleFailure() agenteval.Case {
+	modelClient := &scenarioBlockingRunModel{
+		release: make(chan struct{}),
+		started: make(chan struct{}, 1),
+	}
+	config, configErr := cloudmanaged.PresetManagedWorker.Config()
+	if configErr == nil {
+		config.Base.Model = modelClient
+		config.RunStore = cloudmanaged.NewMemoryRunStore()
+		config.Policies.Quota.MaxModelRequests = 4
+		config.Policies.Quota.MaxToolUses = 4
+	}
+	stack, stackErr := cloudmanaged.New(config)
+	scope := tenant.Scope{
+		ID:        "tenant-1",
+		SubjectID: "user-1",
+		Attributes: map[string]string{
+			"plan": "managed",
+		},
+	}
+
+	var (
+		runID          string
+		finalRun       cloudmanaged.RunRecord
+		workerErr      error
+		secondRun      cloudmanaged.RunRecord
+		secondExecuted bool
+		secondErr      error
+		watchErr       error
+		server         *httptest.Server
+	)
+
+	return agenteval.Case{
+		Name:   "cloudmanaged_preset_managed_worker_remote_http_stale_failure",
+		Prompt: "Block a remote worker until the stale watcher fails it.",
+		Run: func(ctx context.Context) (<-chan memaxagent.Event, error) {
+			if stackErr != nil {
+				return nil, stackErr
+			}
+			out := make(chan memaxagent.Event, 64)
+			observer := memaxagent.EventObserverFunc(func(_ context.Context, event memaxagent.Event) {
+				select {
+				case out <- event:
+				case <-ctx.Done():
+				}
+			})
+			record, err := stack.EnqueueRun(memaxagent.WithEventObserver(ctx, observer), "Block a remote worker until the stale watcher fails it.", scope)
+			if err != nil {
+				close(out)
+				return nil, err
+			}
+			runID = record.ID
+			handler, err := remote.ClaimHandler(stack.RunStore())
+			if err != nil {
+				close(out)
+				return nil, err
+			}
+			server = httptest.NewServer(handler)
+			pool, err := remote.NewHTTPPool(server.URL)
+			if err != nil {
+				server.Close()
+				close(out)
+				return nil, err
+			}
+			go func() {
+				defer close(out)
+				defer server.Close()
+
+				workerDone := make(chan error, 1)
+				go func() {
+					workerCtx := memaxagent.WithEventObserver(context.Background(), observer)
+					workerErr = remote.Watch(workerCtx, stack, pool, cloudmanaged.WorkerOptions{
+						ID:                "worker-http-1",
+						HeartbeatInterval: time.Hour,
+					}, time.Millisecond)
+					workerDone <- workerErr
+				}()
+
+				if _, err := waitForManagedRunStatus(stack, runID, func(r cloudmanaged.RunRecord) bool {
+					return r.Status == cloudmanaged.RunStatusRunning && r.SessionID != ""
+				}); err != nil {
+					secondErr = err
+					return
+				}
+				select {
+				case <-modelClient.started:
+				case <-ctx.Done():
+					secondErr = ctx.Err()
+					return
+				case <-time.After(2 * time.Second):
+					secondErr = fmt.Errorf("blocking remote run did not start model stream")
+					return
+				}
+
+				watchCtx, watchCancel := context.WithCancel(memaxagent.WithEventObserver(context.Background(), observer))
+				watchDone := make(chan error, 1)
+				go func() {
+					watchDone <- stack.WatchStaleRuns(watchCtx, time.Millisecond, 10*time.Millisecond)
+				}()
+
+				finalRun, err = waitForManagedRunStatus(stack, runID, func(r cloudmanaged.RunRecord) bool { return r.Terminal() })
+				if err != nil {
+					watchCancel()
+					secondErr = err
+					return
+				}
+				close(modelClient.release)
+				if err := <-workerDone; err != nil {
+					workerErr = err
+				}
+				secondRun, secondExecuted, secondErr = remote.RunOnce(memaxagent.WithEventObserver(ctx, observer), stack, pool, cloudmanaged.WorkerOptions{
+					ID:                "worker-http-2",
+					HeartbeatInterval: time.Millisecond,
+				})
+				watchCancel()
+				watchErr = <-watchDone
+			}()
+			return out, nil
+		},
+		Cleanup: func() {
+			if server != nil {
+				server.Close()
+			}
+		},
+		Assertions: []agenteval.Assertion{
+			toolConstructionSucceeded(configErr, stackErr),
+			agenteval.EventKindEmitted(memaxagent.EventRunStateChanged),
+			requestCountEquals(modelClient, 1),
+			{
+				Name: "remote stale path emits queued running failed transitions",
+				Check: func(result agenteval.Result) error {
+					var statuses []string
+					for _, event := range result.Events {
+						if event.Kind != memaxagent.EventRunStateChanged || event.Run == nil {
+							continue
+						}
+						if event.Run.RunID != runID {
+							return fmt.Errorf("run event = %#v, want run id %q", event.Run, runID)
+						}
+						statuses = append(statuses, event.Run.Status)
+					}
+					want := []string{
+						string(cloudmanaged.RunStatusQueued),
+						string(cloudmanaged.RunStatusRunning),
+						string(cloudmanaged.RunStatusFailed),
+					}
+					if len(statuses) != len(want) {
+						return fmt.Errorf("run statuses = %#v, want %#v", statuses, want)
+					}
+					for i := range want {
+						if statuses[i] != want[i] {
+							return fmt.Errorf("run statuses = %#v, want %#v", statuses, want)
+						}
+					}
+					return nil
+				},
+			},
+			{
+				Name: "remote stale path persists heartbeat-timeout failure",
+				Check: func(result agenteval.Result) error {
+					if finalRun.ID == "" || finalRun.ID != runID {
+						return fmt.Errorf("final run = %#v, want run id %q", finalRun, runID)
+					}
+					if finalRun.Status != cloudmanaged.RunStatusFailed || finalRun.WorkerID != "worker-http-1" {
+						return fmt.Errorf("final run = %#v, want failed worker-owned record", finalRun)
+					}
+					if finalRun.Error != "worker heartbeat timeout" || finalRun.CompletedAt.IsZero() {
+						return fmt.Errorf("final run = %#v, want stale-timeout reason and completion timestamp", finalRun)
+					}
+					if workerErr == nil || !strings.Contains(workerErr.Error(), "worker heartbeat timeout") {
+						return fmt.Errorf("worker error = %v, want stale-timeout failure", workerErr)
+					}
+					return nil
+				},
+			},
+			{
+				Name: "second remote worker sees no queued work after stale failure",
+				Check: func(result agenteval.Result) error {
+					if secondErr != nil {
+						return fmt.Errorf("second worker error = %v", secondErr)
+					}
+					if secondExecuted || secondRun.ID != "" {
+						return fmt.Errorf("second worker = (%#v, %t), want no work", secondRun, secondExecuted)
+					}
+					if !errors.Is(watchErr, context.Canceled) {
+						return fmt.Errorf("stale watcher error = %v, want context.Canceled", watchErr)
+					}
+					return nil
+				},
+			},
+		},
+	}
+}
+
 // CloudManagedPresetManagedWorkerTenantRevocation returns a managed-stack
 // scenario where a queued worker starts successfully, then a later model
 // request is denied by the tenant validator and the durable run fails with the
@@ -1011,4 +1209,67 @@ func (s *scenarioAuditErrors) ContainsAsyncOverflow() bool {
 		}
 	}
 	return false
+}
+
+type scenarioBlockingRunModel struct {
+	release chan struct{}
+	started chan struct{}
+	mu      sync.Mutex
+	count   int
+}
+
+func (m *scenarioBlockingRunModel) Stream(ctx context.Context, req model.Request) (model.Stream, error) {
+	m.mu.Lock()
+	m.count++
+	m.mu.Unlock()
+	select {
+	case m.started <- struct{}{}:
+	default:
+	}
+	return &scenarioBlockingRunStream{ctx: ctx, release: m.release}, nil
+}
+
+func (m *scenarioBlockingRunModel) RequestCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.count
+}
+
+type scenarioBlockingRunStream struct {
+	ctx     context.Context
+	release chan struct{}
+	done    bool
+}
+
+func (s *scenarioBlockingRunStream) Recv() (model.StreamEvent, error) {
+	if s.done {
+		return model.StreamEvent{}, model.ErrEndOfStream
+	}
+	select {
+	case <-s.ctx.Done():
+		s.done = true
+		return model.StreamEvent{}, s.ctx.Err()
+	case <-s.release:
+		s.done = true
+		return model.StreamEvent{Kind: model.StreamText, Text: "released"}, nil
+	}
+}
+
+func (s *scenarioBlockingRunStream) Close() error {
+	return nil
+}
+
+func waitForManagedRunStatus(stack cloudmanaged.Stack, id string, done func(cloudmanaged.RunRecord) bool) (cloudmanaged.RunRecord, error) {
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		record, err := stack.GetRun(context.Background(), id)
+		if err != nil {
+			return cloudmanaged.RunRecord{}, err
+		}
+		if done(record) {
+			return record, nil
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return cloudmanaged.RunRecord{}, fmt.Errorf("timed out waiting for managed run %q", id)
 }
