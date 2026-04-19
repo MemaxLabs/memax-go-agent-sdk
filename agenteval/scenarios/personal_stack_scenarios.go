@@ -1015,6 +1015,280 @@ func PersonalPresetAssistantMessageApprovalRecovery() agenteval.Case {
 	}
 }
 
+// PersonalPresetAssistantInboxTriageReplyFollowup returns a single-use
+// scenario where the personal_assistant preset triages an unread inbox thread
+// from metadata first, loads the full thread only before drafting, recovers
+// through message approval, and then creates an approval-gated follow-up
+// reminder through the schedule backend.
+func PersonalPresetAssistantInboxTriageReplyFollowup() agenteval.Case {
+	messageStore := messaging.NewThreadStore([]messaging.Thread{{
+		ID:      "thread-1",
+		Subject: "Urgent: Acme renewal blocker",
+		Summary: "Casey says checkout is blocked before Monday's renewal deadline and needs a same-day update.",
+		Participants: []messaging.Participant{
+			{Name: "Casey", Address: "casey@acme.example", Role: "from"},
+		},
+		Tags:          []string{"INBOX", "urgent", "customer"},
+		LastMessageAt: time.Date(2026, 4, 19, 8, 15, 0, 0, time.UTC),
+		Metadata:      map[string]any{"unread": true},
+		Messages: []messaging.Message{{
+			ID:        "thread-1-msg-1",
+			ThreadID:  "thread-1",
+			Subject:   "Urgent: Acme renewal blocker",
+			Summary:   "Checkout blocked before the renewal deadline.",
+			Body:      "Checkout is blocked for Acme before Monday's renewal deadline. Please send me a same-day update and tell me when I should expect the next checkpoint.",
+			Direction: messaging.DirectionInbound,
+			Sender:    messaging.Participant{Name: "Casey", Address: "casey@acme.example", Role: "from"},
+			SentAt:    time.Date(2026, 4, 19, 8, 15, 0, 0, time.UTC),
+		}},
+	}})
+	scheduleStore := scheduling.NewEventStore(nil)
+	taskStore := tasktools.NewMemoryStore([]tasktools.Task{{
+		ID:     "task-1",
+		Title:  "triage the urgent Acme inbox thread",
+		Status: tasktools.StatusInProgress,
+		Notes:  "search unread inbox metadata first, then read the thread before replying, and create a follow-up reminder after the approved reply",
+	}})
+
+	searchInput := `{
+		"query":"urgent renewal blocker same-day update",
+		"mailboxes":["INBOX"],
+		"from":["casey@acme.example"],
+		"unread":true,
+		"limit":3
+	}`
+	sendInput := `{
+		"thread_id":"thread-1",
+		"body":"Thanks, Casey. We are treating this as urgent and I will send you the next update by 14:00 UTC today.",
+		"recipients":[{"name":"Casey","address":"casey@acme.example"}]
+	}`
+	createInput := `{
+		"title":"Acme blocker follow-up",
+		"summary":"Send Casey the promised same-day checkout update.",
+		"description":"Follow up on the Acme renewal blocker and send the 14:00 UTC status update.",
+		"start":"2026-04-19T13:45:00Z",
+		"end":"2026-04-19T14:00:00Z",
+		"time_zone":"UTC",
+		"attendees":[{"name":"Casey","address":"casey@acme.example"}],
+		"tags":["follow-up","customer","urgent"]
+	}`
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "search-1",
+				Name:  messagetools.SearchToolName,
+				Input: json.RawMessage(searchInput),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "read-1",
+				Name:  messagetools.ReadToolName,
+				Input: json.RawMessage(`{"thread_id":"thread-1"}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "send-1",
+				Name:  messagetools.SendToolName,
+				Input: json.RawMessage(sendInput),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "approval-1",
+				Name: approvaltools.ToolName,
+				Input: json.RawMessage(`{
+					"action":"send_message",
+					"reason":"sending an urgent customer update requires approval",
+					"tool_input":` + sendInput + `
+				}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "send-2",
+				Name:  messagetools.SendToolName,
+				Input: json.RawMessage(sendInput),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "approval-2",
+				Name: approvaltools.ToolName,
+				Input: json.RawMessage(`{
+					"action":"create_schedule_event",
+					"reason":"creating a customer follow-up reminder requires approval",
+					"tool_input":` + createInput + `
+				}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "create-1",
+				Name:  scheduletools.CreateToolName,
+				Input: json.RawMessage(createInput),
+			},
+		}},
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "Personal assistant triaged the urgent Acme inbox thread from metadata, recovered through approval to send the reply, and created a same-day follow-up reminder."}},
+	)
+
+	config, configErr := personal.PresetPersonalAssistant.Config()
+	config.Messages = messagetools.Config{
+		Searcher:     messageStore,
+		Reader:       messageStore,
+		Sender:       messageStore,
+		DefaultLimit: 3,
+	}
+	config.Schedule = scheduletools.Config{
+		Creator:      scheduleStore,
+		DefaultLimit: 3,
+	}
+	config.Tasks = taskStore
+	config.Approval.Approver = approvaltools.StaticApprover{
+		Decision: approvaltools.Decision{
+			Approved: true,
+			Reason:   "approved urgent customer workflow",
+		},
+	}
+	stack, stackErr := personal.New(config)
+
+	return agenteval.Case{
+		Name:    "personal_preset_personal_assistant_inbox_triage_reply_followup",
+		Prompt:  "Triage urgent unread inbox threads carefully, only read a thread before drafting a reply, and create a follow-up reminder after the approved reply if the thread needs one.",
+		Options: stack.WithModel(modelClient),
+		Assertions: []agenteval.Assertion{
+			toolConstructionSucceeded(configErr, stackErr),
+			agenteval.ToolUsed(messagetools.SearchToolName),
+			agenteval.ToolUsed(messagetools.ReadToolName),
+			agenteval.ToolUsed(messagetools.SendToolName),
+			agenteval.ToolUsed(approvaltools.ToolName),
+			agenteval.ToolUsed(scheduletools.CreateToolName),
+			agenteval.EventKindEmitted(memaxagent.EventApprovalRequested),
+			agenteval.EventKindEmitted(memaxagent.EventApprovalGranted),
+			agenteval.EventKindEmitted(memaxagent.EventApprovalConsumed),
+			agenteval.FinalEquals("Personal assistant triaged the urgent Acme inbox thread from metadata, recovered through approval to send the reply, and created a same-day follow-up reminder."),
+			requestCountEquals(modelClient, 8),
+			{
+				Name: "assistant preset prompt includes inbox triage workflow guidance",
+				Check: func(agenteval.Result) error {
+					requests := modelClient.Requests()
+					if len(requests) != 8 {
+						return fmt.Errorf("requests = %d, want 8", len(requests))
+					}
+					initialPrompt := requests[0].SystemPrompt
+					for _, want := range []string{
+						"Search note, document, message-thread, and schedule metadata before loading full content or changing calendar state.",
+						"[in_progress] task-1",
+						messagetools.SearchToolName,
+						messagetools.ReadToolName,
+						messagetools.SendToolName,
+						scheduletools.CreateToolName,
+					} {
+						if !strings.Contains(initialPrompt, want) {
+							return fmt.Errorf("initial prompt missing %q:\n%s", want, initialPrompt)
+						}
+					}
+					return nil
+				},
+			},
+			{
+				Name: "urgent triage stays metadata-first before the thread read",
+				Check: func(result agenteval.Result) error {
+					uses := result.ToolUses()
+					want := []string{
+						messagetools.SearchToolName,
+						messagetools.ReadToolName,
+						messagetools.SendToolName,
+						approvaltools.ToolName,
+						messagetools.SendToolName,
+						approvaltools.ToolName,
+						scheduletools.CreateToolName,
+					}
+					if len(uses) != len(want) {
+						return fmt.Errorf("tool uses = %#v, want %v", uses, want)
+					}
+					for i, name := range want {
+						if uses[i].Name != name {
+							return fmt.Errorf("tool use order = %#v, want %v", uses, want)
+						}
+					}
+					toolResults := result.ToolResults()
+					if len(toolResults) != 7 {
+						return fmt.Errorf("tool results = %#v, want exactly search read denied send approval send approval create", toolResults)
+					}
+					if !strings.Contains(toolResults[0].Content, "Urgent: Acme renewal blocker") || !strings.Contains(toolResults[0].Content, "same-day update") {
+						return fmt.Errorf("search result = %#v, want urgent metadata", toolResults[0])
+					}
+					if strings.Contains(toolResults[0].Content, "Please send me a same-day update and tell me when I should expect the next checkpoint.") {
+						return fmt.Errorf("search result leaked full thread body: %#v", toolResults[0])
+					}
+					if toolResults[0].Metadata["matches"] != 1 {
+						return fmt.Errorf("search metadata = %#v, want one urgent inbox match", toolResults[0].Metadata)
+					}
+					return nil
+				},
+			},
+			{
+				Name: "reply recovery and follow-up creation both persist",
+				Check: func(result agenteval.Result) error {
+					toolResults := result.ToolResults()
+					if toolResults[1].IsError || !strings.Contains(toolResults[1].Content, "Please send me a same-day update") {
+						return fmt.Errorf("read result = %#v, want full thread before draft", toolResults[1])
+					}
+					if !toolResults[2].IsError || !strings.Contains(toolResults[2].Content, agentpolicy.ApprovalBeforeToolReason(messagetools.SendToolName)) {
+						return fmt.Errorf("first send result = %#v, want approval denial", toolResults[2])
+					}
+					if toolResults[3].IsError || toolResults[3].Metadata[approvaltools.MetadataApprovalApproved] != true {
+						return fmt.Errorf("message approval result = %#v, want granted approval", toolResults[3])
+					}
+					if toolResults[4].IsError || !strings.Contains(toolResults[4].Content, "sent message Urgent: Acme renewal blocker") {
+						return fmt.Errorf("second send result = %#v, want send success", toolResults[4])
+					}
+					if toolResults[5].IsError || toolResults[5].Metadata[approvaltools.MetadataApprovalApproved] != true {
+						return fmt.Errorf("schedule approval result = %#v, want granted approval", toolResults[5])
+					}
+					if toolResults[6].IsError || !strings.Contains(toolResults[6].Content, "created schedule event Acme blocker follow-up") {
+						return fmt.Errorf("create result = %#v, want follow-up creation success", toolResults[6])
+					}
+					thread, err := messageStore.ReadThread(context.Background(), messaging.ReadRequest{ThreadID: "thread-1"})
+					if err != nil {
+						return err
+					}
+					if len(thread.Messages) != 2 {
+						return fmt.Errorf("thread messages = %d, want 2", len(thread.Messages))
+					}
+					last := thread.Messages[len(thread.Messages)-1]
+					if !strings.Contains(last.Body, "14:00 UTC today") {
+						return fmt.Errorf("outbound reply body = %q, want promised checkpoint time", last.Body)
+					}
+					created, err := scheduleStore.ReadEvent(context.Background(), scheduling.ReadRequest{Title: "Acme blocker follow-up"})
+					if err != nil {
+						return err
+					}
+					if created.TimeZone != "UTC" {
+						return fmt.Errorf("follow-up timezone = %q, want UTC", created.TimeZone)
+					}
+					if created.End.Sub(created.Start) != 15*time.Minute {
+						return fmt.Errorf("follow-up duration = %s, want 15m", created.End.Sub(created.Start))
+					}
+					if !strings.Contains(created.Description, "14:00 UTC status update") {
+						return fmt.Errorf("follow-up description = %q, want promised update", created.Description)
+					}
+					return nil
+				},
+			},
+		},
+	}
+}
+
 // PersonalPresetAssistantScheduleRecall returns a single-use scenario where
 // the personal_assistant preset searches schedule metadata, reads one seeded
 // event, requests approval, reschedules the event using the recalled
