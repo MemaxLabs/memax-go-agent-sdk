@@ -51,8 +51,18 @@ type Client struct {
 // QueryRequest scopes one Email/query request.
 type QueryRequest struct {
 	Text            string
+	Filter          Filter
 	Limit           int
 	CollapseThreads bool
+}
+
+// Filter carries portable JMAP query predicates.
+type Filter struct {
+	Mailboxes []string
+	From      []string
+	Since     time.Time
+	Until     time.Time
+	Unread    *bool
 }
 
 // EmailGetRequest scopes one Email/get request.
@@ -194,8 +204,8 @@ func (c *Client) QueryEmails(ctx context.Context, req QueryRequest) ([]string, e
 			"isAscending": false,
 		}},
 	}
-	if text := strings.TrimSpace(req.Text); text != "" {
-		args["filter"] = map[string]any{"text": text}
+	if filter := buildFilter(req); filter != nil {
+		args["filter"] = filter
 	}
 	if req.Limit > 0 {
 		args["limit"] = req.Limit
@@ -567,4 +577,63 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func buildFilter(req QueryRequest) any {
+	var conditions []any
+	if text := strings.TrimSpace(req.Text); text != "" {
+		conditions = append(conditions, map[string]any{"text": text})
+	}
+	if mailbox := orConditions("inMailbox", req.Filter.Mailboxes); mailbox != nil {
+		conditions = append(conditions, mailbox)
+	}
+	if from := orConditions("from", req.Filter.From); from != nil {
+		conditions = append(conditions, from)
+	}
+	if !req.Filter.Since.IsZero() {
+		conditions = append(conditions, map[string]any{"after": req.Filter.Since.UTC().Format(time.RFC3339)})
+	}
+	if !req.Filter.Until.IsZero() {
+		conditions = append(conditions, map[string]any{"before": req.Filter.Until.UTC().Format(time.RFC3339)})
+	}
+	if req.Filter.Unread != nil {
+		if *req.Filter.Unread {
+			conditions = append(conditions, map[string]any{"notKeyword": "$seen"})
+		} else {
+			conditions = append(conditions, map[string]any{"hasKeyword": "$seen"})
+		}
+	}
+	switch len(conditions) {
+	case 0:
+		return nil
+	case 1:
+		return conditions[0]
+	default:
+		return map[string]any{
+			"operator":   "AND",
+			"conditions": conditions,
+		}
+	}
+}
+
+func orConditions(field string, values []string) any {
+	conditions := make([]any, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		conditions = append(conditions, map[string]any{field: value})
+	}
+	switch len(conditions) {
+	case 0:
+		return nil
+	case 1:
+		return conditions[0]
+	default:
+		return map[string]any{
+			"operator":   "OR",
+			"conditions": conditions,
+		}
+	}
 }

@@ -80,6 +80,7 @@ func (s *Store) SearchThreads(ctx context.Context, req messaging.SearchRequest) 
 	}
 	ids, err := s.client.QueryEmails(ctx, jmapclient.QueryRequest{
 		Text:            strings.TrimSpace(req.Query),
+		Filter:          filter(req.Filter),
 		Limit:           limit,
 		CollapseThreads: true,
 	})
@@ -169,6 +170,7 @@ func (s *Store) resolveThreadID(ctx context.Context, req messaging.ReadRequest) 
 	}
 	ids, err := s.client.QueryEmails(ctx, jmapclient.QueryRequest{
 		Text:            subject,
+		Filter:          jmapclient.Filter{},
 		Limit:           defaultSubjectMatches,
 		CollapseThreads: true,
 	})
@@ -445,3 +447,13 @@ func contextError(ctx context.Context) error {
 
 var _ messaging.Searcher = (*Store)(nil)
 var _ messaging.Reader = (*Store)(nil)
+
+func filter(src messaging.SearchFilter) jmapclient.Filter {
+	return jmapclient.Filter{
+		Mailboxes: append([]string(nil), src.Mailboxes...),
+		From:      append([]string(nil), src.From...),
+		Since:     src.Since,
+		Until:     src.Until,
+		Unread:    src.Unread,
+	}
+}

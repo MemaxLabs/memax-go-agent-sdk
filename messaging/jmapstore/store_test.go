@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/messaging"
 	"github.com/MemaxLabs/memax-go-agent-sdk/messaging/jmapclient"
@@ -132,4 +133,74 @@ func TestStoreReadThreadByExactSubject(t *testing.T) {
 	if thread.ID != "thread-1" {
 		t.Fatalf("ReadThread() id = %q, want latest exact-subject thread", thread.ID)
 	}
+}
+
+func TestStoreSearchThreadsPassesPortableFilter(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var envelope struct {
+			MethodCalls [][]json.RawMessage `json:"methodCalls"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&envelope); err != nil {
+			t.Fatalf("Decode(request) error = %v", err)
+		}
+		var args map[string]any
+		if err := json.Unmarshal(envelope.MethodCalls[0][1], &args); err != nil {
+			t.Fatalf("Unmarshal(args) error = %v", err)
+		}
+		rawFilter, err := json.Marshal(args["filter"])
+		if err != nil {
+			t.Fatalf("Marshal(filter) error = %v", err)
+		}
+		filterText := string(rawFilter)
+		for _, want := range []string{
+			`"inMailbox":"inbox"`,
+			`"from":"alex@example.com"`,
+			`"after":"2026-04-19T00:00:00Z"`,
+			`"before":"2026-04-20T00:00:00Z"`,
+			`"notKeyword":"$seen"`,
+		} {
+			if !strings.Contains(filterText, want) {
+				t.Fatalf("filter JSON = %s, want substring %s", filterText, want)
+			}
+		}
+		_, _ = w.Write([]byte(`{"methodResponses":[["Email/query",{"ids":[]},"0"]]}`))
+	}))
+	defer server.Close()
+
+	client, err := jmapclient.New(server.URL, "acc")
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	store, err := New(client)
+	if err != nil {
+		t.Fatalf("New(store) error = %v", err)
+	}
+	_, err = store.SearchThreads(context.Background(), messaging.SearchRequest{
+		Query: "travel",
+		Filter: messaging.SearchFilter{
+			Mailboxes: []string{"inbox"},
+			From:      []string{"alex@example.com"},
+			Since:     mustTime(t, "2026-04-19T00:00:00Z"),
+			Until:     mustTime(t, "2026-04-20T00:00:00Z"),
+			Unread:    boolPtr(true),
+		},
+	})
+	if err != nil {
+		t.Fatalf("SearchThreads() error = %v", err)
+	}
+}
+
+func boolPtr(value bool) *bool {
+	return &value
+}
+
+func mustTime(t *testing.T, raw string) time.Time {
+	t.Helper()
+	value, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		t.Fatalf("time.Parse(%q) error = %v", raw, err)
+	}
+	return value
 }

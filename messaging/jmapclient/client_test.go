@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestClientQueryEmailsUsesCollapseThreadsAndTextFilter(t *testing.T) {
@@ -31,7 +32,14 @@ func TestClientQueryEmailsUsesCollapseThreadsAndTextFilter(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 	ids, err := client.QueryEmails(context.Background(), QueryRequest{
-		Text:            "passport urgent",
+		Text: "passport urgent",
+		Filter: Filter{
+			Mailboxes: []string{"inbox", "important"},
+			From:      []string{"alex@example.com"},
+			Since:     mustTime(t, "2026-04-19T00:00:00Z"),
+			Until:     mustTime(t, "2026-04-20T00:00:00Z"),
+			Unread:    boolPtr(true),
+		},
 		Limit:           5,
 		CollapseThreads: true,
 	})
@@ -54,9 +62,23 @@ func TestClientQueryEmailsUsesCollapseThreadsAndTextFilter(t *testing.T) {
 	if got := args["collapseThreads"]; got != true {
 		t.Fatalf("collapseThreads = %#v, want true", got)
 	}
-	filter, _ := args["filter"].(map[string]any)
-	if got := filter["text"]; got != "passport urgent" {
-		t.Fatalf("filter.text = %#v, want query text", got)
+	rawFilter, err := json.Marshal(args["filter"])
+	if err != nil {
+		t.Fatalf("Marshal(filter) error = %v", err)
+	}
+	filterText := string(rawFilter)
+	for _, want := range []string{
+		`"text":"passport urgent"`,
+		`"inMailbox":"inbox"`,
+		`"inMailbox":"important"`,
+		`"from":"alex@example.com"`,
+		`"after":"2026-04-19T00:00:00Z"`,
+		`"before":"2026-04-20T00:00:00Z"`,
+		`"notKeyword":"$seen"`,
+	} {
+		if !strings.Contains(filterText, want) {
+			t.Fatalf("filter JSON = %s, want substring %s", filterText, want)
+		}
 	}
 }
 
@@ -115,4 +137,17 @@ func TestClientGetThreads(t *testing.T) {
 	if len(threads[0].EmailIDs) != 2 {
 		t.Fatalf("EmailIDs = %#v, want two ids", threads[0].EmailIDs)
 	}
+}
+
+func boolPtr(value bool) *bool {
+	return &value
+}
+
+func mustTime(t *testing.T, raw string) time.Time {
+	t.Helper()
+	value, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		t.Fatalf("time.Parse(%q) error = %v", raw, err)
+	}
+	return value
 }
