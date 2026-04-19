@@ -176,7 +176,22 @@ This keeps audit persistence ordered with the emitted events while leaving sink
 durability, buffering, and replication policy under host control. Because the
 runtime now carries event observation through delegated child-agent runs,
 managed audit trails can cover parent and child sessions without special-case
-subagent plumbing in application code.
+subagent plumbing in application code. Cloud-managed quota enforcement is
+admission-time accounting rather than billing-accurate usage accounting, so a
+reserved model or tool slot is not automatically released if the later action
+aborts. Quota-store failures are treated as denials by default, which keeps the
+managed stack fail-closed unless a host deliberately wraps the store or
+validator with a different policy. The reference `MemoryQuotaStore` is
+single-process and keys only on session ID; multi-tenant or multi-replica
+deployments should attach a scope-aware shared store such as
+`stack/cloudmanaged/redistore`. Audit sinks can now also be wrapped with the
+async cloudmanaged sink adapter when hosts want bounded buffered persistence
+instead of synchronous inline writes on the event-emission path. Async sink
+error handlers should remain fast and non-blocking; the drop-oldest overflow
+path reports pressure inline with the caller's write path, while sink-write
+failures are reported from the background worker. Overflow notifications use a
+detached context rather than the dropped record's original tracing scope, so
+hosts that need trace correlation should instrument the wrapped sink directly.
 
 ## Regression Coverage
 

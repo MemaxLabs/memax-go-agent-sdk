@@ -91,6 +91,8 @@ Coding-oriented adapters and toolkits:
   host-owned audit sinks
 - initial Redis-backed cloudmanaged quota store for shared multi-replica quota
   enforcement
+- initial async cloudmanaged audit sink wrapper for buffered non-inline audit
+  delivery
 - initial SQLite-backed scheduling adapter for durable local calendar backends
 - skill discovery tools
 
@@ -126,7 +128,12 @@ seam. The reference `MemoryQuotaStore` keeps the zero-config path for local or
 single-process managed hosts, while distributed deployments can attach a shared
 quota backend without reimplementing tenant validation or session-end cleanup.
 The first shared backend now exists as `stack/cloudmanaged/redistore`, using
-server-side atomic reservation plus TTL-backed cleanup safety.
+server-side atomic reservation plus TTL-backed cleanup safety. Quota is
+admission-time accounting by default rather than billing-accurate release-on-
+abort accounting, and store failures fail closed unless the host wraps the
+validator with a different policy. Audit sinks can now also be wrapped with
+`stack/cloudmanaged`'s async sink for buffered delivery when hosts do not want
+audit persistence to happen inline on the event-emission path.
 
 `stack/personal` now exposes named presets so hosts can start from a
 personal-intelligence workflow profile and then attach only the host-owned

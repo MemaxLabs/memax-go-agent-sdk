@@ -5,7 +5,10 @@
 // read/check/write sequence. Keys carry a TTL as a safety net for crashed runs:
 // ResetSession still handles the normal cleanup path, but expired sessions do
 // not accumulate forever when a process dies before it can run session-end
-// hooks.
+// hooks. Session and counter keys have independent TTLs, so sessions that stay
+// idle longer than the TTL effectively reset their quota counters. Store
+// instrumentation remains a host concern: wrap the Redis client if you need
+// latency, error-rate, or replica-health telemetry for managed-service SLOs.
 package redistore
 
 import (

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -648,10 +649,210 @@ func TestAuditSubscriberReportsSinkErrorsWithoutBreakingEvents(t *testing.T) {
 	}
 }
 
+func TestAsyncSinkPreservesOrderAndDrainsOnClose(t *testing.T) {
+	t.Parallel()
+
+	inner := &MemorySink{}
+	sink, err := NewAsyncSink(inner, WithAsyncSinkBufferSize(2))
+	if err != nil {
+		t.Fatalf("NewAsyncSink() error = %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		if err := sink.WriteAudit(context.Background(), AuditRecord{
+			Kind:      memaxagent.EventToolResult,
+			SessionID: "session-1",
+			Turn:      i + 1,
+			Result:    fmt.Sprintf("result-%d", i+1),
+		}); err != nil {
+			t.Fatalf("WriteAudit(%d) error = %v", i, err)
+		}
+	}
+	if err := sink.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	records := inner.Records()
+	if len(records) != 3 {
+		t.Fatalf("records = %#v, want 3 drained records", records)
+	}
+	for i, record := range records {
+		want := fmt.Sprintf("result-%d", i+1)
+		if record.Result != want {
+			t.Fatalf("record %d = %#v, want result %q", i, record, want)
+		}
+	}
+	if err := sink.WriteAudit(context.Background(), AuditRecord{}); !errors.Is(err, ErrAsyncSinkClosed) {
+		t.Fatalf("WriteAudit(after close) error = %v, want ErrAsyncSinkClosed", err)
+	}
+}
+
+func TestAsyncSinkSinkErrorsAreReportedAsynchronously(t *testing.T) {
+	t.Parallel()
+
+	var handled []string
+	var mu sync.Mutex
+	sink, err := NewAsyncSink(
+		AuditSinkFunc(func(context.Context, AuditRecord) error {
+			return errors.New("sink unavailable")
+		}),
+		WithAsyncSinkErrorHandler(AuditErrorHandlerFunc(func(_ context.Context, err error) {
+			mu.Lock()
+			defer mu.Unlock()
+			handled = append(handled, err.Error())
+		})),
+	)
+	if err != nil {
+		t.Fatalf("NewAsyncSink() error = %v", err)
+	}
+	if err := sink.WriteAudit(context.Background(), AuditRecord{Kind: memaxagent.EventSessionStarted}); err != nil {
+		t.Fatalf("WriteAudit() error = %v", err)
+	}
+	if err := sink.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(handled) != 1 || handled[0] != "sink unavailable" {
+		t.Fatalf("handled errors = %v, want sink error callback", handled)
+	}
+}
+
+func TestAsyncSinkDropOldestKeepsNewestQueuedRecords(t *testing.T) {
+	t.Parallel()
+
+	inner := &blockingAuditSink{
+		release: make(chan struct{}),
+		started: make(chan struct{}, 1),
+	}
+	var handled []error
+	var handledMu sync.Mutex
+	sink, err := NewAsyncSink(
+		inner,
+		WithAsyncSinkBufferSize(2),
+		WithAsyncOverflowPolicy(AsyncOverflowDropOldest),
+		WithAsyncSinkErrorHandler(AuditErrorHandlerFunc(func(_ context.Context, err error) {
+			handledMu.Lock()
+			defer handledMu.Unlock()
+			handled = append(handled, err)
+		})),
+	)
+	if err != nil {
+		t.Fatalf("NewAsyncSink() error = %v", err)
+	}
+
+	if err := sink.WriteAudit(context.Background(), AuditRecord{
+		Kind:      memaxagent.EventToolResult,
+		SessionID: "session-1",
+		Result:    "result-1",
+	}); err != nil {
+		t.Fatalf("WriteAudit(%q) error = %v", "result-1", err)
+	}
+	select {
+	case <-inner.started:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("first async write did not reach inner sink")
+	}
+	for _, result := range []string{"result-2", "result-3", "result-4"} {
+		if err := sink.WriteAudit(context.Background(), AuditRecord{
+			Kind:      memaxagent.EventToolResult,
+			SessionID: "session-1",
+			Result:    result,
+		}); err != nil {
+			t.Fatalf("WriteAudit(%q) error = %v", result, err)
+		}
+	}
+	close(inner.release)
+	if err := sink.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	records := inner.Records()
+	if len(records) != 3 {
+		t.Fatalf("records = %#v, want 3 retained records", records)
+	}
+	got := []string{records[0].Result, records[1].Result, records[2].Result}
+	want := []string{"result-1", "result-3", "result-4"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("retained results = %v, want %v", got, want)
+	}
+	handledMu.Lock()
+	defer handledMu.Unlock()
+	if len(handled) == 0 {
+		t.Fatal("handled overflow errors = 0, want at least one")
+	}
+	var overflow *AsyncSinkOverflowError
+	if !errors.As(handled[0], &overflow) || overflow.Policy != AsyncOverflowDropOldest {
+		t.Fatalf("handled overflow error = %#v, want AsyncSinkOverflowError(drop_oldest)", handled[0])
+	}
+}
+
+func TestAsyncSinkBlockHonorsContextWhenFull(t *testing.T) {
+	t.Parallel()
+
+	inner := &blockingAuditSink{release: make(chan struct{})}
+	sink, err := NewAsyncSink(inner, WithAsyncSinkBufferSize(1))
+	if err != nil {
+		t.Fatalf("NewAsyncSink() error = %v", err)
+	}
+	if err := sink.WriteAudit(context.Background(), AuditRecord{Kind: memaxagent.EventToolResult, Result: "result-1"}); err != nil {
+		t.Fatalf("WriteAudit(result-1) error = %v", err)
+	}
+	if err := sink.WriteAudit(context.Background(), AuditRecord{Kind: memaxagent.EventToolResult, Result: "result-2"}); err != nil {
+		t.Fatalf("WriteAudit(result-2) error = %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := sink.WriteAudit(ctx, AuditRecord{Kind: memaxagent.EventToolResult, Result: "result-3"}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("WriteAudit(result-3) error = %v, want deadline exceeded", err)
+	}
+	close(inner.release)
+	if err := sink.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
+
 type quotaTestModel struct {
 	requests []model.Request
 	turns    [][]model.StreamEvent
 	err      error
+}
+
+type blockingAuditSink struct {
+	mu      sync.Mutex
+	release chan struct{}
+	started chan struct{}
+	records []AuditRecord
+}
+
+func (s *blockingAuditSink) WriteAudit(_ context.Context, record AuditRecord) error {
+	if s == nil {
+		return nil
+	}
+	if s.started != nil {
+		select {
+		case s.started <- struct{}{}:
+		default:
+		}
+	}
+	if s.release != nil {
+		<-s.release
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.records = append(s.records, cloneAuditRecord(record))
+	return nil
+}
+
+func (s *blockingAuditSink) Records() []AuditRecord {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]AuditRecord, len(s.records))
+	for i, record := range s.records {
+		out[i] = cloneAuditRecord(record)
+	}
+	return out
 }
 
 type quotaReserveCall struct {
