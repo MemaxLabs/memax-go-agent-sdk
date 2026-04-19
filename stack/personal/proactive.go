@@ -76,6 +76,10 @@ type ScheduledRunUpdate struct {
 }
 
 // ScheduledRunStore persists proactive scheduled-run state.
+//
+// This is intentionally separate from cloudmanaged.RunStore: the personal
+// stack's distinctive contract is idempotency by deterministic trigger intent,
+// not multi-tenant worker claiming or heartbeat-based liveness.
 type ScheduledRunStore interface {
 	CreateScheduledRun(context.Context, CreateScheduledRunRequest) (ScheduledRunRecord, bool, error)
 	UpdateScheduledRun(context.Context, ScheduledRunUpdate) (ScheduledRunRecord, error)
