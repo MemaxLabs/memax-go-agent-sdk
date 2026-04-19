@@ -13,14 +13,11 @@ package redistore
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
-	"sort"
-	"strings"
 	"time"
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/stack/cloudmanaged"
+	"github.com/MemaxLabs/memax-go-agent-sdk/stack/cloudmanaged/internal/scopekey"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tenant"
 	"github.com/redis/go-redis/v9"
 )
@@ -162,34 +159,11 @@ func (s *Store) ResetSession(ctx context.Context, scope tenant.Scope, sessionID 
 }
 
 func (s *Store) sessionKey(scope tenant.Scope, sessionID string) string {
-	return fmt.Sprintf("%s:%s:%s:session", s.keyPrefix, scopeDigest(scope), sessionID)
+	return fmt.Sprintf("%s:%s:%s:session", s.keyPrefix, scopekey.Digest(scope), sessionID)
 }
 
 func (s *Store) counterKey(scope tenant.Scope, sessionID string, counter cloudmanaged.QuotaCounter) string {
-	return fmt.Sprintf("%s:%s:%s:%s", s.keyPrefix, scopeDigest(scope), sessionID, counter)
-}
-
-func scopeDigest(scope tenant.Scope) string {
-	scope = scope.Clone()
-	var builder strings.Builder
-	builder.WriteString(scope.ID)
-	builder.WriteByte('\n')
-	builder.WriteString(scope.SubjectID)
-	if len(scope.Attributes) > 0 {
-		keys := make([]string, 0, len(scope.Attributes))
-		for key := range scope.Attributes {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		for _, key := range keys {
-			builder.WriteByte('\n')
-			builder.WriteString(key)
-			builder.WriteByte('=')
-			builder.WriteString(scope.Attributes[key])
-		}
-	}
-	sum := sha256.Sum256([]byte(builder.String()))
-	return hex.EncodeToString(sum[:])
+	return fmt.Sprintf("%s:%s:%s:%s", s.keyPrefix, scopekey.Digest(scope), sessionID, counter)
 }
 
 func ttlSeconds(ttl time.Duration) int64 {
