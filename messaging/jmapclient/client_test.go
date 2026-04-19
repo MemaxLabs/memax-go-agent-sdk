@@ -23,7 +23,7 @@ func TestClientQueryEmailsUsesCollapseThreadsAndTextFilter(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&seen); err != nil {
 			t.Fatalf("Decode(request) error = %v", err)
 		}
-		_, _ = w.Write([]byte(`{"methodResponses":[["Email/query",{"accountId":"acc","ids":["email-2","email-1"]},"0"]]}`))
+		_, _ = w.Write([]byte(`{"methodResponses":[["Email/query",{"accountId":"acc","ids":["email-2","email-1"],"total":2},"0"]]}`))
 	}))
 	defer server.Close()
 
@@ -79,6 +79,57 @@ func TestClientQueryEmailsUsesCollapseThreadsAndTextFilter(t *testing.T) {
 		if !strings.Contains(filterText, want) {
 			t.Fatalf("filter JSON = %s, want substring %s", filterText, want)
 		}
+	}
+}
+
+func TestClientQueryEmailsFollowsBoundedPages(t *testing.T) {
+	t.Parallel()
+
+	var positions []int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var envelope struct {
+			MethodCalls [][]json.RawMessage `json:"methodCalls"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&envelope); err != nil {
+			t.Fatalf("Decode(request) error = %v", err)
+		}
+		var args map[string]any
+		if err := json.Unmarshal(envelope.MethodCalls[0][1], &args); err != nil {
+			t.Fatalf("Unmarshal(args) error = %v", err)
+		}
+		position := int(args["position"].(float64))
+		positions = append(positions, position)
+		switch position {
+		case 0:
+			_, _ = w.Write([]byte(`{"methodResponses":[["Email/query",{"accountId":"acc","ids":["email-3","email-2"],"total":3},"0"]]}`))
+		case 2:
+			_, _ = w.Write([]byte(`{"methodResponses":[["Email/query",{"accountId":"acc","ids":["email-1"],"total":3},"0"]]}`))
+		default:
+			t.Fatalf("unexpected position %d", position)
+		}
+	}))
+	defer server.Close()
+
+	client, err := New(server.URL, "acc", WithMaxPages(3))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	ids, err := client.QueryEmails(context.Background(), QueryRequest{
+		Text:            "project kickoff",
+		Limit:           2,
+		CollapseThreads: true,
+	})
+	if err != nil {
+		t.Fatalf("QueryEmails() error = %v", err)
+	}
+	if got := strings.Join(ids, ","); got != "email-3,email-2,email-1" {
+		t.Fatalf("QueryEmails() ids = %q, want all paged ids", got)
+	}
+	if got := len(positions); got != 2 {
+		t.Fatalf("Email/query calls = %d, want 2", got)
+	}
+	if positions[0] != 0 || positions[1] != 2 {
+		t.Fatalf("positions = %#v, want [0 2]", positions)
 	}
 }
 

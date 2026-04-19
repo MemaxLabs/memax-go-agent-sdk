@@ -126,6 +126,7 @@ func (e Executor) runOne(ctx context.Context, use model.ToolUse) model.ToolResul
 	if meter == nil {
 		meter = telemetry.NoopMeter{}
 	}
+	var beforeMetadata map[string]any
 	started := time.Now()
 	ctx, span := tracer.Start(ctx, "memaxagent.tool.execute",
 		telemetry.String("memax.session_id", e.Runtime.SessionID),
@@ -148,7 +149,7 @@ func (e Executor) runOne(ctx context.Context, use model.ToolUse) model.ToolResul
 	fail := func(err error) model.ToolResult {
 		span.RecordError(err)
 		span.Set(telemetry.Bool("memax.tool.error", true))
-		return finish(errorResult(use, err))
+		return finish(withMetadata(errorResult(use, err), beforeMetadata))
 	}
 
 	t, ok := e.Registry.Get(use.Name)
@@ -179,7 +180,6 @@ func (e Executor) runOne(ctx context.Context, use model.ToolUse) model.ToolResul
 	}); err != nil {
 		return fail(fmt.Errorf("tenant validation failed: %w", err))
 	}
-	var beforeMetadata map[string]any
 	if e.Hooks != nil {
 		result, err := e.Hooks.BeforeToolUse(ctx, hook.BeforeToolUseInput{
 			SessionID: e.Runtime.SessionID,

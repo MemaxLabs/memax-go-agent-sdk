@@ -173,7 +173,9 @@ system prompt.
   (`personal_assistant`, `research_partner`). Initial deterministic eval
   coverage now exercises durable-memory approval recovery, note-first recall,
   message-thread recall, message approval recovery, inbox triage with reply
-  recovery plus follow-up creation, schedule recall, schedule-approval
+  recovery plus follow-up creation, inbox send backend-failure surfacing after
+  approval, JMAP-backed inbox reply workflows over a real remote adapter,
+  schedule recall, schedule-approval
   recovery, and scoped delegation with parent-visible task progress. An
   initial durable `scheduling/sqlitestore` adapter now provides a
   concrete local calendar backend with metadata-first search semantics, and

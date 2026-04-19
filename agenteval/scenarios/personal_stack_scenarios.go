@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"time"
@@ -12,6 +14,8 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/agenteval"
 	"github.com/MemaxLabs/memax-go-agent-sdk/memory"
 	"github.com/MemaxLabs/memax-go-agent-sdk/messaging"
+	"github.com/MemaxLabs/memax-go-agent-sdk/messaging/jmapclient"
+	"github.com/MemaxLabs/memax-go-agent-sdk/messaging/jmapstore"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/notes"
 	"github.com/MemaxLabs/memax-go-agent-sdk/scheduling"
@@ -1281,6 +1285,412 @@ func PersonalPresetAssistantInboxTriageReplyFollowup() agenteval.Case {
 					}
 					if !strings.Contains(created.Description, "14:00 UTC status update") {
 						return fmt.Errorf("follow-up description = %q, want promised update", created.Description)
+					}
+					return nil
+				},
+			},
+		},
+	}
+}
+
+// PersonalPresetAssistantInboxSendBackendFailure returns a single-use scenario
+// where the personal_assistant preset triages an urgent inbox thread, gets
+// approval for the outbound reply, then surfaces a backend send failure to the
+// model without auto-retrying or hiding the transport error.
+func PersonalPresetAssistantInboxSendBackendFailure() agenteval.Case {
+	messageStore := messaging.NewThreadStore([]messaging.Thread{{
+		ID:      "thread-1",
+		Subject: "Urgent: Acme renewal blocker",
+		Summary: "Customer requests a same-day renewal update and explicit checkpoint time.",
+		Snippet: "Please send me a same-day update and tell me when I should expect the next checkpoint.",
+		Participants: []messaging.Participant{
+			{Name: "Jordan", Address: "jordan@acme.example", Role: "from"},
+			{Name: "Me", Address: "me@example.com", Role: "to"},
+		},
+		Tags:          []string{"INBOX", "urgent", "unread"},
+		LastMessageAt: time.Date(2026, 4, 19, 11, 0, 0, 0, time.UTC),
+		Metadata: map[string]any{
+			"mailboxes": []string{"INBOX"},
+			"unread":    true,
+		},
+		Messages: []messaging.Message{{
+			ID:        "message-1",
+			ThreadID:  "thread-1",
+			Subject:   "Urgent: Acme renewal blocker",
+			Summary:   "Customer requests a same-day renewal update and explicit checkpoint time.",
+			Body:      "Please send me a same-day update and tell me when I should expect the next checkpoint.",
+			Direction: messaging.DirectionInbound,
+			Sender:    messaging.Participant{Name: "Jordan", Address: "jordan@acme.example", Role: "from"},
+			Recipients: []messaging.Participant{
+				{Name: "Me", Address: "me@example.com", Role: "to"},
+			},
+			SentAt: time.Date(2026, 4, 19, 11, 0, 0, 0, time.UTC),
+		}},
+	}})
+	taskStore := tasktools.NewMemoryStore([]tasktools.Task{{
+		ID:     "task-1",
+		Title:  "triage the urgent renewal blocker thread",
+		Status: tasktools.StatusInProgress,
+		Notes:  "search inbox metadata first, read the thread before drafting, and surface backend delivery failures explicitly if send fails",
+	}})
+
+	var (
+		sendMu  sync.Mutex
+		sendReq messaging.SendRequest
+	)
+	failingSender := messaging.SenderFunc(func(_ context.Context, req messaging.SendRequest) (messaging.SendResult, error) {
+		sendMu.Lock()
+		sendReq = req
+		sendMu.Unlock()
+		return messaging.SendResult{}, fmt.Errorf("jmap submission temporarily unavailable")
+	})
+
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "search-1",
+				Name:  messagetools.SearchToolName,
+				Input: json.RawMessage(`{"query":"urgent renewal same-day checkpoint","mailboxes":["INBOX"],"unread":true,"limit":3}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "read-1",
+				Name:  messagetools.ReadToolName,
+				Input: json.RawMessage(`{"thread_id":"thread-1"}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "approval-1",
+				Name: approvaltools.ToolName,
+				Input: json.RawMessage(`{
+					"action":"send_message",
+					"reason":"sending an external customer reply requires approval",
+					"tool_input":{
+						"thread_id":"thread-1",
+						"subject":"Urgent: Acme renewal blocker",
+						"body":"I can send the status update by 14:00 UTC today.",
+						"recipients":[{"name":"Jordan","address":"jordan@acme.example","role":"to"}]
+					}
+				}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "send-1",
+				Name: messagetools.SendToolName,
+				Input: json.RawMessage(`{
+					"thread_id":"thread-1",
+					"subject":"Urgent: Acme renewal blocker",
+					"body":"I can send the status update by 14:00 UTC today.",
+					"recipients":[{"name":"Jordan","address":"jordan@acme.example","role":"to"}]
+				}`),
+			},
+		}},
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "Personal assistant surfaced the approved reply failure and asked the user to retry once the mail backend recovers."}},
+	)
+
+	config, configErr := personal.PresetPersonalAssistant.Config()
+	config.Messages = messagetools.Config{
+		Searcher:     messageStore,
+		Reader:       messageStore,
+		Sender:       failingSender,
+		DefaultLimit: 3,
+	}
+	config.Tasks = taskStore
+	config.Approval.Approver = approvaltools.StaticApprover{
+		Decision: approvaltools.Decision{
+			Approved: true,
+			Reason:   "approved urgent customer reply",
+		},
+	}
+	stack, stackErr := personal.New(config)
+
+	return agenteval.Case{
+		Name:    "personal_preset_personal_assistant_inbox_send_backend_failure",
+		Prompt:  "Triage urgent unread inbox threads carefully, read before drafting, and surface transport failures clearly if an approved outbound reply still fails.",
+		Options: stack.WithModel(modelClient),
+		Assertions: []agenteval.Assertion{
+			toolConstructionSucceeded(configErr, stackErr),
+			agenteval.ToolUsed(messagetools.SearchToolName),
+			agenteval.ToolUsed(messagetools.ReadToolName),
+			agenteval.ToolUsed(approvaltools.ToolName),
+			agenteval.ToolUsed(messagetools.SendToolName),
+			agenteval.EventKindEmitted(memaxagent.EventApprovalRequested),
+			agenteval.EventKindEmitted(memaxagent.EventApprovalGranted),
+			agenteval.EventKindEmitted(memaxagent.EventApprovalConsumed),
+			agenteval.FinalEquals("Personal assistant surfaced the approved reply failure and asked the user to retry once the mail backend recovers."),
+			requestCountEquals(modelClient, 5),
+			{
+				Name: "backend send failure stays model-visible after approval",
+				Check: func(result agenteval.Result) error {
+					uses := result.ToolUses()
+					want := []string{
+						messagetools.SearchToolName,
+						messagetools.ReadToolName,
+						approvaltools.ToolName,
+						messagetools.SendToolName,
+					}
+					if len(uses) != len(want) {
+						return fmt.Errorf("tool uses = %#v, want %v", uses, want)
+					}
+					for i, name := range want {
+						if uses[i].Name != name {
+							return fmt.Errorf("tool use order = %#v, want %v", uses, want)
+						}
+					}
+					toolResults := result.ToolResults()
+					if len(toolResults) != 4 {
+						return fmt.Errorf("tool results = %#v, want search read approval send", toolResults)
+					}
+					if toolResults[0].IsError || !strings.Contains(toolResults[0].Content, "Urgent: Acme renewal blocker") {
+						return fmt.Errorf("search result = %#v, want urgent inbox metadata", toolResults[0])
+					}
+					if strings.Contains(toolResults[0].Content, "Please send me a same-day update and tell me when I should expect the next checkpoint.") {
+						return fmt.Errorf("search result leaked full thread body: %#v", toolResults[0])
+					}
+					if toolResults[1].IsError || !strings.Contains(toolResults[1].Content, "Please send me a same-day update") {
+						return fmt.Errorf("read result = %#v, want full thread before draft", toolResults[1])
+					}
+					if toolResults[2].IsError || toolResults[2].Metadata[approvaltools.MetadataApprovalApproved] != true {
+						return fmt.Errorf("approval result = %#v, want granted approval", toolResults[2])
+					}
+					if !toolResults[3].IsError || !strings.Contains(toolResults[3].Content, "jmap submission temporarily unavailable") {
+						return fmt.Errorf("send result = %#v, want backend transport error", toolResults[3])
+					}
+					sendMu.Lock()
+					defer sendMu.Unlock()
+					if got := strings.TrimSpace(sendReq.Body); got != "I can send the status update by 14:00 UTC today." {
+						return fmt.Errorf("send request body = %q, want approved reply content", got)
+					}
+					thread, err := messageStore.ReadThread(context.Background(), messaging.ReadRequest{ThreadID: "thread-1"})
+					if err != nil {
+						return err
+					}
+					if len(thread.Messages) != 1 {
+						return fmt.Errorf("thread messages = %d, want 1 after failed send", len(thread.Messages))
+					}
+					return nil
+				},
+			},
+		},
+	}
+}
+
+// PersonalPresetAssistantJMAPInboxReply returns a single-use scenario where
+// the personal_assistant preset runs the inbox workflow over the real JMAP
+// adapter seam rather than the in-memory messaging store.
+func PersonalPresetAssistantJMAPInboxReply() agenteval.Case {
+	var (
+		serverMu      sync.Mutex
+		methods       []string
+		submittedMail bool
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var envelope struct {
+			MethodCalls [][]json.RawMessage `json:"methodCalls"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&envelope); err != nil {
+			panic(fmt.Sprintf("decode request: %v", err))
+		}
+		if len(envelope.MethodCalls) != 1 {
+			panic(fmt.Sprintf("method calls = %d, want 1", len(envelope.MethodCalls)))
+		}
+		var method string
+		if err := json.Unmarshal(envelope.MethodCalls[0][0], &method); err != nil {
+			panic(fmt.Sprintf("decode method: %v", err))
+		}
+		serverMu.Lock()
+		methods = append(methods, method)
+		serverMu.Unlock()
+
+		switch method {
+		case "Email/query":
+			_, _ = w.Write([]byte(`{"methodResponses":[["Email/query",{"accountId":"acc","ids":["email-1"],"total":1},"0"]]}`))
+		case "Email/get":
+			var args map[string]any
+			if err := json.Unmarshal(envelope.MethodCalls[0][1], &args); err != nil {
+				panic(fmt.Sprintf("decode Email/get args: %v", err))
+			}
+			ids, _ := args["ids"].([]any)
+			if len(ids) == 1 && ids[0] == "email-1" {
+				if fetch, _ := args["fetchTextBodyValues"].(bool); fetch {
+					_, _ = w.Write([]byte(`{"methodResponses":[["Email/get",{"list":[{"id":"email-1","threadId":"thread-1","subject":"Urgent: Acme renewal blocker","preview":"Please send me a same-day update and tell me when I should expect the next checkpoint.","receivedAt":"2026-04-19T11:00:00Z","mailboxIds":{"INBOX":true},"keywords":{"$seen":false},"from":[{"name":"Jordan","email":"jordan@acme.example"}],"to":[{"name":"Me","email":"me@example.com"}],"textBody":[{"partId":"1"}],"bodyValues":{"1":{"value":"Please send me a same-day update and tell me when I should expect the next checkpoint.","isTruncated":false}}}]},"0"]]}`))
+					return
+				}
+				_, _ = w.Write([]byte(`{"methodResponses":[["Email/get",{"list":[{"id":"email-1","threadId":"thread-1","subject":"Urgent: Acme renewal blocker","preview":"same-day update requested","receivedAt":"2026-04-19T11:00:00Z","mailboxIds":{"INBOX":true},"keywords":{"$seen":false},"from":[{"name":"Jordan","email":"jordan@acme.example"}],"to":[{"name":"Me","email":"me@example.com"}]}]},"0"]]}`))
+				return
+			}
+			if len(ids) == 1 && ids[0] == "email-2" {
+				_, _ = w.Write([]byte(`{"methodResponses":[["Email/get",{"list":[{"id":"email-2","threadId":"thread-1","subject":"Urgent: Acme renewal blocker","preview":"I can send the status update by 14:00 UTC today.","receivedAt":"2026-04-19T12:00:00Z","mailboxIds":{"sent":true},"keywords":{"$sent":true},"from":[{"name":"Memax","email":"me@example.com"}],"to":[{"name":"Jordan","email":"jordan@acme.example"}],"textBody":[{"partId":"1"}],"bodyValues":{"1":{"value":"I can send the status update by 14:00 UTC today.","isTruncated":false}}}]},"0"]]}`))
+				return
+			}
+			if len(ids) == 2 {
+				_, _ = w.Write([]byte(`{"methodResponses":[["Email/get",{"list":[{"id":"email-1","threadId":"thread-1","subject":"Urgent: Acme renewal blocker","preview":"Please send me a same-day update and tell me when I should expect the next checkpoint.","receivedAt":"2026-04-19T11:00:00Z","mailboxIds":{"INBOX":true},"keywords":{"$seen":false},"from":[{"name":"Jordan","email":"jordan@acme.example"}],"to":[{"name":"Me","email":"me@example.com"}],"textBody":[{"partId":"1"}],"bodyValues":{"1":{"value":"Please send me a same-day update and tell me when I should expect the next checkpoint.","isTruncated":false}}},{"id":"email-2","threadId":"thread-1","subject":"Urgent: Acme renewal blocker","preview":"I can send the status update by 14:00 UTC today.","receivedAt":"2026-04-19T12:00:00Z","mailboxIds":{"sent":true},"keywords":{"$sent":true},"from":[{"name":"Memax","email":"me@example.com"}],"to":[{"name":"Jordan","email":"jordan@acme.example"}],"textBody":[{"partId":"1"}],"bodyValues":{"1":{"value":"I can send the status update by 14:00 UTC today.","isTruncated":false}}}]},"0"]]}`))
+				return
+			}
+			panic(fmt.Sprintf("unexpected Email/get ids %#v", ids))
+		case "Thread/get":
+			serverMu.Lock()
+			created := submittedMail
+			serverMu.Unlock()
+			if created {
+				_, _ = w.Write([]byte(`{"methodResponses":[["Thread/get",{"list":[{"id":"thread-1","emailIds":["email-1","email-2"]}]},"0"]]}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"methodResponses":[["Thread/get",{"list":[{"id":"thread-1","emailIds":["email-1"]}]},"0"]]}`))
+		case "Email/set":
+			_, _ = w.Write([]byte(`{"methodResponses":[["Email/set",{"created":{"email":{"id":"email-2"}}},"0"]]}`))
+		case "EmailSubmission/set":
+			serverMu.Lock()
+			submittedMail = true
+			serverMu.Unlock()
+			_, _ = w.Write([]byte(`{"methodResponses":[["EmailSubmission/set",{"created":{"submission":{"id":"submission-1","emailId":"email-2"}}},"0"]]}`))
+		default:
+			panic(fmt.Sprintf("unexpected method %q", method))
+		}
+	}))
+
+	client, clientErr := jmapclient.New(server.URL, "acc")
+	messageStore, storeErr := jmapstore.New(client,
+		jmapstore.WithDefaultIdentity("identity-1"),
+		jmapstore.WithDefaultSender("Memax", "me@example.com"),
+		jmapstore.WithDraftMailbox("drafts"),
+	)
+	taskStore := tasktools.NewMemoryStore([]tasktools.Task{{
+		ID:     "task-1",
+		Title:  "triage the urgent JMAP inbox thread",
+		Status: tasktools.StatusInProgress,
+		Notes:  "search inbox metadata first, read the thread before drafting, and use the attached JMAP inbox backend for the approved reply",
+	}})
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "search-1",
+				Name:  messagetools.SearchToolName,
+				Input: json.RawMessage(`{"query":"urgent renewal same-day checkpoint","mailboxes":["INBOX"],"unread":true,"limit":3}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "read-1",
+				Name:  messagetools.ReadToolName,
+				Input: json.RawMessage(`{"thread_id":"thread-1"}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "approval-1",
+				Name: approvaltools.ToolName,
+				Input: json.RawMessage(`{
+					"action":"send_message",
+					"reason":"sending an external customer reply requires approval",
+					"tool_input":{
+						"thread_id":"thread-1",
+						"subject":"Urgent: Acme renewal blocker",
+						"body":"I can send the status update by 14:00 UTC today.",
+						"recipients":[{"name":"Jordan","address":"jordan@acme.example","role":"to"}]
+					}
+				}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "send-1",
+				Name: messagetools.SendToolName,
+				Input: json.RawMessage(`{
+					"thread_id":"thread-1",
+					"subject":"Urgent: Acme renewal blocker",
+					"body":"I can send the status update by 14:00 UTC today.",
+					"recipients":[{"name":"Jordan","address":"jordan@acme.example","role":"to"}]
+				}`),
+			},
+		}},
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "Personal assistant triaged the JMAP inbox thread from metadata and sent the approved reply through the attached inbox backend."}},
+	)
+
+	config, configErr := personal.PresetPersonalAssistant.Config()
+	config.Messages = messagetools.Config{
+		Searcher:     messageStore,
+		Reader:       messageStore,
+		Sender:       messageStore,
+		DefaultLimit: 3,
+	}
+	config.Tasks = taskStore
+	config.Approval.Approver = approvaltools.StaticApprover{
+		Decision: approvaltools.Decision{
+			Approved: true,
+			Reason:   "approved urgent customer reply",
+		},
+	}
+	stack, stackErr := personal.New(config)
+
+	return agenteval.Case{
+		Name:    "personal_preset_personal_assistant_jmap_inbox_reply",
+		Prompt:  "Triage urgent unread inbox threads carefully, read before drafting, and send the approved reply through the attached JMAP inbox backend.",
+		Options: stack.WithModel(modelClient),
+		Assertions: []agenteval.Assertion{
+			toolConstructionSucceeded(clientErr, storeErr, configErr, stackErr),
+			agenteval.ToolUsed(messagetools.SearchToolName),
+			agenteval.ToolUsed(messagetools.ReadToolName),
+			agenteval.ToolUsed(approvaltools.ToolName),
+			agenteval.ToolUsed(messagetools.SendToolName),
+			agenteval.EventKindEmitted(memaxagent.EventApprovalRequested),
+			agenteval.EventKindEmitted(memaxagent.EventApprovalGranted),
+			agenteval.EventKindEmitted(memaxagent.EventApprovalConsumed),
+			agenteval.FinalEquals("Personal assistant triaged the JMAP inbox thread from metadata and sent the approved reply through the attached inbox backend."),
+			requestCountEquals(modelClient, 5),
+			{
+				Name: "workflow stays metadata-first and drives the JMAP adapter end to end",
+				Check: func(result agenteval.Result) error {
+					toolResults := result.ToolResults()
+					if len(toolResults) != 4 {
+						return fmt.Errorf("tool results = %#v, want search read approval send", toolResults)
+					}
+					if toolResults[0].IsError || !strings.Contains(toolResults[0].Content, "Urgent: Acme renewal blocker") {
+						return fmt.Errorf("search result = %#v, want urgent inbox metadata", toolResults[0])
+					}
+					if strings.Contains(toolResults[0].Content, "Please send me a same-day update and tell me when I should expect the next checkpoint.") {
+						return fmt.Errorf("search result leaked full body: %#v", toolResults[0])
+					}
+					if toolResults[1].IsError || !strings.Contains(toolResults[1].Content, "Please send me a same-day update") {
+						return fmt.Errorf("read result = %#v, want full thread body", toolResults[1])
+					}
+					if toolResults[2].IsError || toolResults[2].Metadata[approvaltools.MetadataApprovalApproved] != true {
+						return fmt.Errorf("approval result = %#v, want granted approval", toolResults[2])
+					}
+					if toolResults[3].IsError || !strings.Contains(toolResults[3].Content, "sent message Urgent: Acme renewal blocker") {
+						return fmt.Errorf("send result = %#v, want persisted send success", toolResults[3])
+					}
+					serverMu.Lock()
+					defer serverMu.Unlock()
+					want := []string{
+						"Email/query",
+						"Email/get",
+						"Thread/get",
+						"Email/get",
+						"Email/set",
+						"EmailSubmission/set",
+						"Email/get",
+						"Thread/get",
+						"Email/get",
+					}
+					if len(methods) != len(want) {
+						return fmt.Errorf("jmap methods = %#v, want %v", methods, want)
+					}
+					for i, method := range want {
+						if methods[i] != method {
+							return fmt.Errorf("jmap methods = %#v, want %v", methods, want)
+						}
 					}
 					return nil
 				},

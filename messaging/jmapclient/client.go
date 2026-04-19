@@ -1,9 +1,8 @@
 // Package jmapclient provides a focused JMAP mail client for messaging
 // adapters.
 //
-// QueryEmails currently returns a single page bounded by QueryRequest.Limit.
-// Large inbox workflows should keep query text narrow until bounded paging
-// lands as a follow-up.
+// QueryEmails follows a bounded number of JMAP query pages, returning up
+// to QueryRequest.Limit multiplied by the configured max-page budget.
 package jmapclient
 
 import (
@@ -22,6 +21,7 @@ import (
 const (
 	defaultTimeout        = 30 * time.Second
 	defaultMaxBytes int64 = 4 * 1024 * 1024
+	defaultMaxPages       = 5
 )
 
 const (
@@ -44,6 +44,7 @@ type Client struct {
 	httpClient *http.Client
 	timeout    time.Duration
 	maxBytes   int64
+	maxPages   int
 	headers    http.Header
 	token      string
 }
@@ -170,6 +171,7 @@ func New(baseURL, accountID string, opts ...Option) (*Client, error) {
 		httpClient: http.DefaultClient,
 		timeout:    defaultTimeout,
 		maxBytes:   defaultMaxBytes,
+		maxPages:   defaultMaxPages,
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -184,6 +186,9 @@ func New(baseURL, accountID string, opts ...Option) (*Client, error) {
 	}
 	if client.maxBytes <= 0 {
 		client.maxBytes = defaultMaxBytes
+	}
+	if client.maxPages <= 0 {
+		client.maxPages = defaultMaxPages
 	}
 	return client, nil
 }
@@ -209,6 +214,13 @@ func WithMaxBytes(maxBytes int64) Option {
 	}
 }
 
+// WithMaxPages bounds how many Email/query pages QueryEmails will follow.
+func WithMaxPages(maxPages int) Option {
+	return func(c *Client) {
+		c.maxPages = maxPages
+	}
+}
+
 // WithHeaders clones and attaches extra headers to each request.
 func WithHeaders(headers http.Header) Option {
 	return func(c *Client) {
@@ -228,25 +240,46 @@ func (c *Client) QueryEmails(ctx context.Context, req QueryRequest) ([]string, e
 	if c == nil {
 		return nil, fmt.Errorf("nil jmap client")
 	}
-	args := map[string]any{
-		"accountId":       c.accountID,
-		"collapseThreads": req.CollapseThreads,
-		"sort": []map[string]any{{
-			"property":    "receivedAt",
-			"isAscending": false,
-		}},
+	pageLimit := req.Limit
+	if pageLimit <= 0 {
+		pageLimit = 1
 	}
-	if filter := buildFilter(req); filter != nil {
-		args["filter"] = filter
+	maxPages := c.maxPages
+	if maxPages <= 0 {
+		maxPages = defaultMaxPages
 	}
-	if req.Limit > 0 {
-		args["limit"] = req.Limit
+	ids := make([]string, 0, pageLimit)
+	for page := 0; page < maxPages; page++ {
+		args := map[string]any{
+			"accountId":       c.accountID,
+			"collapseThreads": req.CollapseThreads,
+			"calculateTotal":  true,
+			"sort": []map[string]any{{
+				"property":    "receivedAt",
+				"isAscending": false,
+			}},
+			"position": page * pageLimit,
+			"limit":    pageLimit,
+		}
+		if filter := buildFilter(req); filter != nil {
+			args["filter"] = filter
+		}
+		var response queryResponse
+		if err := c.call(ctx, "Email/query", args, &response); err != nil {
+			return nil, err
+		}
+		if len(response.IDs) == 0 {
+			break
+		}
+		ids = append(ids, response.IDs...)
+		if len(response.IDs) < pageLimit {
+			break
+		}
+		if response.Total > 0 && len(ids) >= response.Total {
+			break
+		}
 	}
-	var response queryResponse
-	if err := c.call(ctx, "Email/query", args, &response); err != nil {
-		return nil, err
-	}
-	return append([]string(nil), response.IDs...), nil
+	return append([]string(nil), ids...), nil
 }
 
 // GetEmails loads one or more emails by ID.
@@ -533,7 +566,8 @@ type methodError struct {
 }
 
 type queryResponse struct {
-	IDs []string `json:"ids"`
+	IDs   []string `json:"ids"`
+	Total int      `json:"total"`
 }
 
 type emailGetResponse struct {

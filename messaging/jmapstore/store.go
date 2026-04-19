@@ -137,6 +137,9 @@ func (s *Store) SearchThreads(ctx context.Context, req messaging.SearchRequest) 
 		}
 		threads = append(threads, thread)
 	}
+	if limit > 0 && len(threads) > limit {
+		threads = threads[:limit]
+	}
 	return threads, nil
 }
 
