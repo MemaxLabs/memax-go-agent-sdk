@@ -124,3 +124,53 @@ func TestSendMessageInvalidNewThreadDoesNotMutateStore(t *testing.T) {
 		t.Fatalf("result thread id = %q, want thread-1 after failed validation left no orphan IDs", result.Thread.ID)
 	}
 }
+
+func TestThreadStoreSearchFilters(t *testing.T) {
+	t.Parallel()
+
+	unread := true
+	store := NewThreadStore([]Thread{
+		{
+			ID:            "thread-1",
+			Subject:       "Urgent travel follow-up",
+			Tags:          []string{"inbox"},
+			LastMessageAt: time.Date(2026, 4, 19, 10, 0, 0, 0, time.UTC),
+			Metadata:      map[string]any{"unread": true},
+			Messages: []Message{{
+				ID:       "m-1",
+				ThreadID: "thread-1",
+				Sender:   Participant{Name: "Alex", Address: "alex@example.com"},
+			}},
+		},
+		{
+			ID:            "thread-2",
+			Subject:       "Archived note",
+			Tags:          []string{"archive"},
+			LastMessageAt: time.Date(2026, 4, 17, 10, 0, 0, 0, time.UTC),
+			Metadata:      map[string]any{"unread": false},
+			Messages: []Message{{
+				ID:       "m-2",
+				ThreadID: "thread-2",
+				Sender:   Participant{Name: "Bea", Address: "bea@example.com"},
+			}},
+		},
+	})
+
+	items, err := store.SearchThreads(context.Background(), SearchRequest{
+		Query: "travel",
+		Filter: SearchFilter{
+			Mailboxes: []string{"inbox"},
+			From:      []string{"alex@example.com"},
+			Since:     time.Date(2026, 4, 19, 0, 0, 0, 0, time.UTC),
+			Until:     time.Date(2026, 4, 20, 0, 0, 0, 0, time.UTC),
+			Unread:    &unread,
+		},
+		Limit: 5,
+	})
+	if err != nil {
+		t.Fatalf("SearchThreads() error = %v", err)
+	}
+	if len(items) != 1 || items[0].ID != "thread-1" {
+		t.Fatalf("SearchThreads() = %#v, want filtered thread-1", items)
+	}
+}

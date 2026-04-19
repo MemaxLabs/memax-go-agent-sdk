@@ -60,6 +60,16 @@ type Thread struct {
 	Metadata      map[string]any
 }
 
+// SearchFilter carries portable message-thread predicates that adapters can
+// translate to their native search backends.
+type SearchFilter struct {
+	Mailboxes []string
+	From      []string
+	Since     time.Time
+	Until     time.Time
+	Unread    *bool
+}
+
 // SearchRequest carries thread-search context and bounds.
 type SearchRequest struct {
 	SessionID       string
@@ -67,6 +77,7 @@ type SearchRequest struct {
 	Identity        identity.Identity
 	Messages        []model.Message
 	Query           string
+	Filter          SearchFilter
 	Limit           int
 }
 
@@ -181,7 +192,10 @@ func (s *ThreadStore) SearchThreads(ctx context.Context, req SearchRequest) ([]T
 	items := make([]Thread, 0, len(s.order))
 	for _, id := range s.order {
 		if item, ok := s.threads[id]; ok {
-			items = append(items, cloneThread(item))
+			cloned := cloneThread(item)
+			if req.Filter.matchesThread(cloned) {
+				items = append(items, cloned)
+			}
 		}
 	}
 	return (Selector{MaxThreads: req.Limit}).Select(items, req.Query), nil
@@ -603,4 +617,200 @@ func contextError(ctx context.Context) error {
 		return nil
 	}
 	return ctx.Err()
+}
+
+func (f SearchFilter) matchesThread(thread Thread) bool {
+	if !f.matchesMailboxes(thread) {
+		return false
+	}
+	if !f.matchesSenders(thread) {
+		return false
+	}
+	if !f.matchesWindow(thread.LastMessageAt) {
+		return false
+	}
+	if !f.matchesUnread(thread) {
+		return false
+	}
+	return true
+}
+
+func (f SearchFilter) matchesMailboxes(thread Thread) bool {
+	if len(f.Mailboxes) == 0 {
+		return true
+	}
+	values := mailboxValues(thread)
+	if len(values) == 0 {
+		return false
+	}
+	for _, wanted := range f.Mailboxes {
+		wanted = strings.TrimSpace(wanted)
+		if wanted == "" {
+			continue
+		}
+		for _, value := range values {
+			if strings.EqualFold(value, wanted) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (f SearchFilter) matchesSenders(thread Thread) bool {
+	if len(f.From) == 0 {
+		return true
+	}
+	senders := senderValues(thread)
+	if len(senders) == 0 {
+		return false
+	}
+	for _, wanted := range f.From {
+		wanted = strings.TrimSpace(wanted)
+		if wanted == "" {
+			continue
+		}
+		for _, sender := range senders {
+			if strings.EqualFold(sender, wanted) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (f SearchFilter) matchesWindow(last time.Time) bool {
+	if f.Since.IsZero() && f.Until.IsZero() {
+		return true
+	}
+	if last.IsZero() {
+		return false
+	}
+	last = last.UTC()
+	if !f.Since.IsZero() && last.Before(f.Since.UTC()) {
+		return false
+	}
+	if !f.Until.IsZero() && last.After(f.Until.UTC()) {
+		return false
+	}
+	return true
+}
+
+func (f SearchFilter) matchesUnread(thread Thread) bool {
+	if f.Unread == nil {
+		return true
+	}
+	value, ok := metadataBool(thread.Metadata, "unread")
+	if !ok {
+		return false
+	}
+	return value == *f.Unread
+}
+
+func mailboxValues(thread Thread) []string {
+	seen := make(map[string]struct{}, len(thread.Tags))
+	out := make([]string, 0, len(thread.Tags))
+	for _, tag := range thread.Tags {
+		tag = strings.TrimSpace(tag)
+		if tag == "" {
+			continue
+		}
+		key := strings.ToLower(tag)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, tag)
+	}
+	for _, value := range metadataStrings(thread.Metadata, "mailboxes") {
+		key := strings.ToLower(value)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+func senderValues(thread Thread) []string {
+	seen := make(map[string]struct{})
+	var out []string
+	for _, message := range thread.Messages {
+		appendSenderValue(&out, seen, message.Sender.Name)
+		appendSenderValue(&out, seen, message.Sender.Address)
+	}
+	for _, participant := range thread.Participants {
+		if participant.Role != "" && !strings.EqualFold(participant.Role, "from") {
+			continue
+		}
+		appendSenderValue(&out, seen, participant.Name)
+		appendSenderValue(&out, seen, participant.Address)
+	}
+	return out
+}
+
+func appendSenderValue(dst *[]string, seen map[string]struct{}, value string) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return
+	}
+	key := strings.ToLower(value)
+	if _, ok := seen[key]; ok {
+		return
+	}
+	seen[key] = struct{}{}
+	*dst = append(*dst, value)
+}
+
+func metadataStrings(metadata map[string]any, key string) []string {
+	if len(metadata) == 0 {
+		return nil
+	}
+	value, ok := metadata[key]
+	if !ok {
+		return nil
+	}
+	switch typed := value.(type) {
+	case []string:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			item = strings.TrimSpace(item)
+			if item != "" {
+				out = append(out, item)
+			}
+		}
+		return out
+	case []any:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			text, ok := item.(string)
+			if !ok {
+				continue
+			}
+			text = strings.TrimSpace(text)
+			if text != "" {
+				out = append(out, text)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func metadataBool(metadata map[string]any, key string) (bool, bool) {
+	if len(metadata) == 0 {
+		return false, false
+	}
+	value, ok := metadata[key]
+	if !ok {
+		return false, false
+	}
+	switch typed := value.(type) {
+	case bool:
+		return typed, true
+	default:
+		return false, false
+	}
 }
