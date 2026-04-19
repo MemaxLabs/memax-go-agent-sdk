@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"time"
@@ -13,6 +15,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/agenteval"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/stack/cloudmanaged"
+	"github.com/MemaxLabs/memax-go-agent-sdk/stack/cloudmanaged/remote"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tenant"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/subagents"
@@ -609,6 +612,167 @@ func CloudManagedPresetManagedWorkerExecuteQueuedRun() agenteval.Case {
 						return fmt.Errorf("final run = %#v, want run id %q", finalRun, runID)
 					}
 					if finalRun.Status != cloudmanaged.RunStatusSucceeded || finalRun.WorkerID != "worker-1" {
+						return fmt.Errorf("final run = %#v, want succeeded worker-owned record", finalRun)
+					}
+					if finalRun.HeartbeatAt.IsZero() || finalRun.CompletedAt.IsZero() {
+						return fmt.Errorf("final run = %#v, want heartbeat and completion timestamps", finalRun)
+					}
+					return nil
+				},
+			},
+		},
+	}
+}
+
+// CloudManagedPresetManagedWorkerRemoteHTTPPoll returns a managed-stack
+// scenario where a host-owned HTTP claim endpoint offers one queued run to a
+// remote worker helper, which then executes it through ExecuteRun.
+func CloudManagedPresetManagedWorkerRemoteHTTPPoll() agenteval.Case {
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "tool-1",
+				Name:  "read_file",
+				Input: json.RawMessage(`{"path":"README.md"}`),
+			},
+		}},
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "managed remote poll complete"}},
+	)
+	config, configErr := cloudmanaged.PresetManagedWorker.Config()
+	if configErr == nil {
+		config.Base.Model = modelClient
+		config.Base.Tools = tool.NewRegistry(readFileTool())
+		config.RunStore = cloudmanaged.NewMemoryRunStore()
+		config.Policies.Quota.MaxModelRequests = 4
+		config.Policies.Quota.MaxToolUses = 4
+	}
+	stack, stackErr := cloudmanaged.New(config)
+	scope := tenant.Scope{
+		ID:        "tenant-1",
+		SubjectID: "user-1",
+		Attributes: map[string]string{
+			"plan": "managed",
+		},
+	}
+
+	var (
+		runID       string
+		finalRun    cloudmanaged.RunRecord
+		server      *httptest.Server
+		claimServed bool
+		serverMu    sync.Mutex
+		mu          sync.Mutex
+		observed    []memaxagent.Event
+	)
+
+	return agenteval.Case{
+		Name:   "cloudmanaged_preset_managed_worker_remote_http_poll",
+		Prompt: "Read README.md and finish through the remote HTTP poll path.",
+		Run: func(ctx context.Context) (<-chan memaxagent.Event, error) {
+			if stackErr != nil {
+				return nil, stackErr
+			}
+			out := make(chan memaxagent.Event, 64)
+			observer := memaxagent.EventObserverFunc(func(_ context.Context, event memaxagent.Event) {
+				mu.Lock()
+				defer mu.Unlock()
+				observed = append(observed, event)
+			})
+			record, err := stack.EnqueueRun(memaxagent.WithEventObserver(ctx, observer), "Read README.md and finish through the remote HTTP poll path.", scope)
+			if err != nil {
+				close(out)
+				return nil, err
+			}
+			runID = record.ID
+			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				serverMu.Lock()
+				defer serverMu.Unlock()
+				if claimServed {
+					w.WriteHeader(http.StatusNoContent)
+					return
+				}
+				claimServed = true
+				current, err := stack.GetRun(r.Context(), runID)
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+				if err := json.NewEncoder(w).Encode(current); err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+				}
+			}))
+			pool, err := remote.NewHTTPPool(server.URL)
+			if err != nil {
+				server.Close()
+				close(out)
+				return nil, err
+			}
+			go func() {
+				defer close(out)
+				defer server.Close()
+				final, _, _ := remote.RunOnce(memaxagent.WithEventObserver(ctx, observer), stack, pool, cloudmanaged.WorkerOptions{
+					ID:                "worker-http-1",
+					HeartbeatInterval: time.Millisecond,
+				})
+				finalRun = final
+				mu.Lock()
+				defer mu.Unlock()
+				for _, event := range observed {
+					select {
+					case out <- event:
+					case <-ctx.Done():
+						return
+					}
+				}
+			}()
+			return out, nil
+		},
+		Cleanup: func() {
+			if server != nil {
+				server.Close()
+			}
+		},
+		Assertions: []agenteval.Assertion{
+			toolConstructionSucceeded(configErr, stackErr),
+			agenteval.EventKindEmitted(memaxagent.EventRunStateChanged),
+			requestCountEquals(modelClient, 2),
+			{
+				Name: "remote HTTP poll path emits queued running succeeded transitions",
+				Check: func(result agenteval.Result) error {
+					var statuses []string
+					for _, event := range result.Events {
+						if event.Kind != memaxagent.EventRunStateChanged || event.Run == nil {
+							continue
+						}
+						if event.Run.RunID != runID {
+							return fmt.Errorf("run event = %#v, want run id %q", event.Run, runID)
+						}
+						statuses = append(statuses, event.Run.Status)
+					}
+					want := []string{
+						string(cloudmanaged.RunStatusQueued),
+						string(cloudmanaged.RunStatusRunning),
+						string(cloudmanaged.RunStatusSucceeded),
+					}
+					if len(statuses) != len(want) {
+						return fmt.Errorf("run statuses = %#v, want %#v", statuses, want)
+					}
+					for i := range want {
+						if statuses[i] != want[i] {
+							return fmt.Errorf("run statuses = %#v, want %#v", statuses, want)
+						}
+					}
+					return nil
+				},
+			},
+			{
+				Name: "remote HTTP poll path stores worker ownership and heartbeat",
+				Check: func(result agenteval.Result) error {
+					if finalRun.ID == "" || finalRun.ID != runID {
+						return fmt.Errorf("final run = %#v, want run id %q", finalRun, runID)
+					}
+					if finalRun.Status != cloudmanaged.RunStatusSucceeded || finalRun.WorkerID != "worker-http-1" {
 						return fmt.Errorf("final run = %#v, want succeeded worker-owned record", finalRun)
 					}
 					if finalRun.HeartbeatAt.IsZero() || finalRun.CompletedAt.IsZero() {
