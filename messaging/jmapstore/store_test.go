@@ -192,6 +192,148 @@ func TestStoreSearchThreadsPassesPortableFilter(t *testing.T) {
 	}
 }
 
+func TestStoreSendMessageSubmitsAndReturnsPersistedMessage(t *testing.T) {
+	t.Parallel()
+
+	var methods []string
+	var emailSetJSON string
+	var submissionJSON string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var envelope struct {
+			MethodCalls [][]json.RawMessage `json:"methodCalls"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&envelope); err != nil {
+			t.Fatalf("Decode(request) error = %v", err)
+		}
+		var method string
+		if err := json.Unmarshal(envelope.MethodCalls[0][0], &method); err != nil {
+			t.Fatalf("Unmarshal(method) error = %v", err)
+		}
+		methods = append(methods, method)
+		switch method {
+		case "Email/set":
+			emailSetJSON = string(envelope.MethodCalls[0][1])
+			_, _ = w.Write([]byte(`{"methodResponses":[["Email/set",{"created":{"email":{"id":"email-created"}}},"0"]]}`))
+		case "EmailSubmission/set":
+			submissionJSON = string(envelope.MethodCalls[0][1])
+			_, _ = w.Write([]byte(`{"methodResponses":[["EmailSubmission/set",{"created":{"submission":{"id":"submission-1","emailId":"email-created"}}},"0"]]}`))
+		case "Email/get":
+			_, _ = w.Write([]byte(`{"methodResponses":[["Email/get",{"list":[{"id":"email-created","threadId":"thread-9","mailboxIds":{"sent":true},"keywords":{"$sent":true},"subject":"Acme blocker update","preview":"I can send the status update by 14:00 UTC today.","receivedAt":"2026-04-19T12:00:00Z","from":[{"name":"Memax","email":"me@example.com"}],"to":[{"name":"Alex","email":"alex@example.com"}],"textBody":[{"partId":"1"}],"bodyValues":{"1":{"value":"I can send the status update by 14:00 UTC today.","isTruncated":false}}}]},"0"]]}`))
+		case "Thread/get":
+			_, _ = w.Write([]byte(`{"methodResponses":[["Thread/get",{"list":[{"id":"thread-9","emailIds":["email-created"]}]},"0"]]}`))
+		default:
+			t.Fatalf("unexpected method %q", method)
+		}
+	}))
+	defer server.Close()
+
+	client, err := jmapclient.New(server.URL, "acc")
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	store, err := New(client,
+		WithDefaultIdentity("identity-1"),
+		WithDefaultSender("Memax", "me@example.com"),
+		WithDraftMailbox("drafts"),
+	)
+	if err != nil {
+		t.Fatalf("New(store) error = %v", err)
+	}
+
+	result, err := store.SendMessage(context.Background(), messaging.SendRequest{
+		Subject: "Acme blocker update",
+		Body:    "I can send the status update by 14:00 UTC today.",
+		Recipients: []messaging.Participant{{
+			Name:    "Alex",
+			Address: "alex@example.com",
+			Role:    "to",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("SendMessage() error = %v", err)
+	}
+	if !result.CreatedThread {
+		t.Fatalf("SendMessage() CreatedThread = false, want true")
+	}
+	if result.Message.ID != "email-created" {
+		t.Fatalf("SendMessage() message id = %q, want email-created", result.Message.ID)
+	}
+	if result.Message.Direction != messaging.DirectionOutbound {
+		t.Fatalf("SendMessage() direction = %q, want outbound", result.Message.Direction)
+	}
+	if !strings.Contains(result.Message.Body, "14:00 UTC") {
+		t.Fatalf("SendMessage() body = %q, want persisted body text", result.Message.Body)
+	}
+	if result.Thread.ID != "thread-9" {
+		t.Fatalf("SendMessage() thread id = %q, want thread-9", result.Thread.ID)
+	}
+	if len(methods) != 5 {
+		t.Fatalf("methods len = %d, want 5", len(methods))
+	}
+	for _, want := range []string{
+		"Email/set",
+		"EmailSubmission/set",
+		"Email/get",
+		"Thread/get",
+	} {
+		found := false
+		for _, method := range methods {
+			if method == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("methods = %#v, want %s", methods, want)
+		}
+	}
+	for _, want := range []string{
+		`"subject":"Acme blocker update"`,
+		`"mailboxIds":{"drafts":true}`,
+		`"keywords":{"$draft":true}`,
+		`"email":"me@example.com"`,
+		`"email":"alex@example.com"`,
+	} {
+		if !strings.Contains(emailSetJSON, want) {
+			t.Fatalf("Email/set args = %s, want substring %s", emailSetJSON, want)
+		}
+	}
+	for _, want := range []string{
+		`"identityId":"identity-1"`,
+		`"emailId":"email-created"`,
+		`"keywords/$sent":true`,
+		`"mailboxIds/drafts":null`,
+	} {
+		if !strings.Contains(submissionJSON, want) {
+			t.Fatalf("EmailSubmission/set args = %s, want substring %s", submissionJSON, want)
+		}
+	}
+}
+
+func TestStoreSendMessageRequiresDefaultIdentity(t *testing.T) {
+	t.Parallel()
+
+	client, err := jmapclient.New("https://example.com/jmap", "acc")
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	store, err := New(client)
+	if err != nil {
+		t.Fatalf("New(store) error = %v", err)
+	}
+	_, err = store.SendMessage(context.Background(), messaging.SendRequest{
+		Subject: "hello",
+		Body:    "world",
+		Recipients: []messaging.Participant{{
+			Address: "alex@example.com",
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "default identity") {
+		t.Fatalf("SendMessage() error = %v, want missing identity", err)
+	}
+}
+
 func boolPtr(value bool) *bool {
 	return &value
 }

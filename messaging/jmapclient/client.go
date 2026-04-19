@@ -74,6 +74,38 @@ type EmailGetRequest struct {
 	MaxBodyValueBytes   int
 }
 
+// EmailCreateRequest scopes one Email/set create call.
+type EmailCreateRequest struct {
+	CreateID   string
+	MailboxIDs map[string]bool
+	Keywords   map[string]bool
+	Subject    string
+	From       []EmailAddress
+	To         []EmailAddress
+	CC         []EmailAddress
+	BCC        []EmailAddress
+	TextBody   string
+}
+
+// EmailCreateResult reports the created email ID.
+type EmailCreateResult struct {
+	EmailID string
+}
+
+// EmailSubmissionRequest scopes one EmailSubmission/set create call.
+type EmailSubmissionRequest struct {
+	CreateID             string
+	EmailID              string
+	IdentityID           string
+	OnSuccessUpdateEmail map[string]any
+}
+
+// EmailSubmissionResult reports the created submission and email IDs.
+type EmailSubmissionResult struct {
+	SubmissionID string
+	EmailID      string
+}
+
 // EmailAddress is one JMAP address object.
 type EmailAddress struct {
 	Name  string
@@ -277,6 +309,112 @@ func (c *Client) GetThreads(ctx context.Context, ids []string) ([]Thread, error)
 	return threads, nil
 }
 
+// CreateEmail creates one draft-or-sendable email object.
+func (c *Client) CreateEmail(ctx context.Context, req EmailCreateRequest) (EmailCreateResult, error) {
+	if c == nil {
+		return EmailCreateResult{}, fmt.Errorf("nil jmap client")
+	}
+	createID := strings.TrimSpace(req.CreateID)
+	if createID == "" {
+		createID = "email"
+	}
+	subject := strings.TrimSpace(req.Subject)
+	if subject == "" {
+		return EmailCreateResult{}, fmt.Errorf("jmap email subject is required")
+	}
+	body := strings.TrimSpace(req.TextBody)
+	if body == "" {
+		return EmailCreateResult{}, fmt.Errorf("jmap email body is required")
+	}
+	create := map[string]any{
+		"subject": subject,
+		"textBody": []map[string]any{{
+			"partId": "body",
+			"type":   "text/plain",
+		}},
+		"bodyValues": map[string]any{
+			"body": map[string]any{
+				"value": body,
+			},
+		},
+	}
+	if mailboxIDs := cloneBoolMap(req.MailboxIDs); len(mailboxIDs) > 0 {
+		create["mailboxIds"] = mailboxIDs
+	}
+	if keywords := cloneBoolMap(req.Keywords); len(keywords) > 0 {
+		create["keywords"] = keywords
+	}
+	if from := rawAddresses(req.From); len(from) > 0 {
+		create["from"] = from
+	}
+	if to := rawAddresses(req.To); len(to) > 0 {
+		create["to"] = to
+	}
+	if cc := rawAddresses(req.CC); len(cc) > 0 {
+		create["cc"] = cc
+	}
+	if bcc := rawAddresses(req.BCC); len(bcc) > 0 {
+		create["bcc"] = bcc
+	}
+	var response setResponse
+	if err := c.call(ctx, "Email/set", map[string]any{
+		"accountId": c.accountID,
+		"create": map[string]any{
+			createID: create,
+		},
+	}, &response); err != nil {
+		return EmailCreateResult{}, err
+	}
+	created, err := response.createdObject(createID)
+	if err != nil {
+		return EmailCreateResult{}, fmt.Errorf("create jmap email: %w", err)
+	}
+	return EmailCreateResult{EmailID: created.ID}, nil
+}
+
+// SubmitEmail submits one existing email through one JMAP identity.
+func (c *Client) SubmitEmail(ctx context.Context, req EmailSubmissionRequest) (EmailSubmissionResult, error) {
+	if c == nil {
+		return EmailSubmissionResult{}, fmt.Errorf("nil jmap client")
+	}
+	createID := strings.TrimSpace(req.CreateID)
+	if createID == "" {
+		createID = "submission"
+	}
+	emailID := strings.TrimSpace(req.EmailID)
+	if emailID == "" {
+		return EmailSubmissionResult{}, fmt.Errorf("jmap submission email id is required")
+	}
+	identityID := strings.TrimSpace(req.IdentityID)
+	if identityID == "" {
+		return EmailSubmissionResult{}, fmt.Errorf("jmap submission identity id is required")
+	}
+	args := map[string]any{
+		"accountId": c.accountID,
+		"create": map[string]any{
+			createID: map[string]any{
+				"emailId":    emailID,
+				"identityId": identityID,
+			},
+		},
+	}
+	if patches := cloneAnyMap(req.OnSuccessUpdateEmail); len(patches) > 0 {
+		args["onSuccessUpdateEmail"] = patches
+	}
+	var response setResponse
+	if err := c.call(ctx, "EmailSubmission/set", args, &response); err != nil {
+		return EmailSubmissionResult{}, err
+	}
+	created, err := response.createdObject(createID)
+	if err != nil {
+		return EmailSubmissionResult{}, fmt.Errorf("submit jmap email: %w", err)
+	}
+	return EmailSubmissionResult{
+		SubmissionID: created.ID,
+		EmailID:      firstNonEmpty(created.EmailID, emailID),
+	}, nil
+}
+
 func (c *Client) call(ctx context.Context, method string, args any, out any) error {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
@@ -406,6 +544,16 @@ type threadGetResponse struct {
 	List []rawThread `json:"list"`
 }
 
+type setResponse struct {
+	Created    map[string]setCreatedObject `json:"created"`
+	NotCreated map[string]methodError      `json:"notCreated"`
+}
+
+type setCreatedObject struct {
+	ID      string `json:"id"`
+	EmailID string `json:"emailId"`
+}
+
 type rawThread struct {
 	ID       string   `json:"id"`
 	EmailIDs []string `json:"emailIds"`
@@ -497,6 +645,48 @@ func addresses(items []rawEmailAddress) []EmailAddress {
 	return out
 }
 
+func rawAddresses(items []EmailAddress) []map[string]any {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		address := strings.TrimSpace(item.Email)
+		name := strings.TrimSpace(item.Name)
+		if address == "" && name == "" {
+			continue
+		}
+		entry := map[string]any{}
+		if name != "" {
+			entry["name"] = name
+		}
+		if address != "" {
+			entry["email"] = address
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
+func (r setResponse) createdObject(createID string) (setCreatedObject, error) {
+	createID = strings.TrimSpace(createID)
+	if createID == "" {
+		return setCreatedObject{}, fmt.Errorf("missing create id")
+	}
+	if item, ok := r.Created[createID]; ok {
+		item.ID = strings.TrimSpace(item.ID)
+		item.EmailID = strings.TrimSpace(item.EmailID)
+		if item.ID == "" {
+			return setCreatedObject{}, fmt.Errorf("missing created id for %s", createID)
+		}
+		return item, nil
+	}
+	if item, ok := r.NotCreated[createID]; ok {
+		return setCreatedObject{}, fmt.Errorf("%s", firstNonEmpty(strings.TrimSpace(item.Description), strings.TrimSpace(item.Type)))
+	}
+	return setCreatedObject{}, fmt.Errorf("missing created object for %s", createID)
+}
+
 func cloneHeader(header http.Header) http.Header {
 	if len(header) == 0 {
 		return nil
@@ -504,6 +694,17 @@ func cloneHeader(header http.Header) http.Header {
 	out := make(http.Header, len(header))
 	for key, values := range header {
 		out[key] = append([]string(nil), values...)
+	}
+	return out
+}
+
+func cloneAnyMap(src map[string]any) map[string]any {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(src))
+	for key, value := range src {
+		out[key] = value
 	}
 	return out
 }
