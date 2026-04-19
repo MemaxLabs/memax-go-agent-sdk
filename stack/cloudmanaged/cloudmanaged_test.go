@@ -670,6 +670,10 @@ func TestAsyncSinkPreservesOrderAndDrainsOnClose(t *testing.T) {
 	if err := sink.Close(context.Background()); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
+	stats := sink.Stats()
+	if stats.WrittenCount != 3 || stats.DroppedCount != 0 || stats.QueueDepth != 0 {
+		t.Fatalf("Stats() = %#v, want written=3 dropped=0 depth=0", stats)
+	}
 	records := inner.Records()
 	if len(records) != 3 {
 		t.Fatalf("records = %#v, want 3 drained records", records)
@@ -708,6 +712,10 @@ func TestAsyncSinkSinkErrorsAreReportedAsynchronously(t *testing.T) {
 	}
 	if err := sink.Close(context.Background()); err != nil {
 		t.Fatalf("Close() error = %v", err)
+	}
+	stats := sink.Stats()
+	if stats.WrittenCount != 1 || stats.DroppedCount != 0 || stats.QueueDepth != 0 {
+		t.Fatalf("Stats() = %#v, want written=1 dropped=0 depth=0", stats)
 	}
 	mu.Lock()
 	defer mu.Unlock()
@@ -760,9 +768,23 @@ func TestAsyncSinkDropOldestKeepsNewestQueuedRecords(t *testing.T) {
 			t.Fatalf("WriteAudit(%q) error = %v", result, err)
 		}
 	}
+	stats := sink.Stats()
+	if stats.WrittenCount != 4 {
+		t.Fatalf("Stats().WrittenCount = %d, want 4", stats.WrittenCount)
+	}
+	if stats.DroppedCount == 0 {
+		t.Fatalf("Stats().DroppedCount = %d, want > 0 during overflow", stats.DroppedCount)
+	}
+	if stats.QueueDepth == 0 {
+		t.Fatalf("Stats().QueueDepth = %d, want buffered records during overflow", stats.QueueDepth)
+	}
 	close(inner.release)
 	if err := sink.Close(context.Background()); err != nil {
 		t.Fatalf("Close() error = %v", err)
+	}
+	stats = sink.Stats()
+	if stats.QueueDepth != 0 {
+		t.Fatalf("Stats().QueueDepth after close = %d, want 0", stats.QueueDepth)
 	}
 
 	records := inner.Records()
@@ -804,9 +826,20 @@ func TestAsyncSinkBlockHonorsContextWhenFull(t *testing.T) {
 	if err := sink.WriteAudit(ctx, AuditRecord{Kind: memaxagent.EventToolResult, Result: "result-3"}); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("WriteAudit(result-3) error = %v, want deadline exceeded", err)
 	}
+	stats := sink.Stats()
+	if stats.WrittenCount != 2 || stats.DroppedCount != 0 {
+		t.Fatalf("Stats() before close = %#v, want written=2 dropped=0", stats)
+	}
+	if stats.QueueDepth == 0 {
+		t.Fatalf("Stats().QueueDepth = %d, want buffered records before release", stats.QueueDepth)
+	}
 	close(inner.release)
 	if err := sink.Close(context.Background()); err != nil {
 		t.Fatalf("Close() error = %v", err)
+	}
+	stats = sink.Stats()
+	if stats.QueueDepth != 0 {
+		t.Fatalf("Stats().QueueDepth after close = %d, want 0", stats.QueueDepth)
 	}
 }
 

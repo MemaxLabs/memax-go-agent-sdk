@@ -37,6 +37,16 @@ func (e *AsyncSinkOverflowError) Error() string {
 	return fmt.Sprintf("cloudmanaged async audit sink overflow (%s)", e.Policy)
 }
 
+// AsyncSinkStats reports current queue pressure and cumulative queue activity.
+//
+// WrittenCount counts records accepted into the async queue. It does not mean
+// the wrapped sink has already persisted all accepted records.
+type AsyncSinkStats struct {
+	WrittenCount int64
+	DroppedCount int64
+	QueueDepth   int
+}
+
 // AsyncSink asynchronously forwards audit records to an inner sink while
 // preserving record order.
 type AsyncSink struct {
@@ -44,11 +54,13 @@ type AsyncSink struct {
 	overflow     AsyncOverflowPolicy
 	errorHandler AuditErrorHandler
 
-	queue     chan asyncAuditItem
-	closed    atomic.Bool
-	closeOnce sync.Once
-	closedCh  chan struct{}
-	done      chan struct{}
+	queue        chan asyncAuditItem
+	closed       atomic.Bool
+	writtenCount atomic.Int64
+	droppedCount atomic.Int64
+	closeOnce    sync.Once
+	closedCh     chan struct{}
+	done         chan struct{}
 }
 
 type asyncAuditItem struct {
@@ -135,6 +147,18 @@ func NewAsyncSink(inner AuditSink, options ...AsyncSinkOption) (*AsyncSink, erro
 	return sink, nil
 }
 
+// Stats returns cheap, best-effort queue telemetry for the async sink.
+func (s *AsyncSink) Stats() AsyncSinkStats {
+	if s == nil {
+		return AsyncSinkStats{}
+	}
+	return AsyncSinkStats{
+		WrittenCount: s.writtenCount.Load(),
+		DroppedCount: s.droppedCount.Load(),
+		QueueDepth:   len(s.queue),
+	}
+}
+
 // WriteAudit implements AuditSink.
 func (s *AsyncSink) WriteAudit(ctx context.Context, record AuditRecord) error {
 	if s == nil {
@@ -186,6 +210,7 @@ func (s *AsyncSink) writeBlock(ctx context.Context, item asyncAuditItem) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	case s.queue <- item:
+		s.writtenCount.Add(1)
 		return nil
 	}
 }
@@ -205,6 +230,7 @@ func (s *AsyncSink) writeDropOldest(ctx context.Context, item asyncAuditItem) er
 		case <-s.closedCh:
 			return ErrAsyncSinkClosed
 		case s.queue <- item:
+			s.writtenCount.Add(1)
 			return nil
 		default:
 		}
@@ -214,6 +240,7 @@ func (s *AsyncSink) writeDropOldest(ctx context.Context, item asyncAuditItem) er
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-s.queue:
+			s.droppedCount.Add(1)
 			// Overflow notifications describe queue pressure rather than the
 			// dropped record itself, so they use a detached context instead of the
 			// caller's tracing scope.
