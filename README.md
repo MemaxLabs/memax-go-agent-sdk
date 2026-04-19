@@ -97,6 +97,8 @@ Coding-oriented adapters and toolkits:
   delivery
 - initial durable cloudmanaged run store seam plus reference in-memory managed
   background run tracking
+- runnable cloudmanaged remote-worker example over `ClaimHandler`,
+  `remote.Watch`, and a shared SQLite run store
 - initial SQLite-backed scheduling adapter for durable local calendar backends
 - skill discovery tools
 
@@ -161,7 +163,10 @@ the same tenant-validator configuration as the enqueueing side instead of
 introducing SDK-level worker delegation tokens. The managed eval suite now
 also locks in mid-run tenant revocation as a first-class failure path for
 queued workers, plus a host-owned remote HTTP poll path over the same run
-contract.
+contract. `examples/cloudmanaged_remote_stack` now shows both ends of that
+wire: the default mode runs an in-process demo, while `-mode=server` serves
+`ClaimHandler` and `-mode=worker` runs `remote.Watch` against the same SQLite
+run database.
 
 `stack/personal` now exposes named presets so hosts can start from a
 personal-intelligence workflow profile and then attach only the host-owned

@@ -165,9 +165,11 @@ system prompt.
   enqueueing side rather than a signed worker-token subsystem in the SDK, and
   an initial host-owned helper now exists through `stack/cloudmanaged/remote`
   for claim discovery plus reference HTTP polling over the same `ExecuteRun`
-  path. Next steps are richer cloudmanaged presets, additional distributed
-  quota backends, richer durable run backends, and fuller remote-execution
-  backends built on top of the same tenant seam.
+  path. A runnable `examples/cloudmanaged_remote_stack` example now demonstrates
+  the default in-process path plus split server/worker modes over a shared
+  SQLite run database. Next steps are richer cloudmanaged presets, additional
+  distributed quota backends, richer durable run backends, and fuller
+  remote-execution backends built on top of the same tenant seam.
 
 ## Phase 7: Opinionated Stacks
 
