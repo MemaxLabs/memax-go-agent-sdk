@@ -228,6 +228,7 @@ go run ./examples/personal_schedule_stack
 go run ./examples/personal_briefing_stack
 go run ./examples/personal_proactive_stack
 go run ./examples/personal_scheduled_inbox_stack
+go run ./examples/personal_jmap_scheduled_inbox_stack
 go run ./examples/ci_embedding
 go run ./examples/skills_identity
 go run ./examples/eval_scenarios
