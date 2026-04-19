@@ -148,7 +148,9 @@ can track queued/running/succeeded/failed/canceled lifecycle without inventing
 their own job wrapper around `QueryAsync`. The same
 `stack/cloudmanaged/sqlitestore` package now also implements `RunStore`, so
 embedded managed hosts can keep quota state and durable run lifecycle in one
-SQLite database.
+SQLite database. Durable runs now also emit explicit `run_state_changed`
+observer events so audit sinks and managed dashboards can follow lifecycle
+transitions without polling alone.
 
 `stack/personal` now exposes named presets so hosts can start from a
 personal-intelligence workflow profile and then attach only the host-owned

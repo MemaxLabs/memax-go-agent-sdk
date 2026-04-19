@@ -127,7 +127,10 @@ managed background runs now also sit behind a host-owned `RunStore` seam in
 `stack/cloudmanaged`: the reference `MemoryRunStore` keeps the initial
 single-process path, while `StartRun`, `GetRun`, and `CancelRun` give hosts an
 explicit queued/running/succeeded/failed/canceled lifecycle without coupling
-job state to transcript parsing or ad hoc goroutine wrappers.
+job state to transcript parsing or ad hoc goroutine wrappers. Those lifecycle
+transitions now emit explicit `run_state_changed` observer events, so the same
+audit seam can cover tenant denials, delegated child work, and managed-run
+state changes without a second notification channel.
 Each preset now has deterministic end-to-end eval coverage for its normal
 workflow and its defining recovery or delegation path, so preset behavior is
 part of the public contract rather than informal guidance. The navigable preset

@@ -1,6 +1,9 @@
 package memaxagent
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // EventObserver observes emitted agent events as they happen. Observers are
 // host-owned and non-authoritative: they can mirror events to logs, metrics,
@@ -47,6 +50,17 @@ func observeEvent(ctx context.Context, event Event) {
 	if observer := eventObserverFromContext(ctx); observer != nil {
 		observer.ObserveEvent(ctx, event)
 	}
+}
+
+// ObserveEvent sends one host-owned event through the observer attached to ctx.
+// This is useful for optional stack-level lifecycle signals that are not
+// emitted directly by Query/QueryAsync but should still flow through the same
+// audit and observability seam.
+func ObserveEvent(ctx context.Context, event Event) {
+	if event.Time.IsZero() {
+		event.Time = time.Now().UTC()
+	}
+	observeEvent(ctx, event)
 }
 
 func observeStartupError(ctx context.Context, sessionID, parentSessionID string, err error) {

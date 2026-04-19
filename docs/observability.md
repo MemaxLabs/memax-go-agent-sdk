@@ -195,6 +195,10 @@ path reports pressure inline with the caller's write path, while sink-write
 failures are reported from the background worker. Overflow notifications use a
 detached context rather than the dropped record's original tracing scope, so
 hosts that need trace correlation should instrument the wrapped sink directly.
+Durable managed runs now emit explicit `run_state_changed` observer events as
+they move through queued, running, succeeded, failed, or canceled lifecycle,
+so audit sinks and dashboards can follow transitions without polling-only
+state reconstruction.
 
 ## Regression Coverage
 

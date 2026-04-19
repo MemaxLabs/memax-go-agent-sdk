@@ -94,8 +94,12 @@ const (
 	// EventCommandResized is emitted when resize_command_terminal changes a PTY
 	// session's terminal geometry.
 	EventCommandResized EventKind = "command_resized"
-	EventError          EventKind = "error"
-	EventResult         EventKind = "result"
+	// EventRunStateChanged is emitted when a host-owned durable background run
+	// changes lifecycle state, such as queued, running, succeeded, failed, or
+	// canceled.
+	EventRunStateChanged EventKind = "run_state_changed"
+	EventError           EventKind = "error"
+	EventResult          EventKind = "result"
 )
 
 // Event is emitted by Query as the orchestration loop progresses.
@@ -120,6 +124,7 @@ type Event struct {
 	Approval     *ApprovalEvent
 	Tenant       *TenantEvent
 	Command      *CommandEvent
+	Run          *RunEvent
 	Result       string
 	Err          error
 }
@@ -246,6 +251,15 @@ type CommandEvent struct {
 	OutputChunks    int
 	DroppedChunks   int
 	DroppedBytes    int
+}
+
+// RunEvent describes one durable host-owned managed-run lifecycle transition.
+// Status is one of the stack-defined lifecycle states such as queued, running,
+// succeeded, failed, or canceled.
+type RunEvent struct {
+	RunID  string
+	Status string
+	Prompt string
 }
 
 func newEvent(kind EventKind, sessionID string, turn int) Event {

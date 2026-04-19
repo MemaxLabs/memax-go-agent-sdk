@@ -156,9 +156,10 @@ system prompt.
   managed background runs now also sit behind a host-owned `RunStore` seam
   through `stack/cloudmanaged`, with reference in-memory tracking plus explicit
   start/get/cancel helpers for queued/running/succeeded/failed/canceled
-  lifecycle. Next steps are richer cloudmanaged presets, additional
-  distributed quota backends, durable run backends, and remote-execution
-  backends built on top of the same tenant seam.
+  lifecycle, and those transitions now emit explicit lifecycle observer events.
+  Next steps are richer cloudmanaged presets, additional distributed quota
+  backends, durable run backends, and remote-execution backends built on top
+  of the same tenant seam.
 
 ## Phase 7: Opinionated Stacks
 

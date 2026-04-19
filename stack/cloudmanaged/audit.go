@@ -79,6 +79,7 @@ type AuditRecord struct {
 	Approval        *memaxagent.ApprovalEvent         `json:"approval,omitempty"`
 	Tenant          *memaxagent.TenantEvent           `json:"tenant,omitempty"`
 	Command         *memaxagent.CommandEvent          `json:"command,omitempty"`
+	Run             *memaxagent.RunEvent              `json:"run,omitempty"`
 	Result          string                            `json:"result,omitempty"`
 	Error           string                            `json:"error,omitempty"`
 }
@@ -291,6 +292,10 @@ func recordFromEvent(event memaxagent.Event) AuditRecord {
 		commandEvent.Argv = append([]string(nil), commandEvent.Argv...)
 		record.Command = &commandEvent
 	}
+	if event.Run != nil {
+		runEvent := *event.Run
+		record.Run = &runEvent
+	}
 	if event.Err != nil {
 		record.Error = event.Err.Error()
 	}
@@ -360,6 +365,10 @@ func cloneAuditRecord(record AuditRecord) AuditRecord {
 		commandEvent := *record.Command
 		commandEvent.Argv = append([]string(nil), commandEvent.Argv...)
 		clone.Command = &commandEvent
+	}
+	if record.Run != nil {
+		runEvent := *record.Run
+		clone.Run = &runEvent
 	}
 	return clone
 }

@@ -176,14 +176,18 @@ func (s *MemoryRunStore) GetRun(_ context.Context, id string) (RunRecord, error)
 
 // StartRun begins one durable background run and persists lifecycle transitions
 // into the configured RunStore. The run executes on a detached context so it is
-// not canceled when the caller's request context ends; use CancelRun for
-// explicit host-driven interruption.
+// not canceled when the caller's request context ends. Once started, the run
+// continues until it terminates naturally or CancelRun requests explicit
+// host-driven interruption.
 func (s Stack) StartRun(ctx context.Context, prompt string, scope tenant.Scope) (RunRecord, error) {
 	if err := ctx.Err(); err != nil {
 		return RunRecord{}, err
 	}
 	if s.runs == nil {
 		return RunRecord{}, ErrRunStoreRequired
+	}
+	if s.audit.Sink != nil {
+		ctx = memaxagent.WithEventObserver(ctx, s.audit)
 	}
 	record, err := s.runs.CreateRun(ctx, CreateRunRequest{
 		Prompt: prompt,
@@ -192,6 +196,7 @@ func (s Stack) StartRun(ctx context.Context, prompt string, scope tenant.Scope) 
 	if err != nil {
 		return RunRecord{}, fmt.Errorf("create managed run: %w", err)
 	}
+	observeRunState(ctx, record)
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	if s.active != nil {
 		s.active.set(record.ID, cancel)
@@ -229,10 +234,11 @@ func (s Stack) executeRun(ctx context.Context, runID, prompt string, scope tenan
 	if s.active != nil {
 		defer s.active.delete(runID)
 	}
-	_, _ = s.runs.UpdateRun(ctx, RunUpdate{
+	record, _ := s.runs.UpdateRun(ctx, RunUpdate{
 		ID:     runID,
 		Status: RunStatusRunning,
 	})
+	observeRunState(ctx, record)
 
 	var (
 		finalResult string
@@ -246,11 +252,12 @@ func (s Stack) executeRun(ctx context.Context, runID, prompt string, scope tenan
 		case memaxagent.EventSessionStarted:
 			sessionID = event.SessionID
 			parentID = event.ParentSessionID
-			_, _ = s.runs.UpdateRun(ctx, RunUpdate{
+			record, _ = s.runs.UpdateRun(ctx, RunUpdate{
 				ID:              runID,
 				SessionID:       sessionID,
 				ParentSessionID: parentID,
 			})
+			_ = record
 		case memaxagent.EventResult:
 			finalResult = event.Result
 			sawResult = true
@@ -287,7 +294,8 @@ func (s Stack) executeRun(ctx context.Context, runID, prompt string, scope tenan
 		errText := "managed run ended without terminal result"
 		update.Error = &errText
 	}
-	_, _ = s.runs.UpdateRun(ctx, update)
+	record, _ = s.runs.UpdateRun(ctx, update)
+	observeRunState(ctx, record)
 }
 
 func cloneRunRecord(record RunRecord) RunRecord {
@@ -342,4 +350,22 @@ func (a *activeRuns) delete(id string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	delete(a.cancels, id)
+}
+
+func observeRunState(ctx context.Context, record RunRecord) {
+	if record.ID == "" || record.Status == "" {
+		return
+	}
+	event := memaxagent.Event{
+		Kind:            memaxagent.EventRunStateChanged,
+		SessionID:       record.SessionID,
+		ParentSessionID: record.ParentSessionID,
+		Time:            record.UpdatedAt,
+		Run: &memaxagent.RunEvent{
+			RunID:  record.ID,
+			Status: string(record.Status),
+			Prompt: record.Prompt,
+		},
+	}
+	memaxagent.ObserveEvent(ctx, event)
 }

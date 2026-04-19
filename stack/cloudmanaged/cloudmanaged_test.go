@@ -1133,6 +1133,141 @@ func TestStackCancelRunMarksCanceled(t *testing.T) {
 	}
 }
 
+func TestStackStartRunEmitsLifecycleEvents(t *testing.T) {
+	t.Parallel()
+
+	modelClient := &quotaTestModel{
+		turns: [][]model.StreamEvent{
+			{{
+				Kind: model.StreamToolUse,
+				ToolUse: model.ToolUse{
+					ID:    "tool-1",
+					Name:  "read_file",
+					Input: json.RawMessage(`{"path":"README.md"}`),
+				},
+			}},
+			{{Kind: model.StreamText, Text: "managed run complete"}},
+		},
+	}
+	stack, err := New(Config{
+		Base: memaxagent.Options{
+			Model: modelClient,
+			Tools: tool.NewRegistry(readFileTool()),
+		},
+		RunStore: NewMemoryRunStore(),
+		Policies: Policies{
+			RequireTenantScope: true,
+			Quota: Quota{
+				MaxModelRequests: 4,
+				MaxToolUses:      4,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	var (
+		mu       sync.Mutex
+		observed []memaxagent.Event
+	)
+	ctx := memaxagent.WithEventObserver(context.Background(), memaxagent.EventObserverFunc(func(_ context.Context, event memaxagent.Event) {
+		mu.Lock()
+		defer mu.Unlock()
+		observed = append(observed, event)
+	}))
+	record, err := stack.StartRun(ctx, "Read README.md and finish.", tenant.Scope{ID: "tenant-1", SubjectID: "user-1"})
+	if err != nil {
+		t.Fatalf("StartRun() error = %v", err)
+	}
+	waitForRunStatus(t, stack, record.ID, func(r RunRecord) bool { return r.Terminal() })
+
+	mu.Lock()
+	defer mu.Unlock()
+	var statuses []string
+	for _, event := range observed {
+		if event.Kind != memaxagent.EventRunStateChanged || event.Run == nil {
+			continue
+		}
+		if event.Run.RunID != record.ID {
+			t.Fatalf("run event = %#v, want run id %q", event.Run, record.ID)
+		}
+		statuses = append(statuses, event.Run.Status)
+	}
+	want := []string{string(RunStatusQueued), string(RunStatusRunning), string(RunStatusSucceeded)}
+	if len(statuses) != len(want) {
+		t.Fatalf("run statuses = %#v, want %#v", statuses, want)
+	}
+	for i := range want {
+		if statuses[i] != want[i] {
+			t.Fatalf("run statuses = %#v, want %#v", statuses, want)
+		}
+	}
+}
+
+func TestStackStartRunAuditSinkRecordsLifecycleEvents(t *testing.T) {
+	t.Parallel()
+
+	modelClient := &quotaTestModel{
+		turns: [][]model.StreamEvent{
+			{{
+				Kind: model.StreamToolUse,
+				ToolUse: model.ToolUse{
+					ID:    "tool-1",
+					Name:  "read_file",
+					Input: json.RawMessage(`{"path":"README.md"}`),
+				},
+			}},
+			{{Kind: model.StreamText, Text: "managed run complete"}},
+		},
+	}
+	sink := &MemorySink{}
+	stack, err := New(Config{
+		Base: memaxagent.Options{
+			Model: modelClient,
+			Tools: tool.NewRegistry(readFileTool()),
+		},
+		RunStore: NewMemoryRunStore(),
+		Policies: Policies{
+			RequireTenantScope: true,
+			Quota: Quota{
+				MaxModelRequests: 4,
+				MaxToolUses:      4,
+			},
+		},
+		Audit: AuditConfig{Sink: sink},
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	record, err := stack.StartRun(context.Background(), "Read README.md and finish.", tenant.Scope{ID: "tenant-1", SubjectID: "user-1"})
+	if err != nil {
+		t.Fatalf("StartRun() error = %v", err)
+	}
+	waitForRunStatus(t, stack, record.ID, func(r RunRecord) bool { return r.Terminal() })
+
+	var statuses []string
+	for _, audit := range sink.Records() {
+		if audit.Kind != memaxagent.EventRunStateChanged || audit.Run == nil {
+			continue
+		}
+		if audit.Run.RunID != record.ID {
+			t.Fatalf("audit run event = %#v, want run id %q", audit.Run, record.ID)
+		}
+		statuses = append(statuses, audit.Run.Status)
+	}
+	want := []string{string(RunStatusQueued), string(RunStatusRunning), string(RunStatusSucceeded)}
+	if len(statuses) != len(want) {
+		t.Fatalf("audit run statuses = %#v, want %#v", statuses, want)
+	}
+	for i := range want {
+		if statuses[i] != want[i] {
+			t.Fatalf("audit run statuses = %#v, want %#v", statuses, want)
+		}
+	}
+}
+
 type quotaTestModel struct {
 	requests []model.Request
 	turns    [][]model.StreamEvent
