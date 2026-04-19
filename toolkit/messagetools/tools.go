@@ -108,7 +108,14 @@ func NewSearchTool(config Config) (tool.Tool, error) {
 				ParentSessionID: call.Runtime.ParentSessionID,
 				Identity:        call.Runtime.Identity,
 				Query:           input.Query,
-				Limit:           selectedLimit,
+				Filter: messaging.SearchFilter{
+					Mailboxes: compactStrings(input.Mailboxes),
+					From:      compactStrings(input.From),
+					Since:     input.Since,
+					Until:     input.Until,
+					Unread:    input.Unread,
+				},
+				Limit: selectedLimit,
 			})
 			if err != nil {
 				return model.ToolResult{}, err
@@ -226,8 +233,13 @@ func NewSendTool(config Config) (tool.Tool, error) {
 }
 
 type searchInput struct {
-	Query string `json:"query"`
-	Limit int    `json:"limit"`
+	Query     string    `json:"query"`
+	Mailboxes []string  `json:"mailboxes"`
+	From      []string  `json:"from"`
+	Since     time.Time `json:"since"`
+	Until     time.Time `json:"until"`
+	Unread    *bool     `json:"unread"`
+	Limit     int       `json:"limit"`
 }
 
 type readInput struct {
@@ -274,8 +286,13 @@ func searchInputSchema() map[string]any {
 		"type":                 "object",
 		"additionalProperties": false,
 		"properties": map[string]any{
-			"query": map[string]any{"type": "string", "description": "Message-thread search query."},
-			"limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 50, "description": "Maximum threads to return."},
+			"query":     map[string]any{"type": "string", "description": "Message-thread search query."},
+			"mailboxes": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Optional mailbox or folder filters."},
+			"from":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Optional sender-address filters."},
+			"since":     map[string]any{"type": "string", "format": "date-time", "description": "Optional lower time bound for the latest message timestamp."},
+			"until":     map[string]any{"type": "string", "format": "date-time", "description": "Optional upper time bound for the latest message timestamp."},
+			"unread":    map[string]any{"type": "boolean", "description": "Optional unread-state filter."},
+			"limit":     map[string]any{"type": "integer", "minimum": 1, "maximum": 50, "description": "Maximum threads to return."},
 		},
 	}
 }
@@ -490,4 +507,18 @@ func sendResultContent(result messaging.SendResult) string {
 		label = result.Thread.ID
 	}
 	return fmt.Sprintf("%s %s", action, label)
+}
+
+func compactStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			out = append(out, value)
+		}
+	}
+	return out
 }

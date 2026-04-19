@@ -104,6 +104,49 @@ func TestSendTool(t *testing.T) {
 	}
 }
 
+func TestSearchToolPassesPortableFilters(t *testing.T) {
+	t.Parallel()
+
+	var got messaging.SearchRequest
+	searchTool, err := NewSearchTool(Config{
+		Searcher: messaging.SearcherFunc(func(ctx context.Context, req messaging.SearchRequest) ([]messaging.Thread, error) {
+			got = req
+			return nil, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("NewSearchTool() error = %v", err)
+	}
+
+	unread := true
+	searchResult := runTool(t, searchTool, SearchToolName, map[string]any{
+		"query":     "travel",
+		"mailboxes": []string{"inbox"},
+		"from":      []string{"alex@example.com"},
+		"since":     "2026-04-19T00:00:00Z",
+		"until":     "2026-04-20T00:00:00Z",
+		"unread":    unread,
+	})
+	if searchResult.IsError {
+		t.Fatalf("search result = %#v", searchResult)
+	}
+	if len(got.Filter.Mailboxes) != 1 || got.Filter.Mailboxes[0] != "inbox" {
+		t.Fatalf("Filter.Mailboxes = %#v", got.Filter.Mailboxes)
+	}
+	if len(got.Filter.From) != 1 || got.Filter.From[0] != "alex@example.com" {
+		t.Fatalf("Filter.From = %#v", got.Filter.From)
+	}
+	if got.Filter.Unread == nil || *got.Filter.Unread != unread {
+		t.Fatalf("Filter.Unread = %#v", got.Filter.Unread)
+	}
+	if got.Filter.Since.Format(time.RFC3339) != "2026-04-19T00:00:00Z" {
+		t.Fatalf("Filter.Since = %s", got.Filter.Since.Format(time.RFC3339))
+	}
+	if got.Filter.Until.Format(time.RFC3339) != "2026-04-20T00:00:00Z" {
+		t.Fatalf("Filter.Until = %s", got.Filter.Until.Format(time.RFC3339))
+	}
+}
+
 func runTool(t *testing.T, toolImpl tool.Tool, name string, input map[string]any) model.ToolResult {
 	t.Helper()
 	registry := tool.NewRegistry(toolImpl)
