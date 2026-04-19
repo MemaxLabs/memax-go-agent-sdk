@@ -521,6 +521,384 @@ func PersonalPresetAssistantDailyBriefing() agenteval.Case {
 	}
 }
 
+// PersonalPresetAssistantWeekAheadPlanning returns a single-use scenario where
+// the personal_assistant preset builds a week-ahead plan by composing durable
+// memory, notes, unread inbox metadata, and calendar metadata before reading
+// only the selected source details needed to synthesize conflicts,
+// commitments, and prep work.
+func PersonalPresetAssistantWeekAheadPlanning() agenteval.Case {
+	memoryStore := memory.NewMemoryStore([]memory.Memory{{
+		ID:      "memory-1",
+		Name:    "week-planning-style",
+		Scope:   memory.ScopeUser,
+		Content: "For week-ahead plans, lead with hard conflicts, then commitments, prep blocks, and owner-visible follow-ups. Use explicit UTC times.",
+		Tags:    []string{"planning", "weekly"},
+	}})
+	noteStore := notes.NewNoteStore([]notes.Note{{
+		ID:        "note-1",
+		Title:     "Q2 launch planning brief",
+		Kind:      "brief",
+		Summary:   "Launch brief covering Acme renewal, pricing review, and partner council readiness.",
+		Content:   "The Q2 launch depends on unblocking the Acme renewal, finishing pricing review by Wednesday, and preparing the partner council demo before Thursday.",
+		Tags:      []string{"planning", "q2-launch", "acme"},
+		CreatedAt: time.Date(2026, 4, 18, 16, 0, 0, 0, time.UTC),
+		UpdatedAt: time.Date(2026, 4, 18, 16, 30, 0, 0, time.UTC),
+	}})
+	messageStore := messaging.NewThreadStore([]messaging.Thread{
+		{
+			ID:      "thread-1",
+			Subject: "Acme renewal blocker",
+			Summary: "Casey needs a Monday 14:00 UTC checkout-blocker checkpoint before the renewal meeting.",
+			Participants: []messaging.Participant{
+				{Name: "Casey", Address: "casey@acme.example", Role: "from"},
+			},
+			Tags:          []string{"INBOX", "customer", "urgent"},
+			LastMessageAt: time.Date(2026, 4, 19, 12, 0, 0, 0, time.UTC),
+			Metadata:      map[string]any{"unread": true},
+			Messages: []messaging.Message{{
+				ID:        "thread-1-msg-1",
+				ThreadID:  "thread-1",
+				Subject:   "Acme renewal blocker",
+				Summary:   "Checkout blocker needs an explicit Monday checkpoint.",
+				Body:      "Checkout is still blocked. Please send the Monday 14:00 UTC checkpoint with the mitigation owner and the next customer-visible update.",
+				Direction: messaging.DirectionInbound,
+				Sender:    messaging.Participant{Name: "Casey", Address: "casey@acme.example", Role: "from"},
+				SentAt:    time.Date(2026, 4, 19, 12, 0, 0, 0, time.UTC),
+			}},
+		},
+		{
+			ID:      "thread-2",
+			Subject: "Partner council demo slides",
+			Summary: "Priya needs final demo slides by Wednesday 17:00 UTC for Thursday's council.",
+			Participants: []messaging.Participant{
+				{Name: "Priya", Address: "priya@example.com", Role: "from"},
+			},
+			Tags:          []string{"INBOX", "launch", "prep"},
+			LastMessageAt: time.Date(2026, 4, 19, 13, 0, 0, 0, time.UTC),
+			Metadata:      map[string]any{"unread": true},
+			Messages: []messaging.Message{{
+				ID:        "thread-2-msg-1",
+				ThreadID:  "thread-2",
+				Subject:   "Partner council demo slides",
+				Summary:   "Demo slides due Wednesday for partner council.",
+				Body:      "Please have the final demo slides ready by Wednesday 17:00 UTC so I can package them for Thursday's partner council.",
+				Direction: messaging.DirectionInbound,
+				Sender:    messaging.Participant{Name: "Priya", Address: "priya@example.com", Role: "from"},
+				SentAt:    time.Date(2026, 4, 19, 13, 0, 0, 0, time.UTC),
+			}},
+		},
+	})
+	mondayAcme := time.Date(2026, 4, 20, 13, 30, 0, 0, time.UTC)
+	mondayRisk := time.Date(2026, 4, 20, 14, 0, 0, 0, time.UTC)
+	thursdayCouncil := time.Date(2026, 4, 23, 16, 0, 0, 0, time.UTC)
+	scheduleStore := scheduling.NewEventStore([]scheduling.Event{
+		{
+			ID:       "event-1",
+			Title:    "Acme renewal meeting",
+			Summary:  "Discuss checkout blocker and renewal status with Casey.",
+			Location: "Video",
+			Organizer: scheduling.Participant{
+				Name:    "Casey",
+				Address: "casey@acme.example",
+			},
+			Start:       mondayAcme,
+			End:         mondayAcme.Add(time.Hour),
+			TimeZone:    "UTC",
+			Description: "Bring checkout status, mitigation owner, and the Monday 14:00 UTC customer checkpoint plan.",
+			Tags:        []string{"customer", "renewal", "acme"},
+		},
+		{
+			ID:       "event-2",
+			Title:    "Internal launch risk review",
+			Summary:  "Review launch risks and pricing readiness before the Q2 checkpoint.",
+			Location: "Room 3B",
+			Organizer: scheduling.Participant{
+				Name:    "Taylor",
+				Address: "taylor@example.com",
+			},
+			Start:       mondayRisk,
+			End:         mondayRisk.Add(30 * time.Minute),
+			TimeZone:    "UTC",
+			Description: "This overlaps the customer checkpoint; bring the risk register and decide whether to move the internal review.",
+			Tags:        []string{"launch", "risk"},
+		},
+		{
+			ID:       "event-3",
+			Title:    "Partner council demo",
+			Summary:  "Demo Q2 launch readiness to the partner council.",
+			Location: "Boardroom",
+			Organizer: scheduling.Participant{
+				Name:    "Priya",
+				Address: "priya@example.com",
+			},
+			Start:       thursdayCouncil,
+			End:         thursdayCouncil.Add(time.Hour),
+			TimeZone:    "UTC",
+			Description: "Requires final demo slides, pricing review packet, and the Acme mitigation summary before the council.",
+			Tags:        []string{"partner", "launch", "demo"},
+		},
+	})
+	taskStore := tasktools.NewMemoryStore([]tasktools.Task{{
+		ID:     "task-1",
+		Title:  "assemble the week-ahead plan",
+		Status: tasktools.StatusInProgress,
+		Notes:  "search memory, notes, unread inbox, and calendar metadata first; read only selected details before synthesizing conflicts, commitments, prep blocks, and follow-ups",
+	}})
+
+	messageSearchInput := `{
+		"query":"Acme renewal blocker partner council demo slides",
+		"mailboxes":["INBOX"],
+		"unread":true,
+		"since":"2026-04-19T00:00:00Z",
+		"until":"2026-04-27T00:00:00Z",
+		"limit":4
+	}`
+	scheduleSearchInput := `{
+		"query":"Acme renewal launch risk review partner council demo",
+		"start":"2026-04-20T00:00:00Z",
+		"end":"2026-04-27T00:00:00Z",
+		"limit":5
+	}`
+	finalText := "Week-ahead plan: Conflict first: Monday 14:00 UTC Acme renewal overlaps the internal launch risk review, so protect the customer checkpoint and move or shorten the internal review. Commitments: send Casey the 14:00 UTC blocker checkpoint and deliver Priya's partner council demo slides by Wednesday 17:00 UTC. Prep: use the Q2 launch brief, checkout mitigation owner, pricing review packet, and Acme mitigation summary before Thursday 16:00 UTC partner council."
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "search-memory-1",
+				Name:  memorytools.SearchToolName,
+				Input: json.RawMessage(`{"query":"week ahead planning conflicts commitments prep follow-ups","limit":3}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "search-note-1",
+				Name:  notetools.SearchToolName,
+				Input: json.RawMessage(`{"query":"Q2 launch planning Acme renewal partner council demo","limit":3}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "search-message-1",
+				Name:  messagetools.SearchToolName,
+				Input: json.RawMessage(messageSearchInput),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "search-schedule-1",
+				Name:  scheduletools.SearchToolName,
+				Input: json.RawMessage(scheduleSearchInput),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "read-note-1",
+				Name:  notetools.ReadToolName,
+				Input: json.RawMessage(`{"id":"note-1"}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "read-thread-1",
+				Name:  messagetools.ReadToolName,
+				Input: json.RawMessage(`{"thread_id":"thread-1"}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "read-thread-2",
+				Name:  messagetools.ReadToolName,
+				Input: json.RawMessage(`{"thread_id":"thread-2"}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "read-event-1",
+				Name:  scheduletools.ReadToolName,
+				Input: json.RawMessage(`{"id":"event-1"}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "read-event-2",
+				Name:  scheduletools.ReadToolName,
+				Input: json.RawMessage(`{"id":"event-2"}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "read-event-3",
+				Name:  scheduletools.ReadToolName,
+				Input: json.RawMessage(`{"id":"event-3"}`),
+			},
+		}},
+		[]model.StreamEvent{{Kind: model.StreamText, Text: finalText}},
+	)
+
+	config, configErr := personal.PresetPersonalAssistant.Config()
+	config.Memory = memorytools.Config{
+		Source:       memoryStore,
+		DefaultLimit: 3,
+	}
+	config.Notes = notetools.Config{
+		Searcher:     noteStore,
+		Reader:       noteStore,
+		DefaultLimit: 3,
+	}
+	config.Messages = messagetools.Config{
+		Searcher:     messageStore,
+		Reader:       messageStore,
+		DefaultLimit: 4,
+	}
+	config.Schedule = scheduletools.Config{
+		Searcher:     scheduleStore,
+		Reader:       scheduleStore,
+		DefaultLimit: 5,
+	}
+	config.Tasks = taskStore
+	stack, stackErr := personal.New(config)
+
+	return agenteval.Case{
+		Name:    "personal_preset_personal_assistant_week_ahead_planning",
+		Prompt:  "Prepare my week-ahead plan for 2026-04-20 through 2026-04-26. Search durable context, notes, unread inbox metadata, and calendar metadata first; read only what you need to produce conflicts, commitments, prep blocks, and follow-ups.",
+		Options: stack.WithModel(modelClient),
+		Assertions: []agenteval.Assertion{
+			toolConstructionSucceeded(configErr, stackErr),
+			agenteval.NoToolErrors(),
+			agenteval.ToolUsed(memorytools.SearchToolName),
+			agenteval.ToolUsed(notetools.SearchToolName),
+			agenteval.ToolUsed(messagetools.SearchToolName),
+			agenteval.ToolUsed(scheduletools.SearchToolName),
+			agenteval.FinalEquals(finalText),
+			requestCountEquals(modelClient, 11),
+			{
+				Name: "week planning prompt carries durable style and active task",
+				Check: func(result agenteval.Result) error {
+					requests := modelClient.Requests()
+					if len(requests) != 11 {
+						return fmt.Errorf("requests = %d, want 11", len(requests))
+					}
+					initialPrompt := requests[0].SystemPrompt
+					for _, want := range []string{
+						"For week-ahead plans, lead with hard conflicts",
+						"[in_progress] task-1",
+						"assemble the week-ahead plan",
+						memorytools.SearchToolName,
+						notetools.SearchToolName,
+						messagetools.SearchToolName,
+						scheduletools.SearchToolName,
+					} {
+						if !strings.Contains(initialPrompt, want) {
+							return fmt.Errorf("initial prompt missing %q:\n%s", want, initialPrompt)
+						}
+					}
+					return nil
+				},
+			},
+			{
+				Name: "week planning uses portable inbox and calendar window filters",
+				Check: func(result agenteval.Result) error {
+					uses := result.ToolUses()
+					want := []string{
+						memorytools.SearchToolName,
+						notetools.SearchToolName,
+						messagetools.SearchToolName,
+						scheduletools.SearchToolName,
+						notetools.ReadToolName,
+						messagetools.ReadToolName,
+						messagetools.ReadToolName,
+						scheduletools.ReadToolName,
+						scheduletools.ReadToolName,
+						scheduletools.ReadToolName,
+					}
+					if len(uses) != len(want) {
+						return fmt.Errorf("tool uses = %#v, want %v", uses, want)
+					}
+					for i, name := range want {
+						if uses[i].Name != name {
+							return fmt.Errorf("tool use order = %#v, want %v", uses, want)
+						}
+					}
+					messageInput := string(uses[2].Input)
+					for _, want := range []string{`"mailboxes":["INBOX"]`, `"unread":true`, `"since":"2026-04-19T00:00:00Z"`, `"until":"2026-04-27T00:00:00Z"`} {
+						if !strings.Contains(messageInput, want) {
+							return fmt.Errorf("message search input = %s, missing %s", messageInput, want)
+						}
+					}
+					scheduleInput := string(uses[3].Input)
+					for _, want := range []string{`"start":"2026-04-20T00:00:00Z"`, `"end":"2026-04-27T00:00:00Z"`} {
+						if !strings.Contains(scheduleInput, want) {
+							return fmt.Errorf("schedule search input = %s, missing %s", scheduleInput, want)
+						}
+					}
+					return nil
+				},
+			},
+			{
+				Name: "week planning keeps note message and schedule bodies behind reads",
+				Check: func(result agenteval.Result) error {
+					toolResults := result.ToolResults()
+					if len(toolResults) != 10 {
+						return fmt.Errorf("tool results = %#v, want 10 search/read results", toolResults)
+					}
+					if strings.Contains(toolResults[1].Content, "finishing pricing review by Wednesday") {
+						return fmt.Errorf("note search leaked full note content: %q", toolResults[1].Content)
+					}
+					if strings.Contains(toolResults[2].Content, "mitigation owner and the next customer-visible update") {
+						return fmt.Errorf("message search leaked full Acme body: %q", toolResults[2].Content)
+					}
+					if strings.Contains(toolResults[2].Content, "package them for Thursday's partner council") {
+						return fmt.Errorf("message search leaked full partner body: %q", toolResults[2].Content)
+					}
+					if strings.Contains(toolResults[3].Content, "Bring checkout status") || strings.Contains(toolResults[3].Content, "Requires final demo slides") {
+						return fmt.Errorf("schedule search leaked full event description: %q", toolResults[3].Content)
+					}
+					if !strings.Contains(toolResults[4].Content, "finishing pricing review by Wednesday") {
+						return fmt.Errorf("note read content = %q, want full launch brief", toolResults[4].Content)
+					}
+					if !strings.Contains(toolResults[5].Content, "mitigation owner and the next customer-visible update") {
+						return fmt.Errorf("Acme read content = %q, want full thread body", toolResults[5].Content)
+					}
+					if !strings.Contains(toolResults[6].Content, "package them for Thursday's partner council") {
+						return fmt.Errorf("partner read content = %q, want full thread body", toolResults[6].Content)
+					}
+					if !strings.Contains(toolResults[7].Content, "Bring checkout status") || !strings.Contains(toolResults[8].Content, "overlaps the customer checkpoint") || !strings.Contains(toolResults[9].Content, "Requires final demo slides") {
+						return fmt.Errorf("event reads = %#v, want full event descriptions", toolResults[7:10])
+					}
+					return nil
+				},
+			},
+			{
+				Name: "week plan synthesizes conflict commitments and prep across sources",
+				Check: func(result agenteval.Result) error {
+					final := result.Final
+					for _, want := range []string{
+						"Monday 14:00 UTC Acme renewal overlaps",
+						"send Casey the 14:00 UTC blocker checkpoint",
+						"Wednesday 17:00 UTC",
+						"Thursday 16:00 UTC partner council",
+						"pricing review packet",
+					} {
+						if !strings.Contains(final, want) {
+							return fmt.Errorf("final = %q, missing %q", final, want)
+						}
+					}
+					return nil
+				},
+			},
+		},
+	}
+}
+
 // PersonalPresetAssistantScheduledDailyBriefing returns a single-use scenario
 // where the personal_assistant preset runs a proactive daily briefing trigger
 // once for its deterministic occurrence, persists the run, and treats a second

@@ -191,6 +191,7 @@ system prompt.
   message-thread recall, message approval recovery, inbox triage with reply
   recovery plus follow-up creation, inbox send backend-failure surfacing after
   approval, JMAP-backed inbox reply workflows over a real remote adapter,
+  week-ahead planning across memory, notes, inbox, and calendar metadata,
   schedule recall, schedule-approval
   recovery, and scoped delegation with parent-visible task progress. An
   initial durable `scheduling/sqlitestore` adapter now provides a

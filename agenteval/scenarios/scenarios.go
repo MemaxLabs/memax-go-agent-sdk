@@ -71,6 +71,7 @@ func All() []agenteval.Case {
 		PersonalPresetAssistantScheduleApprovalRecovery(),
 		PersonalPresetAssistantScheduleConflictRecovery(),
 		PersonalPresetAssistantDailyBriefing(),
+		PersonalPresetAssistantWeekAheadPlanning(),
 		PersonalPresetAssistantScheduledDailyBriefing(),
 		PersonalPresetAssistantScheduledInboxTriage(),
 		PersonalPresetAssistantScheduledInboxTriageJMAP(),
