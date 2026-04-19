@@ -685,6 +685,11 @@ func CloudManagedPresetManagedWorkerRemoteHTTPPoll() agenteval.Case {
 				return nil, err
 			}
 			runID = record.ID
+			handler, err := remote.ClaimHandler(stack.RunStore())
+			if err != nil {
+				close(out)
+				return nil, err
+			}
 			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				serverMu.Lock()
 				defer serverMu.Unlock()
@@ -693,14 +698,7 @@ func CloudManagedPresetManagedWorkerRemoteHTTPPoll() agenteval.Case {
 					return
 				}
 				claimServed = true
-				current, err := stack.GetRun(r.Context(), runID)
-				if err != nil {
-					http.Error(w, err.Error(), http.StatusInternalServerError)
-					return
-				}
-				if err := json.NewEncoder(w).Encode(current); err != nil {
-					http.Error(w, err.Error(), http.StatusInternalServerError)
-				}
+				handler.ServeHTTP(w, r)
 			}))
 			pool, err := remote.NewHTTPPool(server.URL)
 			if err != nil {
