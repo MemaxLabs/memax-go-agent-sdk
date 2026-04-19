@@ -91,6 +91,8 @@ Coding-oriented adapters and toolkits:
   host-owned audit sinks
 - initial Redis-backed cloudmanaged quota store for shared multi-replica quota
   enforcement
+- initial SQLite-backed cloudmanaged quota store for durable embedded managed
+  quota state
 - initial async cloudmanaged audit sink wrapper for buffered non-inline audit
   delivery
 - initial SQLite-backed scheduling adapter for durable local calendar backends
@@ -133,7 +135,11 @@ admission-time accounting by default rather than billing-accurate release-on-
 abort accounting, and store failures fail closed unless the host wraps the
 validator with a different policy. Audit sinks can now also be wrapped with
 `stack/cloudmanaged`'s async sink for buffered delivery when hosts do not want
-audit persistence to happen inline on the event-emission path.
+audit persistence to happen inline on the event-emission path. A durable
+SQLite-backed quota store now also exists as
+`stack/cloudmanaged/sqlitestore`, using `BEGIN IMMEDIATE` reservation
+transactions plus an explicit stale-session prune helper for hosts that prefer
+`database/sql` over Redis.
 
 `stack/personal` now exposes named presets so hosts can start from a
 personal-intelligence workflow profile and then attach only the host-owned

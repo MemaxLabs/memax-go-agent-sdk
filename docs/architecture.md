@@ -115,7 +115,10 @@ deployments, while distributed hosts can attach a shared backend without
 rewriting tenant validation or session-end cleanup logic. The first shared
 backend now exists as `stack/cloudmanaged/redistore`, which keeps the atomic
 reserve contract on the Redis server side and applies TTL-backed cleanup as a
-crash-safety net. Managed audit sinks can now also be wrapped through an async
+crash-safety net. A durable SQL path now also exists through
+`stack/cloudmanaged/sqlitestore`, which keeps the same quota contract over
+SQLite with `BEGIN IMMEDIATE` transactions plus an explicit prune helper for
+stale sessions. Managed audit sinks can now also be wrapped through an async
 cloudmanaged sink adapter, so hosts can choose bounded buffered delivery
 without changing the event-observer or sink interfaces underneath.
 Each preset now has deterministic end-to-end eval coverage for its normal

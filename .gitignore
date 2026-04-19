@@ -8,3 +8,6 @@ bin/
 dist/
 coverage.out
 *.test
+
+# Local Memax runtime state.
+.memax-sessions/

@@ -184,7 +184,10 @@ managed stack fail-closed unless a host deliberately wraps the store or
 validator with a different policy. The reference `MemoryQuotaStore` is
 single-process and keys only on session ID; multi-tenant or multi-replica
 deployments should attach a scope-aware shared store such as
-`stack/cloudmanaged/redistore`. Audit sinks can now also be wrapped with the
+`stack/cloudmanaged/redistore`. Hosts that prefer `database/sql` durability can
+also use `stack/cloudmanaged/sqlitestore`, which preserves the same reservation
+contract and exposes explicit stale-session pruning instead of Redis-style TTL
+expiry. Audit sinks can now also be wrapped with the
 async cloudmanaged sink adapter when hosts want bounded buffered persistence
 instead of synchronous inline writes on the event-emission path. Async sink
 error handlers should remain fast and non-blocking; the drop-oldest overflow

@@ -149,9 +149,10 @@ system prompt.
   the cloudmanaged audit subscriber plus memory/JSONL sinks. Initial
   host-owned quota state now sits behind a `QuotaStore` seam with the
   reference `MemoryQuotaStore`, and the first shared backend now exists through
-  `stack/cloudmanaged/redistore`. Initial async audit sink wrapping now exists
-  for buffered non-inline audit delivery; next steps are richer cloudmanaged
-  presets, additional distributed quota backends, and
+  `stack/cloudmanaged/redistore`. An initial durable SQL backend now also
+  exists through `stack/cloudmanaged/sqlitestore`. Initial async audit sink
+  wrapping now exists for buffered non-inline audit delivery; next steps are
+  richer cloudmanaged presets, additional distributed quota backends, and
   remote-execution backends built on top of the same tenant seam.
 
 ## Phase 7: Opinionated Stacks
