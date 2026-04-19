@@ -168,6 +168,7 @@ func QueryAsync(ctx context.Context, prompt string, opts Options) <-chan Event {
 				event := newEvent(EventTenantDenied, denied.Request.SessionID, 0)
 				event.ParentSessionID = denied.Request.ParentSessionID
 				event.Tenant = tenantEventFromRequest(denied.Request, denied.Error())
+				observeEvent(ctx, event)
 				select {
 				case <-ctx.Done():
 				case out <- event:
@@ -175,6 +176,7 @@ func QueryAsync(ctx context.Context, prompt string, opts Options) <-chan Event {
 			}
 			event := newEvent(EventError, "", 0)
 			event.Err = err
+			observeEvent(ctx, event)
 			select {
 			case <-ctx.Done():
 			case out <- event:

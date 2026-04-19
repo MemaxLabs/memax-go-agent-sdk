@@ -621,6 +621,164 @@ func CloudManagedPresetManagedWorkerExecuteQueuedRun() agenteval.Case {
 	}
 }
 
+// CloudManagedPresetManagedWorkerTenantRevocation returns a managed-stack
+// scenario where a queued worker starts successfully, then a later model
+// request is denied by the tenant validator and the durable run fails with the
+// denial recorded in both the event stream and RunStore.
+func CloudManagedPresetManagedWorkerTenantRevocation() agenteval.Case {
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "tool-1",
+				Name:  "read_file",
+				Input: json.RawMessage(`{"path":"README.md"}`),
+			},
+		}},
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "should not run"}},
+	)
+
+	var modelRequestChecks int
+	baseValidator := tenant.ValidatorFunc(func(_ context.Context, req tenant.Request) error {
+		if req.Boundary != tenant.BoundaryModelRequest {
+			return nil
+		}
+		modelRequestChecks++
+		if modelRequestChecks >= 2 {
+			return errors.New("tenant access revoked")
+		}
+		return nil
+	})
+
+	config, configErr := cloudmanaged.PresetManagedWorker.Config()
+	if configErr == nil {
+		config.Base.Model = modelClient
+		config.Base.Tools = tool.NewRegistry(readFileTool())
+		config.Base.TenantValidator = baseValidator
+		config.RunStore = cloudmanaged.NewMemoryRunStore()
+		config.Policies.Quota.MaxModelRequests = 4
+		config.Policies.Quota.MaxToolUses = 4
+	}
+	stack, stackErr := cloudmanaged.New(config)
+	scope := tenant.Scope{
+		ID:        "tenant-1",
+		SubjectID: "user-1",
+		Attributes: map[string]string{
+			"plan": "managed",
+		},
+	}
+
+	var (
+		runID    string
+		finalRun cloudmanaged.RunRecord
+	)
+
+	return agenteval.Case{
+		Name:       "cloudmanaged_preset_managed_worker_tenant_revocation",
+		Prompt:     "Read README.md, then continue through the queued worker path.",
+		AllowError: true,
+		Run: func(ctx context.Context) (<-chan memaxagent.Event, error) {
+			if stackErr != nil {
+				return nil, stackErr
+			}
+			out := make(chan memaxagent.Event, 64)
+			observer := memaxagent.EventObserverFunc(func(_ context.Context, event memaxagent.Event) {
+				select {
+				case out <- event:
+				case <-ctx.Done():
+				}
+			})
+			record, err := stack.EnqueueRun(memaxagent.WithEventObserver(ctx, observer), "Read README.md, then continue through the queued worker path.", scope)
+			if err != nil {
+				close(out)
+				return nil, err
+			}
+			runID = record.ID
+			go func() {
+				defer close(out)
+				finalRun, _ = stack.ExecuteRun(memaxagent.WithEventObserver(ctx, observer), runID, cloudmanaged.WorkerOptions{
+					ID:                "worker-1",
+					HeartbeatInterval: time.Millisecond,
+				})
+			}()
+			return out, nil
+		},
+		Assertions: []agenteval.Assertion{
+			toolConstructionSucceeded(configErr, stackErr),
+			agenteval.ToolUsed("read_file"),
+			agenteval.EventKindEmitted(memaxagent.EventTenantDenied),
+			agenteval.EventKindEmitted(memaxagent.EventRunStateChanged),
+			agenteval.RunErrorContains("tenant access revoked"),
+			requestCountEquals(modelClient, 1),
+			{
+				Name: "revoked worker run emits queued running failed transitions",
+				Check: func(result agenteval.Result) error {
+					var statuses []string
+					for _, event := range result.Events {
+						if event.Kind != memaxagent.EventRunStateChanged || event.Run == nil {
+							continue
+						}
+						if event.Run.RunID != runID {
+							return fmt.Errorf("run event = %#v, want run id %q", event.Run, runID)
+						}
+						statuses = append(statuses, event.Run.Status)
+					}
+					want := []string{
+						string(cloudmanaged.RunStatusQueued),
+						string(cloudmanaged.RunStatusRunning),
+						string(cloudmanaged.RunStatusFailed),
+					}
+					if len(statuses) != len(want) {
+						return fmt.Errorf("run statuses = %#v, want %#v", statuses, want)
+					}
+					for i := range want {
+						if statuses[i] != want[i] {
+							return fmt.Errorf("run statuses = %#v, want %#v", statuses, want)
+						}
+					}
+					return nil
+				},
+			},
+			{
+				Name: "tenant denial records model-request boundary during revocation",
+				Check: func(result agenteval.Result) error {
+					for _, event := range result.Events {
+						if event.Kind != memaxagent.EventTenantDenied || event.Tenant == nil {
+							continue
+						}
+						if event.Tenant.Boundary != string(tenant.BoundaryModelRequest) {
+							return fmt.Errorf("tenant denial boundary = %q, want %q", event.Tenant.Boundary, tenant.BoundaryModelRequest)
+						}
+						if event.Tenant.TenantID != "tenant-1" || event.Tenant.SubjectID != "user-1" {
+							return fmt.Errorf("tenant event = %#v, want tenant-1/user-1", event.Tenant)
+						}
+						return nil
+					}
+					return fmt.Errorf("missing tenant denial event")
+				},
+			},
+			{
+				Name: "revoked worker run store ends failed with tenant denial",
+				Check: func(result agenteval.Result) error {
+					if finalRun.ID == "" || finalRun.ID != runID {
+						return fmt.Errorf("final run = %#v, want run id %q", finalRun, runID)
+					}
+					if finalRun.Status != cloudmanaged.RunStatusFailed || finalRun.WorkerID != "worker-1" {
+						return fmt.Errorf("final run = %#v, want failed worker-owned record", finalRun)
+					}
+					if !strings.Contains(finalRun.Error, "tenant access revoked") {
+						return fmt.Errorf("final run error = %q, want tenant revocation", finalRun.Error)
+					}
+					if finalRun.CompletedAt.IsZero() {
+						return fmt.Errorf("final run = %#v, want completion timestamp", finalRun)
+					}
+					return nil
+				},
+			},
+		},
+	}
+}
+
 type scenarioBlockingAuditSink struct {
 	mu      sync.Mutex
 	release chan struct{}

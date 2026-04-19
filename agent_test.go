@@ -954,6 +954,34 @@ func TestQueryObserverSeesStartupTenantDenial(t *testing.T) {
 	}
 }
 
+func TestWithEventObserverComposesExistingObserver(t *testing.T) {
+	var first []EventKind
+	var second []EventKind
+	ctx := WithEventObserver(context.Background(), EventObserverFunc(func(_ context.Context, event Event) {
+		first = append(first, event.Kind)
+	}))
+	ctx = WithEventObserver(ctx, EventObserverFunc(func(_ context.Context, event Event) {
+		second = append(second, event.Kind)
+	}))
+
+	events, err := Query(ctx, "start", Options{
+		Model: &fakeModel{turns: [][]model.StreamEvent{
+			{{Kind: model.StreamText, Text: "done"}},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Query() error = %v", err)
+	}
+	for range events {
+	}
+	if len(first) == 0 || len(second) == 0 {
+		t.Fatalf("first = %#v second = %#v, want both observers to receive events", first, second)
+	}
+	if len(first) != len(second) {
+		t.Fatalf("first = %#v second = %#v, want matching event counts", first, second)
+	}
+}
+
 func TestQueryAppliesContextPolicyBeforeModelRequest(t *testing.T) {
 	fake := &fakeModel{turns: [][]model.StreamEvent{
 		{{Kind: model.StreamToolUse, ToolUse: model.ToolUse{ID: "tool-1", Name: "noop", Input: json.RawMessage(`{}`)}}},

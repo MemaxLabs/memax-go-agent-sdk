@@ -110,7 +110,7 @@ type RunStoreWithClaim interface {
 // stale runs as failed when hosts decide a worker has died.
 type RunStoreWithHeartbeat interface {
 	HeartbeatRun(context.Context, string, string) (RunRecord, error)
-	FailStaleRuns(context.Context, time.Time, string) (int64, error)
+	FailStaleRuns(context.Context, time.Time, string) ([]RunRecord, error)
 }
 
 // WorkerOptions configure one explicit worker-side execution attempt.
@@ -118,6 +118,8 @@ type WorkerOptions struct {
 	ID                string
 	HeartbeatInterval time.Duration
 }
+
+const staleRunFailureReason = "worker heartbeat timeout"
 
 // MemoryRunStore is the reference in-memory durable run backend.
 type MemoryRunStore struct {
@@ -266,13 +268,13 @@ func (s *MemoryRunStore) HeartbeatRun(_ context.Context, id, workerID string) (R
 }
 
 // FailStaleRuns implements RunStoreWithHeartbeat.
-func (s *MemoryRunStore) FailStaleRuns(_ context.Context, staleBefore time.Time, reason string) (int64, error) {
+func (s *MemoryRunStore) FailStaleRuns(_ context.Context, staleBefore time.Time, reason string) ([]RunRecord, error) {
 	if s == nil {
-		return 0, fmt.Errorf("memory run store is nil")
+		return nil, fmt.Errorf("memory run store is nil")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var failed int64
+	failed := make([]RunRecord, 0, len(s.runs))
 	now := time.Now().UTC()
 	for id, record := range s.runs {
 		if record.Status != RunStatusRunning || record.HeartbeatAt.IsZero() || !record.HeartbeatAt.Before(staleBefore) {
@@ -283,7 +285,7 @@ func (s *MemoryRunStore) FailStaleRuns(_ context.Context, staleBefore time.Time,
 		record.CompletedAt = now
 		record.UpdatedAt = now
 		s.runs[id] = record
-		failed++
+		failed = append(failed, cloneRunRecord(record))
 	}
 	return failed, nil
 }
@@ -316,9 +318,6 @@ func (s Stack) EnqueueRun(ctx context.Context, prompt string, scope tenant.Scope
 // continues until it terminates naturally or CancelRun requests explicit
 // host-driven interruption.
 func (s Stack) StartRun(ctx context.Context, prompt string, scope tenant.Scope) (RunRecord, error) {
-	if s.audit.Sink != nil {
-		ctx = memaxagent.WithEventObserver(ctx, s.audit)
-	}
 	record, err := s.EnqueueRun(ctx, prompt, scope)
 	if err != nil {
 		return RunRecord{}, err
@@ -372,6 +371,9 @@ func (s Stack) ExecuteRun(ctx context.Context, runID string, options WorkerOptio
 	if s.runs == nil {
 		return RunRecord{}, ErrRunStoreRequired
 	}
+	if s.audit.Sink != nil {
+		ctx = memaxagent.WithEventObserver(ctx, s.audit)
+	}
 	claiming, ok := s.runs.(RunStoreWithClaim)
 	if !ok {
 		return RunRecord{}, ErrRunStoreClaimRequired
@@ -400,11 +402,47 @@ func (s Stack) FailStaleRuns(ctx context.Context, staleBefore time.Time, reason 
 	if !ok {
 		return 0, ErrRunStoreHeartbeatUnsupported
 	}
+	if s.audit.Sink != nil {
+		ctx = memaxagent.WithEventObserver(ctx, s.audit)
+	}
 	failed, err := heartbeats.FailStaleRuns(ctx, staleBefore, reason)
 	if err != nil {
 		return 0, fmt.Errorf("fail stale managed runs: %w", err)
 	}
-	return failed, nil
+	for _, record := range failed {
+		observeRunState(ctx, record)
+	}
+	return int64(len(failed)), nil
+}
+
+// WatchStaleRuns continuously fails worker-owned runs whose heartbeats age
+// past staleThreshold. Cancel ctx to stop the monitoring loop.
+func (s Stack) WatchStaleRuns(ctx context.Context, interval, staleThreshold time.Duration) error {
+	if interval <= 0 {
+		return fmt.Errorf("stale run watch interval must be positive")
+	}
+	if staleThreshold <= 0 {
+		return fmt.Errorf("stale run threshold must be positive")
+	}
+	check := func() error {
+		_, err := s.FailStaleRuns(ctx, time.Now().UTC().Add(-staleThreshold), staleRunFailureReason)
+		return err
+	}
+	if err := check(); err != nil {
+		return err
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			if err := check(); err != nil {
+				return err
+			}
+		}
+	}
 }
 
 func (s Stack) executeRun(ctx context.Context, record RunRecord) (RunRecord, error) {
@@ -429,6 +467,15 @@ func (s Stack) executeRun(ctx context.Context, record RunRecord) (RunRecord, err
 			sawResult = true
 		case memaxagent.EventError:
 			runErr = event.Err
+		}
+	}
+	current, err := s.runs.GetRun(context.Background(), record.ID)
+	if err == nil && current.Terminal() {
+		switch current.Status {
+		case RunStatusSucceeded, RunStatusCanceled:
+			return current, nil
+		case RunStatusFailed:
+			return current, errors.New(current.Error)
 		}
 	}
 

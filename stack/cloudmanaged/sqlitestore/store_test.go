@@ -225,8 +225,11 @@ func TestStoreClaimHeartbeatAndFailStaleRuns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FailStaleRuns() error = %v", err)
 	}
-	if failed != 1 {
-		t.Fatalf("FailStaleRuns() = %d, want 1", failed)
+	if len(failed) != 1 {
+		t.Fatalf("FailStaleRuns() = %#v, want one failed record", failed)
+	}
+	if failed[0].ID != record.ID || failed[0].Status != cloudmanaged.RunStatusFailed {
+		t.Fatalf("FailStaleRuns() = %#v, want failed record for %q", failed, record.ID)
 	}
 	record, err = store.GetRun(context.Background(), record.ID)
 	if err != nil {

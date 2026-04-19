@@ -247,26 +247,58 @@ func (s *Store) HeartbeatRun(ctx context.Context, id, workerID string) (cloudman
 }
 
 // FailStaleRuns implements cloudmanaged.RunStoreWithHeartbeat.
-func (s *Store) FailStaleRuns(ctx context.Context, staleBefore time.Time, reason string) (int64, error) {
+func (s *Store) FailStaleRuns(ctx context.Context, staleBefore time.Time, reason string) ([]cloudmanaged.RunRecord, error) {
 	if err := contextError(ctx); err != nil {
-		return 0, err
+		return nil, err
 	}
 	if s == nil {
-		return 0, fmt.Errorf("sqlite run store is nil")
+		return nil, fmt.Errorf("sqlite run store is nil")
 	}
-	result, err := s.db.ExecContext(ctx, `
-		UPDATE memax_cloudmanaged_runs
-		SET status = ?, error = ?, completed_at_unix_ms = ?, updated_at_unix_ms = ?
-		WHERE status = ? AND heartbeat_at_unix_ms IS NOT NULL AND heartbeat_at_unix_ms < ?
-	`, string(cloudmanaged.RunStatusFailed), reason, unixMillis(time.Now().UTC()), unixMillis(time.Now().UTC()), string(cloudmanaged.RunStatusRunning), unixMillis(staleBefore.UTC()))
+	failed := []cloudmanaged.RunRecord{}
+	err := s.withImmediateTx(ctx, func(conn *sql.Conn) error {
+		rows, err := conn.QueryContext(ctx, `
+			SELECT id
+			FROM memax_cloudmanaged_runs
+			WHERE status = ? AND heartbeat_at_unix_ms IS NOT NULL AND heartbeat_at_unix_ms < ?
+			ORDER BY created_at_unix_ms ASC
+		`, string(cloudmanaged.RunStatusRunning), unixMillis(staleBefore.UTC()))
+		if err != nil {
+			return fmt.Errorf("query stale sqlite managed runs: %w", err)
+		}
+		defer rows.Close()
+
+		var ids []string
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				return fmt.Errorf("scan stale sqlite managed run id: %w", err)
+			}
+			ids = append(ids, id)
+		}
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("iterate stale sqlite managed runs: %w", err)
+		}
+		now := time.Now().UTC()
+		for _, id := range ids {
+			record, err := s.getRunConn(ctx, conn, id)
+			if err != nil {
+				return err
+			}
+			record.Status = cloudmanaged.RunStatusFailed
+			record.Error = reason
+			record.CompletedAt = now
+			record.UpdatedAt = now
+			if err := s.updateRunConn(ctx, conn, record); err != nil {
+				return err
+			}
+			failed = append(failed, record)
+		}
+		return nil
+	})
 	if err != nil {
-		return 0, fmt.Errorf("fail stale sqlite managed runs: %w", err)
+		return nil, err
 	}
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("fail stale sqlite managed runs rows affected: %w", err)
-	}
-	return rows, nil
+	return failed, nil
 }
 
 // EnsureSession implements cloudmanaged.QuotaStore.

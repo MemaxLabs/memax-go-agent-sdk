@@ -1010,8 +1010,11 @@ func TestMemoryRunStoreClaimHeartbeatAndFailStaleRuns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FailStaleRuns() error = %v", err)
 	}
-	if failed != 1 {
-		t.Fatalf("FailStaleRuns() = %d, want 1", failed)
+	if len(failed) != 1 {
+		t.Fatalf("FailStaleRuns() = %#v, want one failed record", failed)
+	}
+	if failed[0].ID != record.ID || failed[0].Status != RunStatusFailed {
+		t.Fatalf("FailStaleRuns() = %#v, want failed record for %q", failed, record.ID)
 	}
 	record, err = store.GetRun(context.Background(), record.ID)
 	if err != nil {
@@ -1020,6 +1023,69 @@ func TestMemoryRunStoreClaimHeartbeatAndFailStaleRuns(t *testing.T) {
 	if record.Status != RunStatusFailed || record.Error != "worker heartbeat expired" || record.CompletedAt.IsZero() {
 		t.Fatalf("GetRun() = %#v, want failed stale record", record)
 	}
+}
+
+func TestStackWatchStaleRunsFailsExpiredRunAndEmitsLifecycle(t *testing.T) {
+	t.Parallel()
+
+	runStore := NewMemoryRunStore()
+	stack, err := New(Config{RunStore: runStore})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	record, err := runStore.CreateRun(context.Background(), CreateRunRequest{
+		Prompt: "Read README.md",
+		Tenant: tenant.Scope{ID: "tenant-1", SubjectID: "user-1"},
+	})
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	record, err = runStore.ClaimRun(context.Background(), record.ID, "worker-1")
+	if err != nil {
+		t.Fatalf("ClaimRun() error = %v", err)
+	}
+	staleAt := time.Now().UTC().Add(-time.Minute)
+	if _, err := runStore.UpdateRun(context.Background(), RunUpdate{
+		ID:          record.ID,
+		HeartbeatAt: &staleAt,
+	}); err != nil {
+		t.Fatalf("UpdateRun() error = %v", err)
+	}
+
+	var (
+		mu     sync.Mutex
+		events []memaxagent.Event
+	)
+	observer := memaxagent.EventObserverFunc(func(_ context.Context, event memaxagent.Event) {
+		mu.Lock()
+		defer mu.Unlock()
+		events = append(events, event)
+	})
+	watchCtx, cancel := context.WithCancel(memaxagent.WithEventObserver(context.Background(), observer))
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- stack.WatchStaleRuns(watchCtx, time.Millisecond, 10*time.Millisecond)
+	}()
+
+	final := waitForRunStatus(t, stack, record.ID, func(r RunRecord) bool { return r.Terminal() })
+	cancel()
+	if err := <-errCh; !errors.Is(err, context.Canceled) {
+		t.Fatalf("WatchStaleRuns() error = %v, want context.Canceled", err)
+	}
+	if final.Status != RunStatusFailed || final.Error != staleRunFailureReason {
+		t.Fatalf("final run = %#v, want failed stale timeout", final)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	for _, event := range events {
+		if event.Kind == memaxagent.EventRunStateChanged && event.Run != nil && event.Run.RunID == record.ID && event.Run.Status == string(RunStatusFailed) {
+			return
+		}
+	}
+	t.Fatalf("events = %#v, want failed run lifecycle event", events)
 }
 
 func TestStackStartRunPersistsSucceededLifecycle(t *testing.T) {
@@ -1236,6 +1302,80 @@ func TestStackEnqueueAndExecuteRun(t *testing.T) {
 	}
 	if _, err := stack.ExecuteRun(context.Background(), record.ID, WorkerOptions{ID: "worker-2"}); !errors.Is(err, ErrRunNotQueued) {
 		t.Fatalf("ExecuteRun(second worker) error = %v, want ErrRunNotQueued", err)
+	}
+}
+
+func TestStackExecuteRunPreservesExternalStaleFailure(t *testing.T) {
+	t.Parallel()
+
+	modelClient := &blockingRunModel{
+		release: make(chan struct{}),
+		started: make(chan struct{}, 1),
+	}
+	runStore := NewMemoryRunStore()
+	stack, err := New(Config{
+		Base: memaxagent.Options{
+			Model: modelClient,
+		},
+		RunStore: runStore,
+		Policies: Policies{
+			RequireTenantScope: true,
+			Quota: Quota{
+				MaxModelRequests: 4,
+				MaxToolUses:      4,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	record, err := stack.EnqueueRun(context.Background(), "Block until the worker goes stale.", tenant.Scope{ID: "tenant-1", SubjectID: "user-1"})
+	if err != nil {
+		t.Fatalf("EnqueueRun() error = %v", err)
+	}
+
+	runCtx, runCancel := context.WithCancel(context.Background())
+	defer runCancel()
+	runDone := make(chan error, 1)
+	go func() {
+		_, err := stack.ExecuteRun(runCtx, record.ID, WorkerOptions{ID: "worker-1"})
+		runDone <- err
+	}()
+
+	waitForRunStatus(t, stack, record.ID, func(r RunRecord) bool { return r.Status == RunStatusRunning && r.SessionID != "" })
+	select {
+	case <-modelClient.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("blocking run did not start model stream")
+	}
+
+	staleAt := time.Now().UTC().Add(-time.Minute)
+	if _, err := runStore.UpdateRun(context.Background(), RunUpdate{
+		ID:          record.ID,
+		HeartbeatAt: &staleAt,
+	}); err != nil {
+		t.Fatalf("UpdateRun() error = %v", err)
+	}
+
+	watchCtx, watchCancel := context.WithCancel(context.Background())
+	defer watchCancel()
+	watchDone := make(chan error, 1)
+	go func() {
+		watchDone <- stack.WatchStaleRuns(watchCtx, time.Millisecond, 10*time.Millisecond)
+	}()
+
+	final := waitForRunStatus(t, stack, record.ID, func(r RunRecord) bool { return r.Status == RunStatusFailed })
+	runCancel()
+	if err := <-runDone; err == nil || !strings.Contains(err.Error(), staleRunFailureReason) {
+		t.Fatalf("ExecuteRun() error = %v, want stale failure", err)
+	}
+	watchCancel()
+	if err := <-watchDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("WatchStaleRuns() error = %v, want context.Canceled", err)
+	}
+	if final.Error != staleRunFailureReason {
+		t.Fatalf("final run = %#v, want stale timeout reason", final)
 	}
 }
 

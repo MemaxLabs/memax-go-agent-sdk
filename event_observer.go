@@ -27,6 +27,18 @@ func (f EventObserverFunc) ObserveEvent(ctx context.Context, event Event) {
 
 type eventObserverContextKey struct{}
 
+type compositeEventObserver struct {
+	observers []EventObserver
+}
+
+func (c compositeEventObserver) ObserveEvent(ctx context.Context, event Event) {
+	for _, observer := range c.observers {
+		if observer != nil {
+			observer.ObserveEvent(ctx, event)
+		}
+	}
+}
+
 // WithEventObserver returns a child context that observes emitted agent events
 // through observer. Nil observers leave ctx unchanged. Observation is scoped to
 // the context value: code that creates a fresh context must reattach the
@@ -34,6 +46,9 @@ type eventObserverContextKey struct{}
 func WithEventObserver(ctx context.Context, observer EventObserver) context.Context {
 	if observer == nil {
 		return ctx
+	}
+	if existing := eventObserverFromContext(ctx); existing != nil {
+		observer = compositeEventObserver{observers: []EventObserver{existing, observer}}
 	}
 	return context.WithValue(ctx, eventObserverContextKey{}, observer)
 }

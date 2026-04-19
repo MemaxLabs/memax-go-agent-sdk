@@ -152,8 +152,11 @@ SQLite database. Durable runs now also emit explicit `run_state_changed`
 observer events so audit sinks and managed dashboards can follow lifecycle
 transitions without polling alone. The managed stack now also exposes an
 explicit queued worker path through `EnqueueRun`, `ExecuteRun`, and
-`FailStaleRuns`, so hosts can build worker fleets on top of the same durable
-run seam instead of inventing a second job abstraction.
+`FailStaleRuns`, plus a `WatchStaleRuns` monitor loop for heartbeat timeout
+failure detection, so hosts can build worker fleets on top of the same durable
+run seam instead of inventing a second job abstraction. The managed eval suite
+now also locks in mid-run tenant revocation as a first-class failure path for
+queued workers.
 
 `stack/personal` now exposes named presets so hosts can start from a
 personal-intelligence workflow profile and then attach only the host-owned
