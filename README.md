@@ -189,7 +189,8 @@ thread-level metadata only, and full message bodies appear only after an
 explicit thread read. The personal stack now also exposes host-owned proactive
 scheduled runs through `ScheduledRunStore`, `PeriodicTrigger`,
 `StartScheduledRun`, and `WatchScheduledTriggers`, with eval-backed
-idempotency for one deterministic daily-brief occurrence.
+idempotency for one deterministic daily-brief occurrence plus an embedded
+SQLite backend in `stack/personal/sqlitestore` for durable trigger state.
 
 ## Try It
 

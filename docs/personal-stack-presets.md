@@ -110,3 +110,6 @@ Common sources of confusion:
   has to attach a `subagents.Config`
 - progressive skill disclosure remains harmless when no skill source is
   attached; the preset only defines the default posture when one exists
+- proactive workflows can persist trigger state through
+  `stack/personal/sqlitestore` when hosts need scheduled runs to survive
+  process restarts instead of using the in-memory reference store
