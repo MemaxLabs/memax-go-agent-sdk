@@ -518,6 +518,103 @@ func PersonalPresetAssistantDailyBriefing() agenteval.Case {
 	}
 }
 
+// PersonalPresetAssistantScheduledDailyBriefing returns a single-use scenario
+// where the personal_assistant preset runs a proactive daily briefing trigger
+// once for its deterministic occurrence, persists the run, and treats a second
+// fire for the same occurrence as a no-op.
+func PersonalPresetAssistantScheduledDailyBriefing() agenteval.Case {
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "Morning briefing ready for 2026-04-19."}},
+	)
+
+	config, configErr := personal.PresetPersonalAssistant.Config()
+	if configErr == nil {
+		config.Base.Model = modelClient
+	}
+	stack, stackErr := personal.New(config)
+	store := personal.NewMemoryScheduledRunStore()
+	now := time.Date(2026, 4, 19, 7, 1, 0, 0, time.UTC)
+	trigger := personal.PeriodicTrigger{
+		Name:   "daily-brief",
+		Prompt: "Prepare the morning briefing for 2026-04-19.",
+		Every:  24 * time.Hour,
+		Anchor: time.Date(2026, 4, 19, 7, 0, 0, 0, time.UTC),
+	}
+
+	var (
+		finalRun       personal.ScheduledRunRecord
+		duplicateRun   personal.ScheduledRunRecord
+		duplicateStart bool
+	)
+
+	return agenteval.Case{
+		Name:   "personal_preset_personal_assistant_scheduled_daily_briefing",
+		Prompt: "Run the daily briefing trigger proactively for the current occurrence.",
+		Run: func(ctx context.Context) (<-chan memaxagent.Event, error) {
+			if stackErr != nil {
+				return nil, stackErr
+			}
+			out := make(chan memaxagent.Event, 32)
+			observer := memaxagent.EventObserverFunc(func(_ context.Context, event memaxagent.Event) {
+				select {
+				case out <- event:
+				case <-ctx.Done():
+				}
+			})
+			watchCtx, cancel := context.WithCancel(memaxagent.WithEventObserver(ctx, observer))
+			go func() {
+				defer close(out)
+				watchDone := make(chan error, 1)
+				go func() {
+					watchDone <- stack.WatchScheduledTriggers(watchCtx, store, personal.TriggerWatcherOptions{
+						Interval: time.Millisecond,
+						Now: func() time.Time {
+							return now
+						},
+					}, trigger)
+				}()
+				finalRun = waitForScheduledRun(store, "daily-brief:2026-04-19T07:00:00Z")
+				intent, due := trigger.IntentAt(now)
+				if !due {
+					cancel()
+					<-watchDone
+					return
+				}
+				duplicateRun, duplicateStart, _ = stack.StartScheduledRun(memaxagent.WithEventObserver(ctx, observer), store, intent)
+				cancel()
+				<-watchDone
+			}()
+			return out, nil
+		},
+		Assertions: []agenteval.Assertion{
+			toolConstructionSucceeded(configErr, stackErr),
+			agenteval.FinalEquals("Morning briefing ready for 2026-04-19."),
+			requestCountEquals(modelClient, 1),
+			{
+				Name: "scheduled run persists deterministic occurrence and deduplicates reruns",
+				Check: func(result agenteval.Result) error {
+					if finalRun.ID != "daily-brief:2026-04-19T07:00:00Z" {
+						return fmt.Errorf("final run id = %q, want deterministic occurrence id", finalRun.ID)
+					}
+					if finalRun.Status != personal.ScheduledRunSucceeded || finalRun.Result != "Morning briefing ready for 2026-04-19." {
+						return fmt.Errorf("final run = %#v, want succeeded proactive briefing", finalRun)
+					}
+					if finalRun.SessionID == "" || finalRun.CompletedAt.IsZero() {
+						return fmt.Errorf("final run = %#v, want session and completion time", finalRun)
+					}
+					if duplicateStart {
+						return fmt.Errorf("duplicate start = true, want no-op for same occurrence")
+					}
+					if duplicateRun.ID != finalRun.ID {
+						return fmt.Errorf("duplicate run = %#v, want existing occurrence record", duplicateRun)
+					}
+					return nil
+				},
+			},
+		},
+	}
+}
+
 // PersonalPresetAssistantNoteRecall returns a single-use scenario where the
 // personal_assistant preset searches note metadata, reads one seeded note, uses
 // the recalled content to save a matching reusable note, and confirms the new
@@ -2482,4 +2579,17 @@ func PersonalPresetResearchPartner() agenteval.Case {
 			},
 		},
 	}
+}
+
+func waitForScheduledRun(store personal.ScheduledRunStore, id string) personal.ScheduledRunRecord {
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		record, err := store.GetScheduledRun(context.Background(), id)
+		if err == nil && record.Terminal() {
+			return record
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	record, _ := store.GetScheduledRun(context.Background(), id)
+	return record
 }

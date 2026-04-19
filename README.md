@@ -179,14 +179,17 @@ preset contract, default policy posture, and authoritative eval scenario names.
 
 | Preset | Intended workflow | Eval-backed coverage |
 | --- | --- | --- |
-| `personal_assistant` | careful personal assistance with durable recall plus approval-gated memory, note, message, and schedule writes | `personal_preset_personal_assistant`, `personal_preset_personal_assistant_memory_approval_recovery`, `personal_preset_personal_assistant_note_recall`, `personal_preset_personal_assistant_message_recall`, `personal_preset_personal_assistant_message_approval_recovery`, `personal_preset_personal_assistant_inbox_triage_reply_followup`, `personal_preset_personal_assistant_inbox_send_backend_failure`, `personal_preset_personal_assistant_jmap_inbox_reply`, `personal_preset_personal_assistant_schedule_recall`, `personal_preset_personal_assistant_schedule_approval_recovery`, `personal_preset_personal_assistant_daily_briefing` |
+| `personal_assistant` | careful personal assistance with durable recall plus approval-gated memory, note, message, and schedule writes | `personal_preset_personal_assistant`, `personal_preset_personal_assistant_memory_approval_recovery`, `personal_preset_personal_assistant_note_recall`, `personal_preset_personal_assistant_message_recall`, `personal_preset_personal_assistant_message_approval_recovery`, `personal_preset_personal_assistant_inbox_triage_reply_followup`, `personal_preset_personal_assistant_inbox_send_backend_failure`, `personal_preset_personal_assistant_jmap_inbox_reply`, `personal_preset_personal_assistant_schedule_recall`, `personal_preset_personal_assistant_schedule_approval_recovery`, `personal_preset_personal_assistant_daily_briefing`, `personal_preset_personal_assistant_scheduled_daily_briefing` |
 | `research_partner` | longer-horizon personal research and scoped delegation | `personal_preset_research_partner` |
 
 The first real remote inbox backend for the personal stack now exists through
 `messaging/jmapclient` plus `messaging/jmapstore`. It preserves the same
 metadata-first contract as the in-memory thread store: search returns
 thread-level metadata only, and full message bodies appear only after an
-explicit thread read.
+explicit thread read. The personal stack now also exposes host-owned proactive
+scheduled runs through `ScheduledRunStore`, `PeriodicTrigger`,
+`StartScheduledRun`, and `WatchScheduledTriggers`, with eval-backed
+idempotency for one deterministic daily-brief occurrence.
 
 ## Try It
 
