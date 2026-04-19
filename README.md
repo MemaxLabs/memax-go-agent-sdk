@@ -95,6 +95,8 @@ Coding-oriented adapters and toolkits:
   quota state
 - initial async cloudmanaged audit sink wrapper for buffered non-inline audit
   delivery
+- initial durable cloudmanaged run store seam plus reference in-memory managed
+  background run tracking
 - initial SQLite-backed scheduling adapter for durable local calendar backends
 - skill discovery tools
 
@@ -139,7 +141,11 @@ audit persistence to happen inline on the event-emission path. A durable
 SQLite-backed quota store now also exists as
 `stack/cloudmanaged/sqlitestore`, using `BEGIN IMMEDIATE` reservation
 transactions plus an explicit stale-session prune helper for hosts that prefer
-`database/sql` over Redis.
+`database/sql` over Redis. Durable managed background runs now also sit behind
+an explicit `RunStore` seam in `stack/cloudmanaged`, with a reference
+`MemoryRunStore` plus `StartRun`, `GetRun`, and `CancelRun` helpers so hosts
+can track queued/running/succeeded/failed/canceled lifecycle without inventing
+their own job wrapper around `QueryAsync`.
 
 `stack/personal` now exposes named presets so hosts can start from a
 personal-intelligence workflow profile and then attach only the host-owned

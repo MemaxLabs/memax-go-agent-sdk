@@ -151,9 +151,13 @@ system prompt.
   reference `MemoryQuotaStore`, and the first shared backend now exists through
   `stack/cloudmanaged/redistore`. An initial durable SQL backend now also
   exists through `stack/cloudmanaged/sqlitestore`. Initial async audit sink
-  wrapping now exists for buffered non-inline audit delivery; next steps are
-  richer cloudmanaged presets, additional distributed quota backends, and
-  remote-execution backends built on top of the same tenant seam.
+  wrapping now exists for buffered non-inline audit delivery. Initial durable
+  managed background runs now also sit behind a host-owned `RunStore` seam
+  through `stack/cloudmanaged`, with reference in-memory tracking plus explicit
+  start/get/cancel helpers for queued/running/succeeded/failed/canceled
+  lifecycle. Next steps are richer cloudmanaged presets, additional
+  distributed quota backends, durable run backends, and remote-execution
+  backends built on top of the same tenant seam.
 
 ## Phase 7: Opinionated Stacks
 

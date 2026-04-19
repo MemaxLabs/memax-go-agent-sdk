@@ -120,7 +120,12 @@ crash-safety net. A durable SQL path now also exists through
 SQLite with `BEGIN IMMEDIATE` transactions plus an explicit prune helper for
 stale sessions. Managed audit sinks can now also be wrapped through an async
 cloudmanaged sink adapter, so hosts can choose bounded buffered delivery
-without changing the event-observer or sink interfaces underneath.
+without changing the event-observer or sink interfaces underneath. Durable
+managed background runs now also sit behind a host-owned `RunStore` seam in
+`stack/cloudmanaged`: the reference `MemoryRunStore` keeps the initial
+single-process path, while `StartRun`, `GetRun`, and `CancelRun` give hosts an
+explicit queued/running/succeeded/failed/canceled lifecycle without coupling
+job state to transcript parsing or ad hoc goroutine wrappers.
 Each preset now has deterministic end-to-end eval coverage for its normal
 workflow and its defining recovery or delegation path, so preset behavior is
 part of the public contract rather than informal guidance. The navigable preset

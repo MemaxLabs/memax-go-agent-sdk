@@ -934,10 +934,214 @@ func TestAsyncSinkBlockHonorsContextWhenFull(t *testing.T) {
 	}
 }
 
+func TestMemoryRunStoreCreateUpdateAndGet(t *testing.T) {
+	t.Parallel()
+
+	store := NewMemoryRunStore()
+	scope := tenant.Scope{ID: "tenant-1", SubjectID: "user-1", Attributes: map[string]string{"plan": "managed"}}
+	record, err := store.CreateRun(context.Background(), CreateRunRequest{
+		Prompt: "Read README.md",
+		Tenant: scope,
+	})
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	if record.ID == "" || record.Status != RunStatusQueued || record.Prompt != "Read README.md" {
+		t.Fatalf("CreateRun() = %#v, want queued record with id and prompt", record)
+	}
+	result := "done"
+	completedAt := timeDate(2026, 4, 19, 0, 0, 0)
+	record, err = store.UpdateRun(context.Background(), RunUpdate{
+		ID:          record.ID,
+		Status:      RunStatusSucceeded,
+		SessionID:   "session-1",
+		Result:      &result,
+		CompletedAt: &completedAt,
+	})
+	if err != nil {
+		t.Fatalf("UpdateRun() error = %v", err)
+	}
+	if record.Status != RunStatusSucceeded || record.SessionID != "session-1" || record.Result != "done" {
+		t.Fatalf("UpdateRun() = %#v, want succeeded record with session and result", record)
+	}
+	if record.CompletedAt != completedAt {
+		t.Fatalf("CompletedAt = %s, want %s", record.CompletedAt, completedAt)
+	}
+	got, err := store.GetRun(context.Background(), record.ID)
+	if err != nil {
+		t.Fatalf("GetRun() error = %v", err)
+	}
+	if got.Tenant.ID != "tenant-1" || got.Tenant.Attributes["plan"] != "managed" {
+		t.Fatalf("GetRun() = %#v, want cloned tenant scope", got)
+	}
+}
+
+func TestStackStartRunPersistsSucceededLifecycle(t *testing.T) {
+	t.Parallel()
+
+	modelClient := &quotaTestModel{
+		turns: [][]model.StreamEvent{
+			{{
+				Kind: model.StreamToolUse,
+				ToolUse: model.ToolUse{
+					ID:    "tool-1",
+					Name:  "read_file",
+					Input: json.RawMessage(`{"path":"README.md"}`),
+				},
+			}},
+			{{Kind: model.StreamText, Text: "managed run complete"}},
+		},
+	}
+	runStore := NewMemoryRunStore()
+	stack, err := New(Config{
+		Base: memaxagent.Options{
+			Model: modelClient,
+			Tools: tool.NewRegistry(readFileTool()),
+		},
+		RunStore: runStore,
+		Policies: Policies{
+			RequireTenantScope: true,
+			Quota: Quota{
+				MaxModelRequests: 4,
+				MaxToolUses:      4,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	scope := tenant.Scope{ID: "tenant-1", SubjectID: "user-1"}
+	record, err := stack.StartRun(context.Background(), "Read README.md and finish.", scope)
+	if err != nil {
+		t.Fatalf("StartRun() error = %v", err)
+	}
+	if record.Status != RunStatusQueued {
+		t.Fatalf("StartRun() = %#v, want queued record", record)
+	}
+	final := waitForRunStatus(t, stack, record.ID, func(r RunRecord) bool { return r.Terminal() })
+	if final.Status != RunStatusSucceeded {
+		t.Fatalf("final run = %#v, want succeeded", final)
+	}
+	if final.Result != "managed run complete" {
+		t.Fatalf("final result = %q, want %q", final.Result, "managed run complete")
+	}
+	if final.SessionID == "" || final.StartedAt.IsZero() || final.CompletedAt.IsZero() {
+		t.Fatalf("final run = %#v, want session and timestamps", final)
+	}
+	if final.Tenant.ID != "tenant-1" || final.Prompt != "Read README.md and finish." {
+		t.Fatalf("final run = %#v, want stored tenant and prompt", final)
+	}
+}
+
+func TestStackStartRunPersistsFailureLifecycle(t *testing.T) {
+	t.Parallel()
+
+	modelClient := &quotaTestModel{
+		turns: [][]model.StreamEvent{
+			{{
+				Kind: model.StreamToolUse,
+				ToolUse: model.ToolUse{
+					ID:    "tool-1",
+					Name:  "read_file",
+					Input: json.RawMessage(`{"path":"README.md"}`),
+				},
+			}},
+			{{Kind: model.StreamText, Text: "should not run"}},
+		},
+	}
+	runStore := NewMemoryRunStore()
+	stack, err := New(Config{
+		Base: memaxagent.Options{
+			Model: modelClient,
+			Tools: tool.NewRegistry(readFileTool()),
+		},
+		RunStore: runStore,
+		Policies: Policies{
+			RequireTenantScope: true,
+			Quota: Quota{
+				MaxModelRequests: 1,
+				MaxToolUses:      4,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	record, err := stack.StartRun(context.Background(), "Read README.md, then continue.", tenant.Scope{ID: "tenant-1", SubjectID: "user-1"})
+	if err != nil {
+		t.Fatalf("StartRun() error = %v", err)
+	}
+	final := waitForRunStatus(t, stack, record.ID, func(r RunRecord) bool { return r.Terminal() })
+	if final.Status != RunStatusFailed {
+		t.Fatalf("final run = %#v, want failed", final)
+	}
+	if !strings.Contains(final.Error, "tenant quota exceeded: max model requests") {
+		t.Fatalf("final error = %q, want quota denial", final.Error)
+	}
+}
+
+func TestStackCancelRunMarksCanceled(t *testing.T) {
+	t.Parallel()
+
+	modelClient := &blockingRunModel{
+		release: make(chan struct{}),
+		started: make(chan struct{}, 1),
+	}
+	runStore := NewMemoryRunStore()
+	stack, err := New(Config{
+		Base: memaxagent.Options{
+			Model: modelClient,
+		},
+		RunStore: runStore,
+		Policies: Policies{
+			RequireTenantScope: true,
+			Quota: Quota{
+				MaxModelRequests: 4,
+				MaxToolUses:      4,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	record, err := stack.StartRun(context.Background(), "Block until canceled.", tenant.Scope{ID: "tenant-1", SubjectID: "user-1"})
+	if err != nil {
+		t.Fatalf("StartRun() error = %v", err)
+	}
+	waitForRunStatus(t, stack, record.ID, func(r RunRecord) bool { return r.Status == RunStatusRunning && r.SessionID != "" })
+	select {
+	case <-modelClient.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("blocking run did not start model stream")
+	}
+	if err := stack.CancelRun(context.Background(), record.ID); err != nil {
+		t.Fatalf("CancelRun() error = %v", err)
+	}
+	final := waitForRunStatus(t, stack, record.ID, func(r RunRecord) bool { return r.Terminal() })
+	if final.Status != RunStatusCanceled {
+		t.Fatalf("final run = %#v, want canceled", final)
+	}
+	if !strings.Contains(final.Error, context.Canceled.Error()) {
+		t.Fatalf("final error = %q, want context canceled", final.Error)
+	}
+	close(modelClient.release)
+	if err := stack.CancelRun(context.Background(), record.ID); !errors.Is(err, ErrRunNotActive) {
+		t.Fatalf("CancelRun(after completion) error = %v, want ErrRunNotActive", err)
+	}
+}
+
 type quotaTestModel struct {
 	requests []model.Request
 	turns    [][]model.StreamEvent
 	err      error
+}
+
+type blockingRunModel struct {
+	release chan struct{}
+	started chan struct{}
 }
 
 type blockingAuditSink struct {
@@ -1076,6 +1280,14 @@ func (m *quotaTestModel) Stream(_ context.Context, req model.Request) (model.Str
 	return &quotaTestStream{events: events}, nil
 }
 
+func (m *blockingRunModel) Stream(ctx context.Context, req model.Request) (model.Stream, error) {
+	select {
+	case m.started <- struct{}{}:
+	default:
+	}
+	return &blockingRunStream{ctx: ctx, release: m.release}, nil
+}
+
 type quotaTestStream struct {
 	events []model.StreamEvent
 	index  int
@@ -1092,6 +1304,72 @@ func (s *quotaTestStream) Recv() (model.StreamEvent, error) {
 
 func (s *quotaTestStream) Close() error {
 	return nil
+}
+
+type blockingRunStream struct {
+	ctx     context.Context
+	release chan struct{}
+	done    bool
+}
+
+func (s *blockingRunStream) Recv() (model.StreamEvent, error) {
+	if s.done {
+		return model.StreamEvent{}, model.ErrEndOfStream
+	}
+	select {
+	case <-s.ctx.Done():
+		s.done = true
+		return model.StreamEvent{}, s.ctx.Err()
+	case <-s.release:
+		s.done = true
+		return model.StreamEvent{Kind: model.StreamText, Text: "released"}, nil
+	}
+}
+
+func (s *blockingRunStream) Close() error {
+	return nil
+}
+
+func waitForRunStatus(t *testing.T, stack Stack, id string, done func(RunRecord) bool) RunRecord {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		record, err := stack.GetRun(context.Background(), id)
+		if err != nil {
+			t.Fatalf("GetRun(%q) error = %v", id, err)
+		}
+		if done(record) {
+			return record
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	record, err := stack.GetRun(context.Background(), id)
+	if err != nil {
+		t.Fatalf("GetRun(%q) final error = %v", id, err)
+	}
+	t.Fatalf("run %q did not reach expected state: %#v", id, record)
+	return RunRecord{}
+}
+
+func readFileTool() tool.Tool {
+	return tool.Definition{
+		ToolSpec: model.ToolSpec{
+			Name:        "read_file",
+			Description: "Read a file.",
+			ReadOnly:    true,
+			InputSchema: map[string]any{
+				"type":                 "object",
+				"required":             []any{"path"},
+				"additionalProperties": false,
+				"properties": map[string]any{
+					"path": map[string]any{"type": "string"},
+				},
+			},
+		},
+		Handler: func(context.Context, tool.Call) (model.ToolResult, error) {
+			return model.ToolResult{Content: "read README.md"}, nil
+		},
+	}
 }
 
 func timeDate(year int, month time.Month, day, hour, min, sec int) time.Time {

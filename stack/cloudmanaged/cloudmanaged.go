@@ -1,10 +1,11 @@
 // Package cloudmanaged provides an opinionated managed-agent stack over the
 // neutral Memax runtime.
 //
-// The package assembles tenant-aware defaults and quota validation into one
-// reusable server profile without changing the kernel. Tenant admission stays a
-// normal host-owned validator on the explicit tenant seam; this package simply
-// provides a batteries-included validator and preset for managed products.
+// The package assembles tenant-aware defaults, quota validation, host-owned
+// audit sinks, and optional durable managed-run state into one reusable server
+// profile without changing the kernel. Tenant admission stays a normal
+// host-owned validator on the explicit tenant seam; this package simply
+// provides batteries-included reference wiring for managed products.
 //
 // QuotaValidator uses a host-owned QuotaStore. Single-process managed hosts can
 // use the reference MemoryQuotaStore directly; distributed deployments can
@@ -45,8 +46,12 @@ type Config struct {
 	// QuotaStore overrides the reference in-memory quota backend used by the
 	// managed validator. Nil keeps the default MemoryQuotaStore.
 	QuotaStore QuotaStore
-	Policies   Policies
-	Audit      AuditConfig
+	// RunStore overrides the reference in-memory durable run backend used by
+	// StartRun/GetRun/CancelRun. Nil disables durable background runs while
+	// leaving foreground Query/QueryAsync behavior unchanged.
+	RunStore RunStore
+	Policies Policies
+	Audit    AuditConfig
 }
 
 // Policies configures optional tenant-aware governance for the cloud-managed
@@ -90,6 +95,8 @@ func DefaultPolicies() Policies {
 type Stack struct {
 	options memaxagent.Options
 	audit   AuditConfig
+	runs    RunStore
+	active  *activeRuns
 }
 
 // New assembles a cloud-managed stack from the configured host-owned
@@ -107,7 +114,12 @@ func New(config Config) (Stack, error) {
 	if err := installTenantControls(&opts, config.Policies, config.QuotaStore); err != nil {
 		return Stack{}, err
 	}
-	return Stack{options: opts, audit: config.Audit}, nil
+	return Stack{
+		options: opts,
+		audit:   config.Audit,
+		runs:    config.RunStore,
+		active:  newActiveRuns(),
+	}, nil
 }
 
 // Options returns the assembled agent options. The returned value is a copy of
