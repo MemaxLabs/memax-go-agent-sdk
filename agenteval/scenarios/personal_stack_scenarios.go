@@ -2,6 +2,7 @@ package scenarios
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -21,6 +22,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/scheduling"
 	"github.com/MemaxLabs/memax-go-agent-sdk/session"
 	"github.com/MemaxLabs/memax-go-agent-sdk/stack/personal"
+	personalsqlitestore "github.com/MemaxLabs/memax-go-agent-sdk/stack/personal/sqlitestore"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/agentpolicy"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/approvaltools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/memorytools"
@@ -29,6 +31,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/scheduletools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/subagents"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/tasktools"
+	_ "modernc.org/sqlite"
 )
 
 // PersonalPresetAssistant returns a single-use scenario that exercises the
@@ -607,6 +610,276 @@ func PersonalPresetAssistantScheduledDailyBriefing() agenteval.Case {
 					}
 					if duplicateRun.ID != finalRun.ID {
 						return fmt.Errorf("duplicate run = %#v, want existing occurrence record", duplicateRun)
+					}
+					return nil
+				},
+			},
+		},
+	}
+}
+
+// PersonalPresetAssistantScheduledInboxTriage returns a single-use scenario
+// where the personal_assistant preset runs one hourly unread-inbox triage
+// trigger, classifies the urgent thread from metadata first, reads the full
+// thread only before drafting, sends the approved reply, and treats a second
+// fire for the same occurrence as a no-op backed by durable SQLite state.
+func PersonalPresetAssistantScheduledInboxTriage() agenteval.Case {
+	messageStore := messaging.NewThreadStore([]messaging.Thread{{
+		ID:      "thread-1",
+		Subject: "Urgent: Acme renewal blocker",
+		Summary: "Casey says checkout is blocked before Monday's renewal deadline and needs a same-day update.",
+		Participants: []messaging.Participant{
+			{Name: "Casey", Address: "casey@acme.example", Role: "from"},
+		},
+		Tags:          []string{"INBOX", "urgent", "customer"},
+		LastMessageAt: time.Date(2026, 4, 19, 9, 0, 0, 0, time.UTC),
+		Metadata:      map[string]any{"unread": true},
+		Messages: []messaging.Message{{
+			ID:        "thread-1-msg-1",
+			ThreadID:  "thread-1",
+			Subject:   "Urgent: Acme renewal blocker",
+			Summary:   "Checkout blocked before the renewal deadline.",
+			Body:      "Checkout is blocked for Acme before Monday's renewal deadline. Please send me a same-day update and tell me when I should expect the next checkpoint.",
+			Direction: messaging.DirectionInbound,
+			Sender:    messaging.Participant{Name: "Casey", Address: "casey@acme.example", Role: "from"},
+			SentAt:    time.Date(2026, 4, 19, 9, 0, 0, 0, time.UTC),
+		}},
+	}})
+	taskStore := tasktools.NewMemoryStore([]tasktools.Task{{
+		ID:     "task-1",
+		Title:  "triage unread inbox threads",
+		Status: tasktools.StatusInProgress,
+		Notes:  "run the hourly unread inbox triage proactively, classify from metadata first, then read the selected thread before drafting the approved reply",
+	}})
+
+	searchInput := `{
+		"query":"urgent renewal blocker same-day update",
+		"mailboxes":["INBOX"],
+		"from":["casey@acme.example"],
+		"unread":true,
+		"limit":3
+	}`
+	sendInput := `{
+		"thread_id":"thread-1",
+		"body":"Thanks, Casey. We are treating this as urgent and I will send you the next update by 14:00 UTC today.",
+		"recipients":[{"name":"Casey","address":"casey@acme.example"}]
+	}`
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "search-1",
+				Name:  messagetools.SearchToolName,
+				Input: json.RawMessage(searchInput),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "read-1",
+				Name:  messagetools.ReadToolName,
+				Input: json.RawMessage(`{"thread_id":"thread-1"}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "approval-1",
+				Name: approvaltools.ToolName,
+				Input: json.RawMessage(`{
+					"action":"send_message",
+					"reason":"sending an urgent customer update requires approval",
+					"tool_input":` + sendInput + `
+				}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "send-1",
+				Name:  messagetools.SendToolName,
+				Input: json.RawMessage(sendInput),
+			},
+		}},
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "Scheduled inbox triage sent the urgent Acme reply and recorded the occurrence so the same hourly trigger does not run twice."}},
+	)
+
+	config, configErr := personal.PresetPersonalAssistant.Config()
+	if configErr == nil {
+		config.Base.Model = modelClient
+	}
+	config.Messages = messagetools.Config{
+		Searcher:     messageStore,
+		Reader:       messageStore,
+		Sender:       messageStore,
+		DefaultLimit: 3,
+	}
+	config.Tasks = taskStore
+	config.Approval.Approver = approvaltools.StaticApprover{
+		Decision: approvaltools.Decision{
+			Approved: true,
+			Reason:   "approved scheduled urgent triage reply",
+		},
+	}
+	stack, stackErr := personal.New(config)
+
+	db, dbErr := sql.Open("sqlite", "file:scheduled-inbox-triage?mode=memory&cache=shared")
+	var (
+		store    personal.ScheduledRunStore
+		storeErr error
+	)
+	if dbErr == nil {
+		store, storeErr = personalsqlitestore.New(context.Background(), db)
+	}
+	now := time.Date(2026, 4, 19, 9, 5, 0, 0, time.UTC)
+	trigger := personal.PeriodicTrigger{
+		Name:   "inbox-triage",
+		Prompt: "Run the hourly unread inbox triage. Search unread inbox metadata first, read only the selected thread, then send the approved reply.",
+		Every:  time.Hour,
+		Anchor: time.Date(2026, 4, 19, 9, 0, 0, 0, time.UTC),
+	}
+
+	var (
+		finalRun       personal.ScheduledRunRecord
+		duplicateRun   personal.ScheduledRunRecord
+		duplicateStart bool
+	)
+
+	return agenteval.Case{
+		Name:   "personal_preset_personal_assistant_scheduled_inbox_triage",
+		Prompt: "Run the hourly unread inbox triage proactively for the current occurrence.",
+		Run: func(ctx context.Context) (<-chan memaxagent.Event, error) {
+			if stackErr != nil {
+				return nil, stackErr
+			}
+			if dbErr != nil {
+				return nil, dbErr
+			}
+			if storeErr != nil {
+				return nil, storeErr
+			}
+			out := make(chan memaxagent.Event, 32)
+			observer := memaxagent.EventObserverFunc(func(_ context.Context, event memaxagent.Event) {
+				select {
+				case out <- event:
+				case <-ctx.Done():
+				}
+			})
+			watchCtx, cancel := context.WithCancel(memaxagent.WithEventObserver(ctx, observer))
+			go func() {
+				defer close(out)
+				watchDone := make(chan error, 1)
+				go func() {
+					watchDone <- stack.WatchScheduledTriggers(watchCtx, store, personal.TriggerWatcherOptions{
+						Interval: time.Millisecond,
+						Now: func() time.Time {
+							return now
+						},
+					}, trigger)
+				}()
+				finalRun = waitForScheduledRun(store, "inbox-triage:2026-04-19T09:00:00Z")
+				intent, due := trigger.IntentAt(now)
+				if !due {
+					cancel()
+					<-watchDone
+					return
+				}
+				duplicateRun, duplicateStart, _ = stack.StartScheduledRun(memaxagent.WithEventObserver(ctx, observer), store, intent)
+				cancel()
+				<-watchDone
+			}()
+			return out, nil
+		},
+		Cleanup: func() {
+			if db != nil {
+				_ = db.Close()
+			}
+		},
+		Assertions: []agenteval.Assertion{
+			toolConstructionSucceeded(configErr, stackErr, dbErr, storeErr),
+			agenteval.ToolUsed(messagetools.SearchToolName),
+			agenteval.ToolUsed(messagetools.ReadToolName),
+			agenteval.ToolUsed(approvaltools.ToolName),
+			agenteval.ToolUsed(messagetools.SendToolName),
+			agenteval.EventKindEmitted(memaxagent.EventApprovalRequested),
+			agenteval.EventKindEmitted(memaxagent.EventApprovalGranted),
+			agenteval.EventKindEmitted(memaxagent.EventApprovalConsumed),
+			agenteval.FinalEquals("Scheduled inbox triage sent the urgent Acme reply and recorded the occurrence so the same hourly trigger does not run twice."),
+			requestCountEquals(modelClient, 5),
+			{
+				Name: "scheduled triage stays metadata-first and uses unread inbox filters",
+				Check: func(result agenteval.Result) error {
+					uses := result.ToolUses()
+					want := []string{
+						messagetools.SearchToolName,
+						messagetools.ReadToolName,
+						approvaltools.ToolName,
+						messagetools.SendToolName,
+					}
+					if len(uses) != len(want) {
+						return fmt.Errorf("tool uses = %#v, want %v", uses, want)
+					}
+					for i, name := range want {
+						if uses[i].Name != name {
+							return fmt.Errorf("tool use order = %#v, want %v", uses, want)
+						}
+					}
+					if !strings.Contains(string(uses[0].Input), `"mailboxes":["INBOX"]`) || !strings.Contains(string(uses[0].Input), `"unread":true`) {
+						return fmt.Errorf("search input = %s, want unread inbox filters", uses[0].Input)
+					}
+					toolResults := result.ToolResults()
+					if len(toolResults) != 4 {
+						return fmt.Errorf("tool results = %#v, want search read approval send", toolResults)
+					}
+					if !strings.Contains(toolResults[0].Content, "Urgent: Acme renewal blocker") || !strings.Contains(toolResults[0].Content, "same-day update") {
+						return fmt.Errorf("search result = %#v, want urgent metadata", toolResults[0])
+					}
+					if strings.Contains(toolResults[0].Content, "Please send me a same-day update and tell me when I should expect the next checkpoint.") {
+						return fmt.Errorf("search result leaked full thread body: %#v", toolResults[0])
+					}
+					if toolResults[0].Metadata["matches"] != 1 {
+						return fmt.Errorf("search metadata = %#v, want one unread inbox match", toolResults[0].Metadata)
+					}
+					if toolResults[1].IsError || !strings.Contains(toolResults[1].Content, "Please send me a same-day update") {
+						return fmt.Errorf("read result = %#v, want full thread before draft", toolResults[1])
+					}
+					return nil
+				},
+			},
+			{
+				Name: "scheduled sqlite occurrence deduplicates reruns and persists output",
+				Check: func(result agenteval.Result) error {
+					toolResults := result.ToolResults()
+					if toolResults[2].IsError || toolResults[2].Metadata[approvaltools.MetadataApprovalApproved] != true {
+						return fmt.Errorf("approval result = %#v, want granted approval", toolResults[2])
+					}
+					if toolResults[3].IsError || !strings.Contains(toolResults[3].Content, "sent message Urgent: Acme renewal blocker") {
+						return fmt.Errorf("send result = %#v, want send success", toolResults[3])
+					}
+					if finalRun.ID != "inbox-triage:2026-04-19T09:00:00Z" {
+						return fmt.Errorf("final run id = %q, want deterministic occurrence id", finalRun.ID)
+					}
+					if finalRun.Status != personal.ScheduledRunSucceeded || !strings.Contains(finalRun.Result, "recorded the occurrence") {
+						return fmt.Errorf("final run = %#v, want succeeded scheduled triage", finalRun)
+					}
+					if finalRun.SessionID == "" || finalRun.CompletedAt.IsZero() {
+						return fmt.Errorf("final run = %#v, want session and completion time", finalRun)
+					}
+					if duplicateStart {
+						return fmt.Errorf("duplicate start = true, want no-op for same occurrence")
+					}
+					if duplicateRun.ID != finalRun.ID {
+						return fmt.Errorf("duplicate run = %#v, want existing occurrence record", duplicateRun)
+					}
+					thread, err := messageStore.ReadThread(context.Background(), messaging.ReadRequest{ThreadID: "thread-1"})
+					if err != nil {
+						return err
+					}
+					if len(thread.Messages) != 2 {
+						return fmt.Errorf("thread messages = %d, want 2", len(thread.Messages))
+					}
+					if !strings.Contains(thread.Messages[len(thread.Messages)-1].Body, "14:00 UTC today") {
+						return fmt.Errorf("outbound reply body = %q, want promised checkpoint time", thread.Messages[len(thread.Messages)-1].Body)
 					}
 					return nil
 				},

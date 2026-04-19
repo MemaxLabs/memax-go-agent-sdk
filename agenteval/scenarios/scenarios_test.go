@@ -12,8 +12,8 @@ func TestScenariosPass(t *testing.T) {
 	if err := report.Error(); err != nil {
 		t.Fatalf("scenario report error = %v", err)
 	}
-	if !report.Passed() || len(report.Results) != 81 {
-		t.Fatalf("report = %#v, want eighty-one passing scenarios", report)
+	if !report.Passed() || len(report.Results) != 82 {
+		t.Fatalf("report = %#v, want eighty-two passing scenarios", report)
 	}
 }
 
@@ -67,6 +67,7 @@ func TestScenarioNamesAreStable(t *testing.T) {
 		"personal_preset_personal_assistant_schedule_conflict_recovery",
 		"personal_preset_personal_assistant_daily_briefing",
 		"personal_preset_personal_assistant_scheduled_daily_briefing",
+		"personal_preset_personal_assistant_scheduled_inbox_triage",
 		"personal_preset_research_partner",
 		"cloudmanaged_preset_managed_worker_quota_denial",
 		"cloudmanaged_preset_managed_worker_delegated_audit_trail",
