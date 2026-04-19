@@ -438,6 +438,8 @@ func PersonalPresetAssistantDailyBriefing() agenteval.Case {
 				Name: "briefing tool order stays metadata-first",
 				Check: func(result agenteval.Result) error {
 					uses := result.ToolUses()
+					// This scripted case proves the stack supports a search-then-read
+					// briefing flow; real models may validly interleave search and read.
 					want := []string{
 						notetools.SearchToolName,
 						messagetools.SearchToolName,
