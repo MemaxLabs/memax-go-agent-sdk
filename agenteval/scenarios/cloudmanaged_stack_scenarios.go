@@ -3,8 +3,11 @@ package scenarios
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
+	"sync"
+	"time"
 
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
 	"github.com/MemaxLabs/memax-go-agent-sdk/agenteval"
@@ -225,4 +228,199 @@ func CloudManagedPresetManagedWorkerDelegatedAuditTrail() agenteval.Case {
 			},
 		},
 	}
+}
+
+// CloudManagedPresetManagedWorkerAsyncAuditBackpressure returns a managed-stack
+// scenario where a blocked host audit sink forces AsyncSink into sustained
+// overflow, while the agent run still completes and exposes queue telemetry.
+func CloudManagedPresetManagedWorkerAsyncAuditBackpressure() agenteval.Case {
+	var firstTurn []model.StreamEvent
+	for i := 0; i < 8; i++ {
+		firstTurn = append(firstTurn, model.StreamEvent{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    fmt.Sprintf("tool-%d", i+1),
+				Name:  "read_file",
+				Input: json.RawMessage(`{"path":"README.md"}`),
+			},
+		})
+	}
+	modelClient := agenteval.NewScriptedModel(
+		firstTurn,
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "managed done"}},
+	)
+
+	inner := &scenarioBlockingAuditSink{
+		release: make(chan struct{}),
+		started: make(chan struct{}, 1),
+	}
+	overflowErrors := &scenarioAuditErrors{}
+	asyncSink, sinkErr := cloudmanaged.NewAsyncSink(
+		inner,
+		cloudmanaged.WithAsyncSinkBufferSize(4),
+		cloudmanaged.WithAsyncOverflowPolicy(cloudmanaged.AsyncOverflowDropOldest),
+		cloudmanaged.WithAsyncSinkErrorHandler(cloudmanaged.AuditErrorHandlerFunc(func(_ context.Context, err error) {
+			overflowErrors.Add(err)
+		})),
+	)
+	closeOnce := sync.Once{}
+	closeResources := func() {
+		closeOnce.Do(func() {
+			close(inner.release)
+			_ = asyncSink.Close(context.Background())
+		})
+	}
+
+	config, configErr := cloudmanaged.PresetManagedWorker.Config()
+	if configErr == nil && sinkErr == nil {
+		config.Base.Model = modelClient
+		config.Base.Tools = tool.NewRegistry(readFileTool())
+		config.Policies.Quota.MaxModelRequests = 8
+		config.Policies.Quota.MaxToolUses = 32
+		config.Audit = cloudmanaged.AuditConfig{Sink: asyncSink}
+	}
+	stack, stackErr := cloudmanaged.New(config)
+	scope := tenant.Scope{
+		ID:        "tenant-1",
+		SubjectID: "user-1",
+		Attributes: map[string]string{
+			"plan": "managed",
+		},
+	}
+
+	return agenteval.Case{
+		Name:    "cloudmanaged_preset_managed_worker_async_audit_backpressure",
+		Prompt:  "Read README.md several times, then finish.",
+		Timeout: 2 * time.Second,
+		Run: func(ctx context.Context) (<-chan memaxagent.Event, error) {
+			if stackErr != nil {
+				return nil, stackErr
+			}
+			return stack.Query(ctx, "Read README.md several times, then finish.", scope)
+		},
+		Cleanup: closeResources,
+		Assertions: []agenteval.Assertion{
+			toolConstructionSucceeded(configErr, sinkErr, stackErr),
+			agenteval.ToolUsed("read_file"),
+			{
+				Name: "managed run completes while inner audit sink is blocked",
+				Check: func(result agenteval.Result) error {
+					if result.Final != "managed done" {
+						return fmt.Errorf("final result = %q, want %q", result.Final, "managed done")
+					}
+					return nil
+				},
+			},
+			{
+				Name: "async sink reports overflow telemetry before drain",
+				Check: func(result agenteval.Result) error {
+					stats := asyncSink.Stats()
+					if stats.DroppedCount == 0 {
+						return fmt.Errorf("async sink stats = %#v, want dropped records under backpressure", stats)
+					}
+					if stats.QueueDepth == 0 {
+						return fmt.Errorf("async sink stats = %#v, want buffered records before drain", stats)
+					}
+					if stats.WrittenCount <= stats.DroppedCount {
+						return fmt.Errorf("async sink stats = %#v, want accepted records beyond drops", stats)
+					}
+					return nil
+				},
+			},
+			{
+				Name: "async sink reports overflow errors and drains retained records in order",
+				Check: func(result agenteval.Result) error {
+					closeResources()
+					stats := asyncSink.Stats()
+					if stats.QueueDepth != 0 {
+						return fmt.Errorf("async sink stats after close = %#v, want empty queue", stats)
+					}
+					if !overflowErrors.ContainsAsyncOverflow() {
+						return fmt.Errorf("overflow errors = %#v, want AsyncSinkOverflowError", overflowErrors.Errors())
+					}
+					records := inner.Records()
+					if len(records) == 0 {
+						return fmt.Errorf("audit records = 0, want drained records")
+					}
+					last := records[len(records)-1]
+					if last.Kind != memaxagent.EventResult || last.Result != "managed done" {
+						return fmt.Errorf("last audit record = %#v, want final result record", last)
+					}
+					return nil
+				},
+			},
+		},
+	}
+}
+
+type scenarioBlockingAuditSink struct {
+	mu      sync.Mutex
+	release chan struct{}
+	started chan struct{}
+	records []cloudmanaged.AuditRecord
+}
+
+func (s *scenarioBlockingAuditSink) WriteAudit(_ context.Context, record cloudmanaged.AuditRecord) error {
+	if s == nil {
+		return nil
+	}
+	if s.started != nil {
+		select {
+		case s.started <- struct{}{}:
+		default:
+		}
+	}
+	if s.release != nil {
+		<-s.release
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.records = append(s.records, record)
+	return nil
+}
+
+func (s *scenarioBlockingAuditSink) Records() []cloudmanaged.AuditRecord {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]cloudmanaged.AuditRecord, len(s.records))
+	copy(out, s.records)
+	return out
+}
+
+type scenarioAuditErrors struct {
+	mu     sync.Mutex
+	errors []error
+}
+
+func (s *scenarioAuditErrors) Add(err error) {
+	if s == nil || err == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.errors = append(s.errors, err)
+}
+
+func (s *scenarioAuditErrors) Errors() []error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]error, len(s.errors))
+	copy(out, s.errors)
+	return out
+}
+
+func (s *scenarioAuditErrors) ContainsAsyncOverflow() bool {
+	for _, err := range s.Errors() {
+		var overflow *cloudmanaged.AsyncSinkOverflowError
+		if errors.As(err, &overflow) {
+			return true
+		}
+	}
+	return false
 }
