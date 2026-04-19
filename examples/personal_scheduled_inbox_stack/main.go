@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,17 +13,14 @@ import (
 	"time"
 
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
-	"github.com/MemaxLabs/memax-go-agent-sdk/memory"
 	"github.com/MemaxLabs/memax-go-agent-sdk/messaging"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
-	"github.com/MemaxLabs/memax-go-agent-sdk/notes"
-	"github.com/MemaxLabs/memax-go-agent-sdk/scheduling"
 	"github.com/MemaxLabs/memax-go-agent-sdk/stack/personal"
-	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/memorytools"
+	personalsqlitestore "github.com/MemaxLabs/memax-go-agent-sdk/stack/personal/sqlitestore"
+	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/approvaltools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/messagetools"
-	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/notetools"
-	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/scheduletools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/tasktools"
+	_ "modernc.org/sqlite"
 )
 
 func main() {
@@ -31,16 +29,18 @@ func main() {
 	}
 }
 
-// runExample walks through one host-owned proactive daily-brief trigger. The
-// trigger fires once for its deterministic occurrence, the agent searches note,
-// message, and schedule metadata before reading the matched items, and a second
-// fire for the same occurrence is deduplicated by the scheduled-run store.
+// runExample walks through one host-owned scheduled inbox triage trigger backed
+// by the durable SQLite scheduled-run store. The trigger fires once for the
+// current hourly occurrence, triages the unread inbox thread from metadata
+// first, reads the selected thread before drafting, sends the approved reply,
+// and treats a second fire for the same occurrence as a no-op.
 func runExample(ctx context.Context, w io.Writer) error {
-	now := time.Date(2026, 4, 19, 7, 1, 0, 0, time.UTC)
-	stack, store, trigger, err := buildProactiveExample(now)
+	now := time.Date(2026, 4, 19, 9, 5, 0, 0, time.UTC)
+	stack, store, trigger, cleanup, err := buildExample(now)
 	if err != nil {
 		return err
 	}
+	defer cleanup()
 
 	var (
 		mu     sync.Mutex
@@ -65,7 +65,7 @@ func runExample(ctx context.Context, w io.Writer) error {
 		}, trigger)
 	}()
 
-	runID := "daily-brief:2026-04-19T07:00:00Z"
+	runID := "inbox-triage:2026-04-19T09:00:00Z"
 	finalRun, err := waitForScheduledRun(store, runID, func(record personal.ScheduledRunRecord) bool { return record.Terminal() })
 	if err != nil {
 		cancel()
@@ -98,6 +98,12 @@ func runExample(ctx context.Context, w io.Writer) error {
 		switch event.Kind {
 		case memaxagent.EventToolUse:
 			fmt.Fprintf(w, "tool use: %s\n", event.ToolUse.Name)
+		case memaxagent.EventApprovalRequested:
+			fmt.Fprintf(w, "approval requested: %s\n", event.Approval.Action)
+		case memaxagent.EventApprovalGranted:
+			fmt.Fprintf(w, "approval granted: %s\n", event.Approval.Action)
+		case memaxagent.EventApprovalConsumed:
+			fmt.Fprintf(w, "approval consumed: %s\n", event.Approval.Action)
 		case memaxagent.EventToolResult:
 			fmt.Fprintf(w, "tool result: %s\n", event.ToolResult.Content)
 		case memaxagent.EventResult:
@@ -113,139 +119,119 @@ func runExample(ctx context.Context, w io.Writer) error {
 	return nil
 }
 
-func buildProactiveExample(now time.Time) (personal.Stack, personal.ScheduledRunStore, personal.PeriodicTrigger, error) {
-	memoryStore := memory.NewMemoryStore([]memory.Memory{{
-		ID:      "memory-1",
-		Name:    "briefing-style",
-		Scope:   memory.ScopeUser,
-		Content: "Morning briefings should start with urgent changes and explicit times.",
-	}})
-	noteStore := notes.NewNoteStore([]notes.Note{{
-		ID:        "note-1",
-		Title:     "Morning briefing template",
-		Kind:      "brief",
-		Summary:   "Template for daily executive briefings",
-		Content:   "Lead with urgent changes, then list the next meeting and any travel prep.",
-		Tags:      []string{"briefing", "template"},
-		CreatedAt: time.Date(2026, 4, 19, 6, 0, 0, 0, time.UTC),
-		UpdatedAt: time.Date(2026, 4, 19, 6, 0, 0, 0, time.UTC),
-	}})
+func buildExample(now time.Time) (personal.Stack, personal.ScheduledRunStore, personal.PeriodicTrigger, func(), error) {
 	messageStore := messaging.NewThreadStore([]messaging.Thread{{
 		ID:      "thread-1",
-		Subject: "Travel update for today",
-		Summary: "Jordan says the flight moved to 3:30 PM and asks you to bring your passport.",
+		Subject: "Urgent: Acme renewal blocker",
+		Summary: "Casey says checkout is blocked before Monday's renewal deadline and needs a same-day update.",
 		Participants: []messaging.Participant{
-			{Name: "Jordan", Address: "jordan@example.com"},
+			{Name: "Casey", Address: "casey@acme.example", Role: "from"},
 		},
+		Tags:          []string{"INBOX", "urgent", "customer"},
+		LastMessageAt: time.Date(2026, 4, 19, 9, 0, 0, 0, time.UTC),
+		Metadata:      map[string]any{"unread": true},
 		Messages: []messaging.Message{{
 			ID:        "thread-1-msg-1",
 			ThreadID:  "thread-1",
-			Subject:   "Travel update for today",
-			Summary:   "Flight moved and passport reminder.",
-			Body:      "The flight moved to 3:30 PM. Please bring your passport to the airport.",
+			Subject:   "Urgent: Acme renewal blocker",
+			Summary:   "Checkout blocked before the renewal deadline.",
+			Body:      "Checkout is blocked for Acme before Monday's renewal deadline. Please send me a same-day update and tell me when I should expect the next checkpoint.",
 			Direction: messaging.DirectionInbound,
-			Sender:    messaging.Participant{Name: "Jordan", Address: "jordan@example.com"},
-			SentAt:    time.Date(2026, 4, 19, 7, 0, 0, 0, time.UTC),
+			Sender:    messaging.Participant{Name: "Casey", Address: "casey@acme.example", Role: "from"},
+			SentAt:    time.Date(2026, 4, 19, 9, 0, 0, 0, time.UTC),
 		}},
-	}})
-	eventStart := time.Date(2026, 4, 19, 9, 0, 0, 0, time.UTC)
-	scheduleStore := scheduling.NewEventStore([]scheduling.Event{{
-		ID:       "event-1",
-		Title:    "Design review",
-		Summary:  "Review the Q2 launch design with Taylor.",
-		Location: "Room 5A",
-		Organizer: scheduling.Participant{
-			Name:    "Taylor",
-			Address: "taylor@example.com",
-		},
-		Start:       eventStart,
-		End:         eventStart.Add(45 * time.Minute),
-		TimeZone:    "UTC",
-		Description: "Bring the revised vendor budget and decision log.",
 	}})
 	tasks := tasktools.NewMemoryStore([]tasktools.Task{{
 		ID:     "task-1",
-		Title:  "Prepare the morning briefing",
+		Title:  "Triage unread inbox threads",
 		Status: tasktools.StatusInProgress,
-		Notes:  "search note, message, and schedule metadata before reading the full items you need for the briefing",
+		Notes:  "run the hourly unread inbox triage proactively, classify from metadata first, then read the selected thread before drafting the approved reply",
 	}})
 
 	config := personal.PersonalAssistant()
-	config.Memory = memorytools.Config{
-		Source:       memoryStore,
-		DefaultLimit: 3,
-	}
-	config.Notes = notetools.Config{
-		Searcher:     noteStore,
-		Reader:       noteStore,
-		DefaultLimit: 3,
-	}
 	config.Messages = messagetools.Config{
 		Searcher:     messageStore,
 		Reader:       messageStore,
-		DefaultLimit: 3,
-	}
-	config.Schedule = scheduletools.Config{
-		Searcher:     scheduleStore,
-		Reader:       scheduleStore,
+		Sender:       messageStore,
 		DefaultLimit: 3,
 	}
 	config.Tasks = tasks
-	config.Base.Model = &proactiveBriefingModel{}
+	config.Approval.Approver = approvaltools.StaticApprover{
+		Decision: approvaltools.Decision{
+			Approved: true,
+			Reason:   "approved scheduled urgent triage reply",
+		},
+	}
+	config.Base.Model = &scheduledInboxModel{}
 
 	stack, err := personal.New(config)
 	if err != nil {
-		return personal.Stack{}, nil, personal.PeriodicTrigger{}, err
+		return personal.Stack{}, nil, personal.PeriodicTrigger{}, nil, err
 	}
-	store := personal.NewMemoryScheduledRunStore()
+
+	db, err := sql.Open("sqlite", "file:personal-scheduled-inbox?mode=memory&cache=shared")
+	if err != nil {
+		return personal.Stack{}, nil, personal.PeriodicTrigger{}, nil, err
+	}
+	store, err := personalsqlitestore.New(context.Background(), db)
+	if err != nil {
+		_ = db.Close()
+		return personal.Stack{}, nil, personal.PeriodicTrigger{}, nil, err
+	}
 	trigger := personal.PeriodicTrigger{
-		Name:   "daily-brief",
-		Prompt: "Prepare this morning's briefing. Search note, message, and schedule metadata first, then read only the items you need.",
-		Every:  24 * time.Hour,
-		Anchor: time.Date(now.Year(), now.Month(), now.Day(), 7, 0, 0, 0, time.UTC),
+		Name:   "inbox-triage",
+		Prompt: "Run the hourly unread inbox triage. Search unread inbox metadata first, read only the selected thread, then send the approved reply.",
+		Every:  time.Hour,
+		Anchor: time.Date(now.Year(), now.Month(), now.Day(), 9, 0, 0, 0, time.UTC),
 	}
-	return stack, store, trigger, nil
+	cleanup := func() {
+		_ = db.Close()
+	}
+	return stack, store, trigger, cleanup, nil
 }
 
-type proactiveBriefingModel struct {
+type scheduledInboxModel struct {
 	turn int
 }
 
-func (m *proactiveBriefingModel) Stream(_ context.Context, _ model.Request) (model.Stream, error) {
+func (m *scheduledInboxModel) Stream(_ context.Context, _ model.Request) (model.Stream, error) {
 	m.turn++
 	switch m.turn {
 	case 1:
-		return newStream(toolUse("search-note-1", notetools.SearchToolName, map[string]any{
-			"query": "morning briefing urgent changes travel prep",
-			"limit": 3,
+		return newStream(toolUse("search-1", messagetools.SearchToolName, map[string]any{
+			"query":     "urgent renewal blocker same-day update",
+			"mailboxes": []string{"INBOX"},
+			"from":      []string{"casey@acme.example"},
+			"unread":    true,
+			"limit":     3,
 		})), nil
 	case 2:
-		return newStream(toolUse("search-thread-1", messagetools.SearchToolName, map[string]any{
-			"query": "travel update passport flight",
-			"limit": 3,
-		})), nil
-	case 3:
-		return newStream(toolUse("search-event-1", scheduletools.SearchToolName, map[string]any{
-			"query": "design review vendor budget",
-			"limit": 3,
-		})), nil
-	case 4:
-		return newStream(toolUse("read-note-1", notetools.ReadToolName, map[string]any{
-			"id": "note-1",
-		})), nil
-	case 5:
-		return newStream(toolUse("read-thread-1", messagetools.ReadToolName, map[string]any{
+		return newStream(toolUse("read-1", messagetools.ReadToolName, map[string]any{
 			"thread_id": "thread-1",
 		})), nil
-	case 6:
-		return newStream(toolUse("read-event-1", scheduletools.ReadToolName, map[string]any{
-			"id": "event-1",
+	case 3:
+		return newStream(toolUse("approval-1", approvaltools.ToolName, map[string]any{
+			"action":     messagetools.SendToolName,
+			"reason":     "sending an urgent customer update requires approval",
+			"tool_input": sendInput(),
 		})), nil
+	case 4:
+		return newStream(toolUse("send-1", messagetools.SendToolName, sendInput())), nil
 	default:
 		return newStream(model.StreamEvent{
 			Kind: model.StreamText,
-			Text: "Morning briefing: urgent change first, your design review is at 09:00 UTC in Room 5A, and Jordan says the flight moved to 3:30 PM so bring your passport.",
+			Text: "Scheduled inbox triage sent the urgent Acme reply and recorded the occurrence so the same hourly trigger does not run twice.",
 		}), nil
+	}
+}
+
+func sendInput() map[string]any {
+	return map[string]any{
+		"thread_id": "thread-1",
+		"body":      "Thanks, Casey. We are treating this as urgent and I will send you the next update by 14:00 UTC today.",
+		"recipients": []map[string]any{
+			{"name": "Casey", "address": "casey@acme.example"},
+		},
 	}
 }
 
