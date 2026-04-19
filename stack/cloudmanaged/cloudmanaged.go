@@ -152,6 +152,11 @@ func (s Stack) Hooks() *hook.Runner {
 	return s.options.Hooks
 }
 
+// RunStore returns the configured durable managed-run backend, if any.
+func (s Stack) RunStore() RunStore {
+	return s.runs
+}
+
 func (s Stack) optionsForTenant(scope tenant.Scope) memaxagent.Options {
 	opts := s.options
 	opts.Tenant = scope.Clone()

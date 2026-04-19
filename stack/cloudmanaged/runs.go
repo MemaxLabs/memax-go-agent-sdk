@@ -31,6 +31,9 @@ var (
 	// ErrRunStoreHeartbeatUnsupported reports that stale-run failure handling
 	// needs a store that persists worker heartbeats.
 	ErrRunStoreHeartbeatUnsupported = errors.New("cloudmanaged run store does not support worker heartbeats")
+	// ErrRunQueueEmpty reports that no queued durable run is currently available
+	// for discovery.
+	ErrRunQueueEmpty = errors.New("cloudmanaged run queue is empty")
 )
 
 // RunStatus is one durable managed-run lifecycle state.
@@ -111,6 +114,13 @@ type RunStoreWithClaim interface {
 type RunStoreWithHeartbeat interface {
 	HeartbeatRun(context.Context, string, string) (RunRecord, error)
 	FailStaleRuns(context.Context, time.Time, string) ([]RunRecord, error)
+}
+
+// RunStoreWithNextQueued discovers the next queued durable run without
+// claiming it. This keeps host-owned remote dispatch discovery separate from
+// ExecuteRun's atomic claim-and-run boundary.
+type RunStoreWithNextQueued interface {
+	NextQueuedRun(context.Context) (RunRecord, error)
 }
 
 // WorkerOptions configure one explicit worker-side execution attempt.
@@ -214,6 +224,32 @@ func (s *MemoryRunStore) GetRun(_ context.Context, id string) (RunRecord, error)
 		return RunRecord{}, ErrRunNotFound
 	}
 	return cloneRunRecord(record), nil
+}
+
+// NextQueuedRun implements RunStoreWithNextQueued.
+func (s *MemoryRunStore) NextQueuedRun(_ context.Context) (RunRecord, error) {
+	if s == nil {
+		return RunRecord{}, fmt.Errorf("memory run store is nil")
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var (
+		selected RunRecord
+		found    bool
+	)
+	for _, record := range s.runs {
+		if record.Status != RunStatusQueued {
+			continue
+		}
+		if !found || record.CreatedAt.Before(selected.CreatedAt) || (record.CreatedAt.Equal(selected.CreatedAt) && record.ID < selected.ID) {
+			selected = record
+			found = true
+		}
+	}
+	if !found {
+		return RunRecord{}, ErrRunQueueEmpty
+	}
+	return cloneRunRecord(selected), nil
 }
 
 // ClaimRun implements RunStoreWithClaim.

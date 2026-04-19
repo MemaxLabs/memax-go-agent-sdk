@@ -173,6 +173,36 @@ func (s *Store) GetRun(ctx context.Context, id string) (cloudmanaged.RunRecord, 
 	return s.getRunConn(ctx, conn, id)
 }
 
+// NextQueuedRun implements cloudmanaged.RunStoreWithNextQueued.
+func (s *Store) NextQueuedRun(ctx context.Context) (cloudmanaged.RunRecord, error) {
+	if err := contextError(ctx); err != nil {
+		return cloudmanaged.RunRecord{}, err
+	}
+	if s == nil {
+		return cloudmanaged.RunRecord{}, fmt.Errorf("sqlite run store is nil")
+	}
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return cloudmanaged.RunRecord{}, fmt.Errorf("acquire sqlite run connection: %w", err)
+	}
+	defer conn.Close()
+	var id string
+	err = conn.QueryRowContext(ctx, `
+		SELECT id
+		FROM memax_cloudmanaged_runs
+		WHERE status = ?
+		ORDER BY created_at_unix_ms ASC, id ASC
+		LIMIT 1
+	`, string(cloudmanaged.RunStatusQueued)).Scan(&id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return cloudmanaged.RunRecord{}, cloudmanaged.ErrRunQueueEmpty
+		}
+		return cloudmanaged.RunRecord{}, fmt.Errorf("query next queued sqlite managed run: %w", err)
+	}
+	return s.getRunConn(ctx, conn, id)
+}
+
 // ClaimRun implements cloudmanaged.RunStoreWithClaim.
 func (s *Store) ClaimRun(ctx context.Context, id, workerID string) (cloudmanaged.RunRecord, error) {
 	if err := contextError(ctx); err != nil {

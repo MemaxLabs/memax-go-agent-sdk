@@ -71,6 +71,77 @@ func TestHTTPPoolClaimNoRunAvailable(t *testing.T) {
 	}
 }
 
+func TestClaimHandlerServesNextQueuedRun(t *testing.T) {
+	t.Parallel()
+
+	store := cloudmanaged.NewMemoryRunStore()
+	first, err := store.CreateRun(context.Background(), cloudmanaged.CreateRunRequest{
+		Prompt: "first",
+		Tenant: tenant.Scope{ID: "tenant-1", SubjectID: "user-1"},
+	})
+	if err != nil {
+		t.Fatalf("CreateRun(first) error = %v", err)
+	}
+	second, err := store.CreateRun(context.Background(), cloudmanaged.CreateRunRequest{
+		Prompt: "second",
+		Tenant: tenant.Scope{ID: "tenant-1", SubjectID: "user-1"},
+	})
+	if err != nil {
+		t.Fatalf("CreateRun(second) error = %v", err)
+	}
+
+	handler, err := ClaimHandler(store)
+	if err != nil {
+		t.Fatalf("ClaimHandler() error = %v", err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	pool, err := NewHTTPPool(server.URL)
+	if err != nil {
+		t.Fatalf("NewHTTPPool() error = %v", err)
+	}
+	got, err := pool.Claim(context.Background())
+	if err != nil {
+		t.Fatalf("Claim() error = %v", err)
+	}
+	if got.ID != first.ID || got.Prompt != "first" {
+		t.Fatalf("Claim() = %#v, want first queued record %#v", got, first)
+	}
+
+	if _, err := store.ClaimRun(context.Background(), first.ID, "worker-1"); err != nil {
+		t.Fatalf("ClaimRun(first) error = %v", err)
+	}
+	got, err = pool.Claim(context.Background())
+	if err != nil {
+		t.Fatalf("Claim(second) error = %v", err)
+	}
+	if got.ID != second.ID || got.Prompt != "second" {
+		t.Fatalf("Claim(second) = %#v, want second queued record %#v", got, second)
+	}
+}
+
+func TestClaimHandlerNoQueuedRun(t *testing.T) {
+	t.Parallel()
+
+	store := cloudmanaged.NewMemoryRunStore()
+	handler, err := ClaimHandler(store)
+	if err != nil {
+		t.Fatalf("ClaimHandler() error = %v", err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	pool, err := NewHTTPPool(server.URL)
+	if err != nil {
+		t.Fatalf("NewHTTPPool() error = %v", err)
+	}
+	_, err = pool.Claim(context.Background())
+	if !errors.Is(err, ErrNoRunAvailable) {
+		t.Fatalf("Claim() error = %v, want ErrNoRunAvailable", err)
+	}
+}
+
 func TestRunOnceExecutesQueuedRun(t *testing.T) {
 	t.Parallel()
 
@@ -132,6 +203,14 @@ func TestRunOnceExecutesQueuedRun(t *testing.T) {
 	}
 }
 
+func TestClaimHandlerRequiresQueuedRunDiscovery(t *testing.T) {
+	t.Parallel()
+
+	if _, err := ClaimHandler(staticRunStore{}); err == nil {
+		t.Fatalf("ClaimHandler() error = nil, want unsupported store error")
+	}
+}
+
 func TestRunOnceTreatsClaimRaceAsNoWork(t *testing.T) {
 	t.Parallel()
 
@@ -164,4 +243,18 @@ type executeFunc func(context.Context, string, cloudmanaged.WorkerOptions) (clou
 
 func (fn executeFunc) ExecuteRun(ctx context.Context, runID string, options cloudmanaged.WorkerOptions) (cloudmanaged.RunRecord, error) {
 	return fn(ctx, runID, options)
+}
+
+type staticRunStore struct{}
+
+func (staticRunStore) CreateRun(context.Context, cloudmanaged.CreateRunRequest) (cloudmanaged.RunRecord, error) {
+	return cloudmanaged.RunRecord{}, nil
+}
+
+func (staticRunStore) UpdateRun(context.Context, cloudmanaged.RunUpdate) (cloudmanaged.RunRecord, error) {
+	return cloudmanaged.RunRecord{}, nil
+}
+
+func (staticRunStore) GetRun(context.Context, string) (cloudmanaged.RunRecord, error) {
+	return cloudmanaged.RunRecord{}, nil
 }

@@ -1025,6 +1025,57 @@ func TestMemoryRunStoreClaimHeartbeatAndFailStaleRuns(t *testing.T) {
 	}
 }
 
+func TestMemoryRunStoreNextQueuedRun(t *testing.T) {
+	t.Parallel()
+
+	store := NewMemoryRunStore()
+	first, err := store.CreateRun(context.Background(), CreateRunRequest{
+		Prompt: "first",
+		Tenant: tenant.Scope{ID: "tenant-1", SubjectID: "user-1"},
+	})
+	if err != nil {
+		t.Fatalf("CreateRun(first) error = %v", err)
+	}
+	second, err := store.CreateRun(context.Background(), CreateRunRequest{
+		Prompt: "second",
+		Tenant: tenant.Scope{ID: "tenant-1", SubjectID: "user-1"},
+	})
+	if err != nil {
+		t.Fatalf("CreateRun(second) error = %v", err)
+	}
+	got, err := store.NextQueuedRun(context.Background())
+	if err != nil {
+		t.Fatalf("NextQueuedRun() error = %v", err)
+	}
+	wantFirst := first
+	if second.CreatedAt.Before(first.CreatedAt) || (second.CreatedAt.Equal(first.CreatedAt) && second.ID < first.ID) {
+		wantFirst = second
+	}
+	if got.ID != wantFirst.ID {
+		t.Fatalf("NextQueuedRun() = %#v, want first queued record %#v", got, wantFirst)
+	}
+	if _, err := store.ClaimRun(context.Background(), wantFirst.ID, "worker-1"); err != nil {
+		t.Fatalf("ClaimRun(first) error = %v", err)
+	}
+	got, err = store.NextQueuedRun(context.Background())
+	if err != nil {
+		t.Fatalf("NextQueuedRun(second) error = %v", err)
+	}
+	wantSecond := second
+	if wantFirst.ID == second.ID {
+		wantSecond = first
+	}
+	if got.ID != wantSecond.ID {
+		t.Fatalf("NextQueuedRun(second) = %#v, want second queued record %#v", got, wantSecond)
+	}
+	if _, err := store.ClaimRun(context.Background(), wantSecond.ID, "worker-1"); err != nil {
+		t.Fatalf("ClaimRun(second) error = %v", err)
+	}
+	if _, err := store.NextQueuedRun(context.Background()); !errors.Is(err, ErrRunQueueEmpty) {
+		t.Fatalf("NextQueuedRun(empty) error = %v, want ErrRunQueueEmpty", err)
+	}
+}
+
 func TestStackWatchStaleRunsFailsExpiredRunAndEmitsLifecycle(t *testing.T) {
 	t.Parallel()
 
