@@ -118,7 +118,9 @@ reserve contract on the Redis server side and applies TTL-backed cleanup as a
 crash-safety net. A durable SQL path now also exists through
 `stack/cloudmanaged/sqlitestore`, which keeps the same quota contract over
 SQLite with `BEGIN IMMEDIATE` transactions plus an explicit prune helper for
-stale sessions. Managed audit sinks can now also be wrapped through an async
+stale sessions, and now also implements the durable `RunStore` seam so hosts
+can persist managed-run lifecycle in the same database. Managed audit sinks can
+now also be wrapped through an async
 cloudmanaged sink adapter, so hosts can choose bounded buffered delivery
 without changing the event-observer or sink interfaces underneath. Durable
 managed background runs now also sit behind a host-owned `RunStore` seam in

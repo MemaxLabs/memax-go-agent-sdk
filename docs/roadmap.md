@@ -150,7 +150,8 @@ system prompt.
   host-owned quota state now sits behind a `QuotaStore` seam with the
   reference `MemoryQuotaStore`, and the first shared backend now exists through
   `stack/cloudmanaged/redistore`. An initial durable SQL backend now also
-  exists through `stack/cloudmanaged/sqlitestore`. Initial async audit sink
+  exists through `stack/cloudmanaged/sqlitestore`, which now also implements
+  the durable `RunStore` seam for embedded managed-run lifecycle. Initial async audit sink
   wrapping now exists for buffered non-inline audit delivery. Initial durable
   managed background runs now also sit behind a host-owned `RunStore` seam
   through `stack/cloudmanaged`, with reference in-memory tracking plus explicit

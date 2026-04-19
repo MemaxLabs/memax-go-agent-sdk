@@ -145,7 +145,10 @@ transactions plus an explicit stale-session prune helper for hosts that prefer
 an explicit `RunStore` seam in `stack/cloudmanaged`, with a reference
 `MemoryRunStore` plus `StartRun`, `GetRun`, and `CancelRun` helpers so hosts
 can track queued/running/succeeded/failed/canceled lifecycle without inventing
-their own job wrapper around `QueryAsync`.
+their own job wrapper around `QueryAsync`. The same
+`stack/cloudmanaged/sqlitestore` package now also implements `RunStore`, so
+embedded managed hosts can keep quota state and durable run lifecycle in one
+SQLite database.
 
 `stack/personal` now exposes named presets so hosts can start from a
 personal-intelligence workflow profile and then attach only the host-owned

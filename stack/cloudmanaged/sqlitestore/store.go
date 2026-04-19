@@ -1,16 +1,22 @@
-// Package sqlitestore provides a durable SQLite-backed cloudmanaged.QuotaStore.
+// Package sqlitestore provides durable SQLite-backed cloudmanaged stores.
 //
 // The store preserves the QuotaStore atomicity contract with SQLite
 // BEGIN IMMEDIATE transactions, so concurrent reservations serialize before the
 // limit check and update are applied. Unlike the Redis-backed store, SQLite
 // does not apply TTL expiry automatically; normal session-end cleanup should
 // call ResetSession, and hosts can use host-scheduled PruneBefore calls to
-// clear stale rows from crashed or abandoned runs.
+// clear stale rows from crashed or abandoned runs. The same Store also
+// implements cloudmanaged.RunStore so quota state and durable managed-run
+// lifecycle can live in one embedded database.
 package sqlitestore
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -19,12 +25,12 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/tenant"
 )
 
-// Store is a SQLite-backed cloudmanaged.QuotaStore.
+// Store is a SQLite-backed cloudmanaged.QuotaStore and cloudmanaged.RunStore.
 type Store struct {
 	db *sql.DB
 }
 
-// New initializes and returns a SQLite-backed quota store.
+// New initializes and returns a SQLite-backed managed store.
 func New(ctx context.Context, db *sql.DB) (*Store, error) {
 	if db == nil {
 		return nil, fmt.Errorf("sqlite quota store db is required")
@@ -34,6 +40,126 @@ func New(ctx context.Context, db *sql.DB) (*Store, error) {
 		return nil, err
 	}
 	return store, nil
+}
+
+// CreateRun implements cloudmanaged.RunStore.
+func (s *Store) CreateRun(ctx context.Context, req cloudmanaged.CreateRunRequest) (cloudmanaged.RunRecord, error) {
+	if err := contextError(ctx); err != nil {
+		return cloudmanaged.RunRecord{}, err
+	}
+	if s == nil {
+		return cloudmanaged.RunRecord{}, fmt.Errorf("sqlite run store is nil")
+	}
+	id, err := newRunID()
+	if err != nil {
+		return cloudmanaged.RunRecord{}, err
+	}
+	attrs, err := marshalAttributes(req.Tenant.Attributes)
+	if err != nil {
+		return cloudmanaged.RunRecord{}, fmt.Errorf("marshal sqlite run tenant attributes: %w", err)
+	}
+	now := time.Now().UTC()
+	record := cloudmanaged.RunRecord{
+		ID:        id,
+		Status:    cloudmanaged.RunStatusQueued,
+		Prompt:    req.Prompt,
+		Tenant:    req.Tenant.Clone(),
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO memax_cloudmanaged_runs (
+			id, status, prompt, tenant_id, subject_id, tenant_attributes_json,
+			created_at_unix_ms, updated_at_unix_ms
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`, record.ID, string(record.Status), record.Prompt, record.Tenant.ID, record.Tenant.SubjectID, attrs, unixMillis(now), unixMillis(now))
+	if err != nil {
+		return cloudmanaged.RunRecord{}, fmt.Errorf("create sqlite managed run: %w", err)
+	}
+	return record, nil
+}
+
+// UpdateRun implements cloudmanaged.RunStore.
+func (s *Store) UpdateRun(ctx context.Context, update cloudmanaged.RunUpdate) (cloudmanaged.RunRecord, error) {
+	if err := contextError(ctx); err != nil {
+		return cloudmanaged.RunRecord{}, err
+	}
+	if s == nil {
+		return cloudmanaged.RunRecord{}, fmt.Errorf("sqlite run store is nil")
+	}
+	if update.ID == "" {
+		return cloudmanaged.RunRecord{}, fmt.Errorf("run id is required")
+	}
+
+	var record cloudmanaged.RunRecord
+	err := s.withImmediateTx(ctx, func(conn *sql.Conn) error {
+		current, err := s.getRunConn(ctx, conn, update.ID)
+		if err != nil {
+			return err
+		}
+		if update.Status != "" {
+			current.Status = update.Status
+			if update.Status == cloudmanaged.RunStatusRunning && current.StartedAt.IsZero() {
+				current.StartedAt = time.Now().UTC()
+			}
+		}
+		if update.SessionID != "" {
+			current.SessionID = update.SessionID
+		}
+		if update.ParentSessionID != "" {
+			current.ParentSessionID = update.ParentSessionID
+		}
+		if update.Result != nil {
+			current.Result = *update.Result
+		}
+		if update.Error != nil {
+			current.Error = *update.Error
+		}
+		if update.CompletedAt != nil {
+			current.CompletedAt = update.CompletedAt.UTC()
+		}
+		current.UpdatedAt = time.Now().UTC()
+
+		var startedAt any
+		if !current.StartedAt.IsZero() {
+			startedAt = unixMillis(current.StartedAt)
+		}
+		var completedAt any
+		if !current.CompletedAt.IsZero() {
+			completedAt = unixMillis(current.CompletedAt)
+		}
+		_, err = conn.ExecContext(ctx, `
+			UPDATE memax_cloudmanaged_runs
+			SET status = ?, session_id = ?, parent_session_id = ?, result = ?, error = ?,
+				started_at_unix_ms = ?, completed_at_unix_ms = ?, updated_at_unix_ms = ?
+			WHERE id = ?
+		`, string(current.Status), current.SessionID, current.ParentSessionID, current.Result, current.Error, startedAt, completedAt, unixMillis(current.UpdatedAt), current.ID)
+		if err != nil {
+			return fmt.Errorf("update sqlite managed run: %w", err)
+		}
+		record = current
+		return nil
+	})
+	if err != nil {
+		return cloudmanaged.RunRecord{}, err
+	}
+	return record, nil
+}
+
+// GetRun implements cloudmanaged.RunStore.
+func (s *Store) GetRun(ctx context.Context, id string) (cloudmanaged.RunRecord, error) {
+	if err := contextError(ctx); err != nil {
+		return cloudmanaged.RunRecord{}, err
+	}
+	if s == nil {
+		return cloudmanaged.RunRecord{}, fmt.Errorf("sqlite run store is nil")
+	}
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return cloudmanaged.RunRecord{}, fmt.Errorf("acquire sqlite run connection: %w", err)
+	}
+	defer conn.Close()
+	return s.getRunConn(ctx, conn, id)
 }
 
 // EnsureSession implements cloudmanaged.QuotaStore.
@@ -191,6 +317,34 @@ func (s *Store) init(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("init sqlite quota updated index: %w", err)
 	}
+	_, err = s.db.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS memax_cloudmanaged_runs (
+			id TEXT PRIMARY KEY,
+			status TEXT NOT NULL,
+			prompt TEXT NOT NULL,
+			tenant_id TEXT NOT NULL,
+			subject_id TEXT NOT NULL,
+			tenant_attributes_json TEXT NOT NULL,
+			session_id TEXT NOT NULL DEFAULT '',
+			parent_session_id TEXT NOT NULL DEFAULT '',
+			result TEXT NOT NULL DEFAULT '',
+			error TEXT NOT NULL DEFAULT '',
+			created_at_unix_ms INTEGER NOT NULL,
+			started_at_unix_ms INTEGER,
+			completed_at_unix_ms INTEGER,
+			updated_at_unix_ms INTEGER NOT NULL
+		)
+	`)
+	if err != nil {
+		return fmt.Errorf("init sqlite run schema: %w", err)
+	}
+	_, err = s.db.ExecContext(ctx, `
+		CREATE INDEX IF NOT EXISTS memax_cloudmanaged_runs_updated_idx
+		ON memax_cloudmanaged_runs(updated_at_unix_ms)
+	`)
+	if err != nil {
+		return fmt.Errorf("init sqlite run updated index: %w", err)
+	}
 	return nil
 }
 
@@ -256,4 +410,107 @@ func contextError(ctx context.Context) error {
 		return nil
 	}
 	return ctx.Err()
+}
+
+func (s *Store) getRunConn(ctx context.Context, conn *sql.Conn, id string) (cloudmanaged.RunRecord, error) {
+	if id == "" {
+		return cloudmanaged.RunRecord{}, fmt.Errorf("run id is required")
+	}
+	var (
+		record            cloudmanaged.RunRecord
+		status            string
+		tenantAttrsJSON   string
+		startedAtUnixMS   sql.NullInt64
+		completedAtUnixMS sql.NullInt64
+	)
+	err := conn.QueryRowContext(ctx, `
+		SELECT id, status, prompt, tenant_id, subject_id, tenant_attributes_json,
+			session_id, parent_session_id, result, error, created_at_unix_ms,
+			started_at_unix_ms, completed_at_unix_ms, updated_at_unix_ms
+		FROM memax_cloudmanaged_runs
+		WHERE id = ?
+		LIMIT 1
+	`, id).Scan(
+		&record.ID,
+		&status,
+		&record.Prompt,
+		&record.Tenant.ID,
+		&record.Tenant.SubjectID,
+		&tenantAttrsJSON,
+		&record.SessionID,
+		&record.ParentSessionID,
+		&record.Result,
+		&record.Error,
+		(*unixMillisTime)(&record.CreatedAt),
+		&startedAtUnixMS,
+		&completedAtUnixMS,
+		(*unixMillisTime)(&record.UpdatedAt),
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return cloudmanaged.RunRecord{}, cloudmanaged.ErrRunNotFound
+		}
+		return cloudmanaged.RunRecord{}, fmt.Errorf("get sqlite managed run %s: %w", id, err)
+	}
+	record.Status = cloudmanaged.RunStatus(status)
+	attrs, err := unmarshalAttributes(tenantAttrsJSON)
+	if err != nil {
+		return cloudmanaged.RunRecord{}, fmt.Errorf("decode sqlite run tenant attributes: %w", err)
+	}
+	record.Tenant.Attributes = attrs
+	if startedAtUnixMS.Valid {
+		record.StartedAt = time.UnixMilli(startedAtUnixMS.Int64).UTC()
+	}
+	if completedAtUnixMS.Valid {
+		record.CompletedAt = time.UnixMilli(completedAtUnixMS.Int64).UTC()
+	}
+	return record, nil
+}
+
+func marshalAttributes(attributes map[string]string) (string, error) {
+	if len(attributes) == 0 {
+		return "{}", nil
+	}
+	data, err := json.Marshal(attributes)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+func unmarshalAttributes(raw string) (map[string]string, error) {
+	if raw == "" {
+		return nil, nil
+	}
+	attributes := map[string]string{}
+	if err := json.Unmarshal([]byte(raw), &attributes); err != nil {
+		return nil, err
+	}
+	if len(attributes) == 0 {
+		return nil, nil
+	}
+	return attributes, nil
+}
+
+func newRunID() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("generate sqlite run id: %w", err)
+	}
+	return hex.EncodeToString(b[:]), nil
+}
+
+type unixMillisTime time.Time
+
+func (t *unixMillisTime) Scan(value any) error {
+	switch v := value.(type) {
+	case int64:
+		*t = unixMillisTime(time.UnixMilli(v).UTC())
+		return nil
+	case nil:
+		*t = unixMillisTime(time.Time{})
+		return nil
+	default:
+		return fmt.Errorf("scan unix millis time: unsupported %T", value)
+	}
 }

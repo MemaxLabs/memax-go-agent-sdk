@@ -3,6 +3,7 @@ package sqlitestore
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -120,6 +121,72 @@ func TestStorePruneBeforeRemovesStaleSessions(t *testing.T) {
 	}
 	if used, granted, err := store.Reserve(context.Background(), scope, "session-1", cloudmanaged.QuotaCounterModelRequests, 1); err != nil || !granted || used != 1 {
 		t.Fatalf("Reserve(after prune) = (%d, %t, %v), want (1, true, nil)", used, granted, err)
+	}
+}
+
+func TestStoreCreateUpdateAndGetRun(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	scope := tenant.Scope{ID: "tenant-1", SubjectID: "user-1", Attributes: map[string]string{"plan": "managed"}}
+	record, err := store.CreateRun(context.Background(), cloudmanaged.CreateRunRequest{
+		Prompt: "Read README.md",
+		Tenant: scope,
+	})
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	if record.ID == "" || record.Status != cloudmanaged.RunStatusQueued {
+		t.Fatalf("CreateRun() = %#v, want queued record with id", record)
+	}
+
+	result := "done"
+	completedAt := time.Now().UTC().Truncate(time.Millisecond)
+	record, err = store.UpdateRun(context.Background(), cloudmanaged.RunUpdate{
+		ID:        record.ID,
+		Status:    cloudmanaged.RunStatusRunning,
+		SessionID: "session-1",
+	})
+	if err != nil {
+		t.Fatalf("UpdateRun(running) error = %v", err)
+	}
+	if record.Status != cloudmanaged.RunStatusRunning || record.StartedAt.IsZero() {
+		t.Fatalf("UpdateRun(running) = %#v, want running record with started timestamp", record)
+	}
+
+	record, err = store.UpdateRun(context.Background(), cloudmanaged.RunUpdate{
+		ID:          record.ID,
+		Status:      cloudmanaged.RunStatusSucceeded,
+		SessionID:   "session-1",
+		Result:      &result,
+		CompletedAt: &completedAt,
+	})
+	if err != nil {
+		t.Fatalf("UpdateRun() error = %v", err)
+	}
+	if record.Status != cloudmanaged.RunStatusSucceeded || record.SessionID != "session-1" || record.Result != "done" {
+		t.Fatalf("UpdateRun() = %#v, want succeeded record with session/result", record)
+	}
+
+	got, err := store.GetRun(context.Background(), record.ID)
+	if err != nil {
+		t.Fatalf("GetRun() error = %v", err)
+	}
+	if got.Tenant.ID != scope.ID || got.Tenant.SubjectID != scope.SubjectID || got.Tenant.Attributes["plan"] != "managed" {
+		t.Fatalf("GetRun() = %#v, want stored tenant scope", got)
+	}
+	if got.CompletedAt.IsZero() {
+		t.Fatalf("GetRun() = %#v, want completed timestamp", got)
+	}
+}
+
+func TestStoreGetRunReturnsNotFound(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	_, err := store.GetRun(context.Background(), "missing")
+	if !errors.Is(err, cloudmanaged.ErrRunNotFound) {
+		t.Fatalf("GetRun(missing) error = %v, want ErrRunNotFound", err)
 	}
 }
 
