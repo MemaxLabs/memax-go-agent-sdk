@@ -162,7 +162,7 @@ preset contract, default policy posture, and authoritative eval scenario names.
 
 | Preset | Intended workflow | Eval-backed coverage |
 | --- | --- | --- |
-| `personal_assistant` | careful personal assistance with durable recall plus approval-gated memory, note, message, and schedule writes | `personal_preset_personal_assistant`, `personal_preset_personal_assistant_memory_approval_recovery`, `personal_preset_personal_assistant_note_recall`, `personal_preset_personal_assistant_message_recall`, `personal_preset_personal_assistant_message_approval_recovery`, `personal_preset_personal_assistant_schedule_recall`, `personal_preset_personal_assistant_schedule_approval_recovery`, `personal_preset_personal_assistant_daily_briefing` |
+| `personal_assistant` | careful personal assistance with durable recall plus approval-gated memory, note, message, and schedule writes | `personal_preset_personal_assistant`, `personal_preset_personal_assistant_memory_approval_recovery`, `personal_preset_personal_assistant_note_recall`, `personal_preset_personal_assistant_message_recall`, `personal_preset_personal_assistant_message_approval_recovery`, `personal_preset_personal_assistant_inbox_triage_reply_followup`, `personal_preset_personal_assistant_schedule_recall`, `personal_preset_personal_assistant_schedule_approval_recovery`, `personal_preset_personal_assistant_daily_briefing` |
 | `research_partner` | longer-horizon personal research and scoped delegation | `personal_preset_research_partner` |
 
 The first real remote inbox backend for the personal stack now exists through

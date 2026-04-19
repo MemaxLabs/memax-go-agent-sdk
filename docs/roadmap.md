@@ -172,9 +172,10 @@ system prompt.
   scoped-delegation wiring, plus named workflow presets
   (`personal_assistant`, `research_partner`). Initial deterministic eval
   coverage now exercises durable-memory approval recovery, note-first recall,
-  message-thread recall, message approval recovery, schedule recall,
-  schedule-approval recovery, and scoped delegation with parent-visible task
-  progress. An initial durable `scheduling/sqlitestore` adapter now provides a
+  message-thread recall, message approval recovery, inbox triage with reply
+  recovery plus follow-up creation, schedule recall, schedule-approval
+  recovery, and scoped delegation with parent-visible task progress. An
+  initial durable `scheduling/sqlitestore` adapter now provides a
   concrete local calendar backend with metadata-first search semantics, and
   initial `scheduling/caldavclient` plus `scheduling/caldavstore` packages and
   `scheduling/googlecalendarclient` plus `scheduling/googlecalendarstore`
