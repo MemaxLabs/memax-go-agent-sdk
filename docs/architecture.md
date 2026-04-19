@@ -580,7 +580,10 @@ optional outbound mutation capability. The optional `toolkit/messagetools`
 package exposes `search_message_threads`, `read_message_thread`, and
 `send_message`, so recall and reply flows stay progressive, transcript-visible,
 and approval-gated through normal tool and hook policy instead of hidden prompt
-stuffing or direct transport access.
+stuffing or direct transport access. Initial `messaging/jmapclient` and
+`messaging/jmapstore` packages now provide a metadata-first remote inbox
+adapter over JMAP mail, using thread-collapsed metadata search and explicit
+full-thread reads instead of stuffing email bodies into prompt context.
 
 `scheduling` provides the analogous seam for host-owned calendar and scheduling
 backends. `scheduling.Searcher` returns metadata-first event results suited for

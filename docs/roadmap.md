@@ -180,9 +180,12 @@ system prompt.
   `scheduling/googlecalendarclient` plus `scheduling/googlecalendarstore`
   packages now provide parallel remote calendar adapter seams over both XML and
   JSON backends, each preserving metadata-first search and optimistic
-  concurrency for event mutations. Next steps are broader host adapters for
-  external personal systems plus more adversarial preset suites for
-  privacy-sensitive and long-horizon personal workflows.
+  concurrency for event mutations. Initial `messaging/jmapclient` plus
+  `messaging/jmapstore` packages now provide the first real remote inbox
+  adapter for the personal stack, preserving metadata-first thread discovery
+  over JMAP mail instead of hidden full-message prompt injection. Next steps
+  are broader host adapters for external personal systems plus more adversarial
+  preset suites for privacy-sensitive and long-horizon personal workflows.
 - Add `stack/cloudmanaged` for multi-tenant, server-embedded, remote-execution
   products with durable jobs, tenancy-aware policy, quotas, audit hooks, and
   managed-agent DX.
