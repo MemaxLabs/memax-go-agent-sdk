@@ -19,12 +19,15 @@ package cloudmanaged
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"sync/atomic"
 
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
 	"github.com/MemaxLabs/memax-go-agent-sdk/hook"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/session"
+	"github.com/MemaxLabs/memax-go-agent-sdk/telemetry"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tenant"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
 )
@@ -165,10 +168,30 @@ type QuotaValidator struct {
 	maxModelRequests   int
 	maxToolUses        int
 	store              QuotaStore
+	storeErrorPolicy   QuotaStoreErrorPolicy
+	storeErrorsAllowed atomic.Int64
+	meter              telemetry.Meter
 }
 
 // QuotaValidatorOption configures a QuotaValidator.
 type QuotaValidatorOption func(*QuotaValidator)
+
+// QuotaStoreErrorPolicy controls how QuotaValidator handles non-context store
+// failures.
+type QuotaStoreErrorPolicy string
+
+const (
+	// QuotaStoreFailClosed denies the run when quota store access fails.
+	QuotaStoreFailClosed QuotaStoreErrorPolicy = "fail_closed"
+	// QuotaStoreAllowOnError allows the run to continue when quota store access
+	// fails for reasons other than caller cancellation or deadline expiry.
+	QuotaStoreAllowOnError QuotaStoreErrorPolicy = "allow_on_error"
+)
+
+// QuotaValidatorStats reports validator-local fallback counters.
+type QuotaValidatorStats struct {
+	StoreErrorAllowedCount int64
+}
 
 // WithRequiredTenantScope requires non-zero tenant scope on every validated
 // boundary.
@@ -176,6 +199,22 @@ func WithRequiredTenantScope() QuotaValidatorOption {
 	return func(v *QuotaValidator) {
 		if v != nil {
 			v.requireTenantScope = true
+		}
+	}
+}
+
+// WithQuotaStoreErrorPolicy overrides how QuotaValidator handles non-context
+// store failures. Empty keeps the default fail-closed behavior.
+func WithQuotaStoreErrorPolicy(policy QuotaStoreErrorPolicy) QuotaValidatorOption {
+	return func(v *QuotaValidator) {
+		if v == nil {
+			return
+		}
+		switch policy {
+		case "":
+			v.storeErrorPolicy = QuotaStoreFailClosed
+		case QuotaStoreFailClosed, QuotaStoreAllowOnError:
+			v.storeErrorPolicy = policy
 		}
 	}
 }
@@ -196,6 +235,8 @@ func NewQuotaValidatorWithStore(store QuotaStore, quota Quota, options ...QuotaV
 		maxModelRequests: quota.MaxModelRequests,
 		maxToolUses:      quota.MaxToolUses,
 		store:            store,
+		storeErrorPolicy: QuotaStoreFailClosed,
+		meter:            telemetry.NoopMeter{},
 	}
 	for _, option := range options {
 		if option != nil {
@@ -203,6 +244,16 @@ func NewQuotaValidatorWithStore(store QuotaStore, quota Quota, options ...QuotaV
 		}
 	}
 	return v
+}
+
+// Stats returns validator-local fallback counters.
+func (v *QuotaValidator) Stats() QuotaValidatorStats {
+	if v == nil {
+		return QuotaValidatorStats{}
+	}
+	return QuotaValidatorStats{
+		StoreErrorAllowedCount: v.storeErrorsAllowed.Load(),
+	}
 }
 
 // Validate implements tenant.Validator.
@@ -256,7 +307,12 @@ func (v *QuotaValidator) ensureSession(ctx context.Context, scope tenant.Scope, 
 	if v == nil || sessionID == "" || v.store == nil {
 		return nil
 	}
-	return v.store.EnsureSession(ctx, scope, sessionID)
+	err := v.store.EnsureSession(ctx, scope, sessionID)
+	return v.handleStoreError(ctx, tenant.Request{
+		Boundary:  tenant.BoundarySessionStart,
+		SessionID: sessionID,
+		Scope:     scope,
+	}, "ensure session quota state", err)
 }
 
 func (v *QuotaValidator) resetSession(ctx context.Context, scope tenant.Scope, sessionID string) error {
@@ -272,7 +328,11 @@ func (v *QuotaValidator) recordModelRequest(ctx context.Context, scope tenant.Sc
 	}
 	_, granted, err := v.store.Reserve(ctx, scope, sessionID, QuotaCounterModelRequests, v.maxModelRequests)
 	if err != nil {
-		return fmt.Errorf("reserve model request quota: %w", err)
+		return v.handleStoreError(ctx, tenant.Request{
+			Boundary:  tenant.BoundaryModelRequest,
+			SessionID: sessionID,
+			Scope:     scope,
+		}, "reserve model request quota", err)
 	}
 	if !granted {
 		return fmt.Errorf("tenant quota exceeded: max model requests reached (%d)", v.maxModelRequests)
@@ -286,7 +346,11 @@ func (v *QuotaValidator) recordToolUse(ctx context.Context, scope tenant.Scope, 
 	}
 	_, granted, err := v.store.Reserve(ctx, scope, sessionID, QuotaCounterToolUses, v.maxToolUses)
 	if err != nil {
-		return fmt.Errorf("reserve tool quota: %w", err)
+		return v.handleStoreError(ctx, tenant.Request{
+			Boundary:  tenant.BoundaryToolUse,
+			SessionID: sessionID,
+			Scope:     scope,
+		}, "reserve tool quota", err)
 	}
 	if !granted {
 		return fmt.Errorf("tenant quota exceeded: max tool uses reached (%d)", v.maxToolUses)
@@ -295,7 +359,7 @@ func (v *QuotaValidator) recordToolUse(ctx context.Context, scope tenant.Scope, 
 }
 
 func installTenantControls(opts *memaxagent.Options, policies Policies, store QuotaStore) error {
-	validator := newManagedValidator(policies, store)
+	validator := newManagedValidator(policies, store, opts.Meter)
 	if validator != nil {
 		opts.TenantValidator = combineValidators(opts.TenantValidator, validator)
 		for _, option := range validator.Options() {
@@ -311,15 +375,47 @@ func installTenantControls(opts *memaxagent.Options, policies Policies, store Qu
 	return nil
 }
 
-func newManagedValidator(policies Policies, store QuotaStore) *QuotaValidator {
+func newManagedValidator(policies Policies, store QuotaStore, meter telemetry.Meter) *QuotaValidator {
 	if !policies.RequireTenantScope && policies.Quota.IsZero() {
 		return nil
 	}
-	var options []QuotaValidatorOption
+	options := []QuotaValidatorOption{withQuotaMeter(meter)}
 	if policies.RequireTenantScope {
 		options = append(options, WithRequiredTenantScope())
 	}
 	return NewQuotaValidatorWithStore(store, policies.Quota, options...)
+}
+
+func (v *QuotaValidator) handleStoreError(ctx context.Context, req tenant.Request, operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	wrapped := fmt.Errorf("%s: %w", operation, err)
+	if v == nil || v.storeErrorPolicy != QuotaStoreAllowOnError {
+		return wrapped
+	}
+	v.storeErrorsAllowed.Add(1)
+	v.meter.Add(ctx, "memax.cloudmanaged.quota.store_errors_allowed", 1,
+		telemetry.String("memax.session_id", req.SessionID),
+		telemetry.String("memax.tenant.boundary", string(req.Boundary)),
+	)
+	return nil
+}
+
+func withQuotaMeter(meter telemetry.Meter) QuotaValidatorOption {
+	return func(v *QuotaValidator) {
+		if v == nil {
+			return
+		}
+		if meter == nil {
+			v.meter = telemetry.NoopMeter{}
+			return
+		}
+		v.meter = meter
+	}
 }
 
 func combineValidators(validators ...tenant.Validator) tenant.Validator {

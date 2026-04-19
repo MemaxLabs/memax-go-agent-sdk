@@ -15,6 +15,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/hook"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/session"
+	"github.com/MemaxLabs/memax-go-agent-sdk/telemetry"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tenant"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/subagents"
@@ -290,6 +291,96 @@ func TestNewUsesConfiguredQuotaStore(t *testing.T) {
 	}
 	if store.resetScope.ID != scope.ID || store.resetScope.SubjectID != scope.SubjectID {
 		t.Fatalf("reset scope = %#v, want tenant %q subject %q", store.resetScope, scope.ID, scope.SubjectID)
+	}
+}
+
+func TestQuotaValidatorFailClosedOnStoreErrorByDefault(t *testing.T) {
+	t.Parallel()
+
+	validator := NewQuotaValidatorWithStore(&quotaErrorStore{
+		reserveErr: errors.New("redis unavailable"),
+	}, Quota{MaxModelRequests: 1})
+	scope := tenant.Scope{ID: "tenant-1", SubjectID: "user-1"}
+	err := validator.Validate(context.Background(), tenant.Request{
+		Boundary:  tenant.BoundaryModelRequest,
+		SessionID: "session-1",
+		Scope:     scope,
+	})
+	if err == nil || !strings.Contains(err.Error(), "reserve model request quota") {
+		t.Fatalf("Validate() error = %v, want wrapped store error", err)
+	}
+	if stats := validator.Stats(); stats.StoreErrorAllowedCount != 0 {
+		t.Fatalf("Stats() = %#v, want no allowed store errors", stats)
+	}
+}
+
+func TestQuotaValidatorAllowOnErrorTracksFallbacks(t *testing.T) {
+	t.Parallel()
+
+	meter := &recordingMeter{}
+	validator := NewQuotaValidatorWithStore(&quotaErrorStore{
+		reserveErr: errors.New("redis unavailable"),
+	}, Quota{MaxModelRequests: 1},
+		WithQuotaStoreErrorPolicy(QuotaStoreAllowOnError),
+		withQuotaMeter(meter),
+	)
+	scope := tenant.Scope{ID: "tenant-1", SubjectID: "user-1"}
+	if err := validator.Validate(context.Background(), tenant.Request{
+		Boundary:  tenant.BoundaryModelRequest,
+		SessionID: "session-1",
+		Scope:     scope,
+	}); err != nil {
+		t.Fatalf("Validate() error = %v, want allowed fallback", err)
+	}
+	stats := validator.Stats()
+	if stats.StoreErrorAllowedCount != 1 {
+		t.Fatalf("Stats() = %#v, want one allowed store error", stats)
+	}
+	if len(meter.adds) != 1 || meter.adds[0].name != "memax.cloudmanaged.quota.store_errors_allowed" {
+		t.Fatalf("meter adds = %#v, want quota fallback counter", meter.adds)
+	}
+}
+
+func TestQuotaValidatorAllowOnErrorDoesNotSwallowContextErrors(t *testing.T) {
+	t.Parallel()
+
+	validator := NewQuotaValidatorWithStore(&quotaErrorStore{
+		reserveErr: context.DeadlineExceeded,
+	}, Quota{MaxModelRequests: 1},
+		WithQuotaStoreErrorPolicy(QuotaStoreAllowOnError),
+	)
+	scope := tenant.Scope{ID: "tenant-1", SubjectID: "user-1"}
+	err := validator.Validate(context.Background(), tenant.Request{
+		Boundary:  tenant.BoundaryModelRequest,
+		SessionID: "session-1",
+		Scope:     scope,
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Validate() error = %v, want deadline exceeded", err)
+	}
+	if stats := validator.Stats(); stats.StoreErrorAllowedCount != 0 {
+		t.Fatalf("Stats() = %#v, want no allowed store errors", stats)
+	}
+}
+
+func TestQuotaValidatorAllowOnErrorCoversSessionStart(t *testing.T) {
+	t.Parallel()
+
+	validator := NewQuotaValidatorWithStore(&quotaErrorStore{
+		ensureErr: errors.New("session backend unavailable"),
+	}, Quota{MaxModelRequests: 1},
+		WithQuotaStoreErrorPolicy(QuotaStoreAllowOnError),
+	)
+	scope := tenant.Scope{ID: "tenant-1", SubjectID: "user-1"}
+	if err := validator.Validate(context.Background(), tenant.Request{
+		Boundary:  tenant.BoundarySessionStart,
+		SessionID: "session-1",
+		Scope:     scope,
+	}); err != nil {
+		t.Fatalf("Validate(session start) error = %v, want allowed fallback", err)
+	}
+	if stats := validator.Stats(); stats.StoreErrorAllowedCount != 1 {
+		t.Fatalf("Stats() = %#v, want one allowed store error", stats)
 	}
 }
 
@@ -894,6 +985,27 @@ type quotaReserveCall struct {
 	limit     int
 }
 
+type recordedAdd struct {
+	name  string
+	value int64
+	attrs []telemetry.Attribute
+}
+
+type recordingMeter struct {
+	adds []recordedAdd
+}
+
+func (m *recordingMeter) Add(_ context.Context, name string, value int64, attrs ...telemetry.Attribute) {
+	if m == nil {
+		return
+	}
+	copied := make([]telemetry.Attribute, len(attrs))
+	copy(copied, attrs)
+	m.adds = append(m.adds, recordedAdd{name: name, value: value, attrs: copied})
+}
+
+func (m *recordingMeter) Record(context.Context, string, float64, ...telemetry.Attribute) {}
+
 type quotaSpyStore struct {
 	ensureCalls  int
 	resetCalls   int
@@ -919,6 +1031,36 @@ func (s *quotaSpyStore) ResetSession(_ context.Context, scope tenant.Scope, _ st
 	s.resetCalls++
 	s.resetScope = scope
 	return nil
+}
+
+type quotaErrorStore struct {
+	ensureErr  error
+	reserveErr error
+	resetErr   error
+}
+
+func (s *quotaErrorStore) EnsureSession(context.Context, tenant.Scope, string) error {
+	if s == nil {
+		return nil
+	}
+	return s.ensureErr
+}
+
+func (s *quotaErrorStore) Reserve(context.Context, tenant.Scope, string, QuotaCounter, int) (int, bool, error) {
+	if s == nil {
+		return 0, true, nil
+	}
+	if s.reserveErr != nil {
+		return 0, false, s.reserveErr
+	}
+	return 1, true, nil
+}
+
+func (s *quotaErrorStore) ResetSession(context.Context, tenant.Scope, string) error {
+	if s == nil {
+		return nil
+	}
+	return s.resetErr
 }
 
 func (m *quotaTestModel) Stream(_ context.Context, req model.Request) (model.Stream, error) {
