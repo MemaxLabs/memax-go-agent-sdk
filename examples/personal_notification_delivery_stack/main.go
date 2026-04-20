@@ -1,0 +1,330 @@
+package main
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"io"
+	"log"
+	"os"
+	"sync"
+	"time"
+
+	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
+	"github.com/MemaxLabs/memax-go-agent-sdk/model"
+	"github.com/MemaxLabs/memax-go-agent-sdk/stack/personal"
+	personalsqlitestore "github.com/MemaxLabs/memax-go-agent-sdk/stack/personal/sqlitestore"
+	_ "modernc.org/sqlite"
+)
+
+const notificationWorkerID = "push-worker-1"
+
+func main() {
+	if err := runExample(context.Background(), os.Stdout); err != nil {
+		log.Fatal(err)
+	}
+}
+
+// runExample walks through a host-owned scheduled-run notification delivery
+// worker. The SDK persists notification outbox, claim, retry, and ack state;
+// the actual delivery channel remains ordinary host code.
+func runExample(ctx context.Context, w io.Writer) error {
+	now := time.Date(2026, 4, 20, 9, 5, 0, 0, time.UTC)
+	stack, store, trigger, cleanup, err := buildExample(ctx, now)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	notifier, err := personal.NewScheduledRunNotifier(store)
+	if err != nil {
+		return err
+	}
+	var (
+		mu     sync.Mutex
+		events []memaxagent.Event
+	)
+	capture := memaxagent.EventObserverFunc(func(_ context.Context, event memaxagent.Event) {
+		mu.Lock()
+		events = append(events, event)
+		mu.Unlock()
+	})
+
+	runCtx := memaxagent.WithEventObserver(memaxagent.WithEventObserver(ctx, capture), notifier)
+	results, err := stack.FireScheduledTriggers(runCtx, store, now, trigger)
+	if err != nil {
+		return err
+	}
+	if len(results) != 1 || !results[0].Created {
+		return fmt.Errorf("scheduled trigger fire = %#v, want one created notification run", results)
+	}
+	runID := results[0].Record.ID
+	finalRun, err := waitForScheduledRun(store, runID, func(record personal.ScheduledRunRecord) bool {
+		return record.Terminal()
+	})
+	if err != nil {
+		return err
+	}
+
+	notifications, err := waitForNotifications(store, runID, personal.ScheduledRunNotificationDeliveryPending, 1)
+	if err != nil {
+		return err
+	}
+	notification := notifications[0]
+
+	mu.Lock()
+	captured := append([]memaxagent.Event(nil), events...)
+	mu.Unlock()
+	for _, event := range captured {
+		if event.Kind == memaxagent.EventRunStateChanged && event.Run != nil {
+			fmt.Fprintf(w, "scheduled lifecycle: %s %s\n", event.Run.RunID, event.Run.Status)
+		}
+		if event.Kind == memaxagent.EventError {
+			return event.Err
+		}
+	}
+	fmt.Fprintf(w, "scheduled run: %s %s\n", finalRun.ID, finalRun.Status)
+	fmt.Fprintf(w, "notification recorded: %s run=%s delivery=%s result=%q\n", notification.ID, notification.RunID, notification.DeliveryStatus, notification.Result)
+
+	channel := &flakyNotificationChannel{}
+	// Scheduled occurrences use deterministic timestamps; delivery uses the
+	// outbox record's own durable clock because notifications are created from
+	// accepted lifecycle transitions.
+	deliveryNow := notification.DeliverAfter
+	firstClaim, err := claimOne(ctx, store, deliveryNow)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(w, "claim 1: %s attempts=%d status=%s\n", firstClaim.ID, firstClaim.DeliveryAttempts, firstClaim.DeliveryStatus)
+	if err := channel.Deliver(firstClaim); err != nil {
+		retryAt := deliveryNow.Add(2 * time.Minute)
+		failed, markErr := store.MarkScheduledRunNotificationFailed(ctx, personal.MarkScheduledRunNotificationFailedRequest{
+			ID:       firstClaim.ID,
+			WorkerID: notificationWorkerID,
+			Error:    err.Error(),
+			RetryAt:  retryAt,
+			FailedAt: deliveryNow.Add(10 * time.Second),
+		})
+		if markErr != nil {
+			return markErr
+		}
+		fmt.Fprintf(w, "delivery failed: %s retry_after=2m status=%s\n", failed.DeliveryError, failed.DeliveryStatus)
+	} else {
+		return fmt.Errorf("first delivery unexpectedly succeeded")
+	}
+
+	notYet, err := store.ClaimScheduledRunNotifications(ctx, personal.ClaimScheduledRunNotificationsRequest{
+		WorkerID:      notificationWorkerID,
+		Limit:         1,
+		Now:           deliveryNow.Add(time.Minute),
+		LeaseDuration: time.Minute,
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(w, "claim before retry: %d\n", len(notYet))
+
+	secondClaim, err := claimOne(ctx, store, deliveryNow.Add(2*time.Minute))
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(w, "claim 2: %s attempts=%d status=%s\n", secondClaim.ID, secondClaim.DeliveryAttempts, secondClaim.DeliveryStatus)
+	if err := channel.Deliver(secondClaim); err != nil {
+		if _, markErr := store.MarkScheduledRunNotificationFailed(ctx, personal.MarkScheduledRunNotificationFailedRequest{
+			ID:       secondClaim.ID,
+			WorkerID: notificationWorkerID,
+			Error:    err.Error(),
+			RetryAt:  deliveryNow.Add(4 * time.Minute),
+			FailedAt: deliveryNow.Add(2*time.Minute + 5*time.Second),
+		}); markErr != nil {
+			return markErr
+		}
+		return fmt.Errorf("retry delivery failed after recording failure: %w", err)
+	}
+	delivered, err := store.MarkScheduledRunNotificationDelivered(ctx, personal.MarkScheduledRunNotificationDeliveredRequest{
+		ID:          secondClaim.ID,
+		WorkerID:    notificationWorkerID,
+		DeliveredAt: deliveryNow.Add(2*time.Minute + 5*time.Second),
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(w, "delivery sent to host channel: %s\n", channel.Last())
+	fmt.Fprintf(w, "delivered: %s status=%s attempts=%d\n", delivered.ID, delivered.DeliveryStatus, delivered.DeliveryAttempts)
+
+	deliveredNotifications, err := store.ListScheduledRunNotifications(ctx, personal.ScheduledRunNotificationFilter{
+		DeliveryStatus: personal.ScheduledRunNotificationDeliveryDelivered,
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(w, "final delivered notifications: %d\n", len(deliveredNotifications))
+	return nil
+}
+
+func buildExample(ctx context.Context, now time.Time) (personal.Stack, *personalsqlitestore.Store, personal.PeriodicTrigger, func(), error) {
+	db, path, err := openTempSQLite("memax-personal-notification-delivery")
+	if err != nil {
+		return personal.Stack{}, nil, personal.PeriodicTrigger{}, nil, err
+	}
+	cleanup := func() {
+		_ = db.Close()
+		_ = os.Remove(path)
+	}
+	store, err := personalsqlitestore.New(ctx, db)
+	if err != nil {
+		cleanup()
+		return personal.Stack{}, nil, personal.PeriodicTrigger{}, nil, err
+	}
+
+	config := personal.PersonalAssistant()
+	config.Base.Model = &notificationModel{}
+	stack, err := personal.New(config)
+	if err != nil {
+		cleanup()
+		return personal.Stack{}, nil, personal.PeriodicTrigger{}, nil, err
+	}
+	trigger := personal.PeriodicTrigger{
+		Name:   "delivery-check",
+		Prompt: "Finish the scheduled delivery check and summarize what changed.",
+		Every:  24 * time.Hour,
+		Anchor: time.Date(now.Year(), now.Month(), now.Day(), 9, 0, 0, 0, time.UTC),
+	}
+	return stack, store, trigger, cleanup, nil
+}
+
+func openTempSQLite(prefix string) (*sql.DB, string, error) {
+	file, err := os.CreateTemp("", prefix+"-*.db")
+	if err != nil {
+		return nil, "", fmt.Errorf("create sqlite temp file: %w", err)
+	}
+	path := file.Name()
+	if err := file.Close(); err != nil {
+		_ = os.Remove(path)
+		return nil, "", fmt.Errorf("close sqlite temp file: %w", err)
+	}
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		_ = os.Remove(path)
+		return nil, "", fmt.Errorf("open sqlite temp db: %w", err)
+	}
+	db.SetMaxOpenConns(1)
+	if _, err := db.ExecContext(context.Background(), "PRAGMA busy_timeout = 5000"); err != nil {
+		_ = db.Close()
+		_ = os.Remove(path)
+		return nil, "", fmt.Errorf("configure sqlite busy timeout: %w", err)
+	}
+	if _, err := db.ExecContext(context.Background(), "PRAGMA journal_mode = WAL"); err != nil {
+		_ = db.Close()
+		_ = os.Remove(path)
+		return nil, "", fmt.Errorf("configure sqlite WAL mode: %w", err)
+	}
+	return db, path, nil
+}
+
+func claimOne(ctx context.Context, store personal.ScheduledRunNotificationDeliveryStore, now time.Time) (personal.ScheduledRunNotificationRecord, error) {
+	claimed, err := store.ClaimScheduledRunNotifications(ctx, personal.ClaimScheduledRunNotificationsRequest{
+		WorkerID:      notificationWorkerID,
+		Limit:         1,
+		Now:           now,
+		LeaseDuration: time.Minute,
+	})
+	if err != nil {
+		return personal.ScheduledRunNotificationRecord{}, err
+	}
+	if len(claimed) != 1 {
+		return personal.ScheduledRunNotificationRecord{}, fmt.Errorf("claimed notifications = %d, want 1", len(claimed))
+	}
+	return claimed[0], nil
+}
+
+func waitForNotifications(store personal.ScheduledRunNotificationStore, runID string, status personal.ScheduledRunNotificationDeliveryStatus, count int) ([]personal.ScheduledRunNotificationRecord, error) {
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		notifications, err := store.ListScheduledRunNotifications(context.Background(), personal.ScheduledRunNotificationFilter{
+			RunID:          runID,
+			DeliveryStatus: status,
+		})
+		if err == nil && len(notifications) >= count {
+			return notifications, nil
+		}
+		time.Sleep(time.Millisecond)
+	}
+	notifications, err := store.ListScheduledRunNotifications(context.Background(), personal.ScheduledRunNotificationFilter{
+		RunID:          runID,
+		DeliveryStatus: status,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return nil, fmt.Errorf("notifications for %q with delivery status %s = %d, want at least %d", runID, status, len(notifications), count)
+}
+
+func waitForScheduledRun(store personal.ScheduledRunStore, id string, done func(personal.ScheduledRunRecord) bool) (personal.ScheduledRunRecord, error) {
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		record, err := store.GetScheduledRun(context.Background(), id)
+		if err == nil && done(record) {
+			return record, nil
+		}
+		time.Sleep(time.Millisecond)
+	}
+	record, err := store.GetScheduledRun(context.Background(), id)
+	if err != nil {
+		return personal.ScheduledRunRecord{}, err
+	}
+	return personal.ScheduledRunRecord{}, fmt.Errorf("scheduled run %q did not finish: %#v", id, record)
+}
+
+type notificationModel struct{}
+
+func (m *notificationModel) Stream(context.Context, model.Request) (model.Stream, error) {
+	return newStream(model.StreamEvent{
+		Kind: model.StreamText,
+		Text: "Scheduled delivery check complete: the owner update is ready for notification.",
+	}), nil
+}
+
+type flakyNotificationChannel struct {
+	attempts int
+	sent     []string
+}
+
+func (c *flakyNotificationChannel) Deliver(record personal.ScheduledRunNotificationRecord) error {
+	c.attempts++
+	if c.attempts == 1 {
+		return fmt.Errorf("push gateway unavailable")
+	}
+	message := fmt.Sprintf("%s -> %s", record.TriggerName, record.Result)
+	c.sent = append(c.sent, message)
+	return nil
+}
+
+func (c *flakyNotificationChannel) Last() string {
+	if len(c.sent) == 0 {
+		return ""
+	}
+	return c.sent[len(c.sent)-1]
+}
+
+type stream struct {
+	events []model.StreamEvent
+	index  int
+}
+
+func newStream(events ...model.StreamEvent) *stream {
+	return &stream{events: events}
+}
+
+func (s *stream) Recv() (model.StreamEvent, error) {
+	if s.index >= len(s.events) {
+		return model.StreamEvent{}, model.ErrEndOfStream
+	}
+	event := s.events[s.index]
+	s.index++
+	return event, nil
+}
+
+func (s *stream) Close() error {
+	return nil
+}
