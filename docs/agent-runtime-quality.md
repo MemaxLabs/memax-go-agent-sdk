@@ -359,11 +359,13 @@ retrieval, usage, and review infrastructure.
 ### 6. Planner and Task Policy Stack
 
 **Current state:** planner policies, task-derived plans, plan-visible
-verification hints, scoped subagent plan handoff, and opt-in progress updates
-from verification or subagent results exist. Initial hook-based agent policy
-presets exist for checkpoint-before-patch recovery and rollback guidance after
-failed verification, a verify-before-final gate for workspace mutations, and
-explicit host approval tools/policies for sensitive tool use.
+verification hints, scoped subagent plan handoff, opt-in progress updates from
+verification or subagent results, standard task-result metadata, and
+eval-backed personal task-ledger continuity across two runs exist. Initial
+hook-based agent policy presets exist for checkpoint-before-patch recovery and
+rollback guidance after failed verification, a verify-before-final gate for
+workspace mutations, and explicit host approval tools/policies for sensitive
+tool use.
 
 **Gap:** The SDK lacks explicit policies for when to plan, update, delegate,
 verify, ask the user, or stop.
@@ -379,6 +381,9 @@ verify, ask the user, or stop.
 **Eval coverage:**
 
 - Multi-step task updates plan after each tool result.
+- Personal week-ahead planning writes follow-ups into durable task state, a
+  later run reloads those tasks through planner context, and completed work is
+  updated without duplicating the ledger.
 - Blocked plan asks for user input rather than hallucinating.
 - Delegation happens only for scoped subtasks, and child results can return
   structured task progress.

@@ -900,6 +900,357 @@ func PersonalPresetAssistantWeekAheadPlanning() agenteval.Case {
 	}
 }
 
+// PersonalPresetAssistantWeekAheadTaskLedger returns a two-run scenario where
+// week-ahead planning persists follow-up work as durable tasks, and a later run
+// resumes from that task ledger instead of rediscovering or duplicating work.
+func PersonalPresetAssistantWeekAheadTaskLedger() agenteval.Case {
+	memoryStore := memory.NewMemoryStore([]memory.Memory{{
+		ID:      "memory-1",
+		Name:    "week-planning-style",
+		Scope:   memory.ScopeUser,
+		Content: "For week-ahead plans, convert owner-visible follow-ups into explicit task state with deterministic IDs.",
+		Tags:    []string{"planning", "tasks"},
+	}})
+	messageStore := messaging.NewThreadStore([]messaging.Thread{
+		{
+			ID:      "thread-1",
+			Subject: "Acme mitigation owner",
+			Summary: "Casey needs the mitigation owner confirmed before the Monday checkpoint.",
+			Participants: []messaging.Participant{
+				{Name: "Casey", Address: "casey@acme.example", Role: "from"},
+			},
+			Tags:          []string{"INBOX", "customer", "urgent"},
+			LastMessageAt: time.Date(2026, 4, 19, 12, 0, 0, 0, time.UTC),
+			Metadata:      map[string]any{"unread": true},
+			Messages: []messaging.Message{{
+				ID:        "thread-1-msg-1",
+				ThreadID:  "thread-1",
+				Subject:   "Acme mitigation owner",
+				Summary:   "Mitigation owner needed before Monday checkpoint.",
+				Body:      "Please confirm the Acme checkout mitigation owner before the Monday 14:00 UTC customer-visible checkpoint.",
+				Direction: messaging.DirectionInbound,
+				Sender:    messaging.Participant{Name: "Casey", Address: "casey@acme.example", Role: "from"},
+				SentAt:    time.Date(2026, 4, 19, 12, 0, 0, 0, time.UTC),
+			}},
+		},
+		{
+			ID:      "thread-2",
+			Subject: "Partner council demo slides",
+			Summary: "Priya needs final demo slides by Wednesday 17:00 UTC.",
+			Participants: []messaging.Participant{
+				{Name: "Priya", Address: "priya@example.com", Role: "from"},
+			},
+			Tags:          []string{"INBOX", "launch", "prep"},
+			LastMessageAt: time.Date(2026, 4, 19, 13, 0, 0, 0, time.UTC),
+			Metadata:      map[string]any{"unread": true},
+			Messages: []messaging.Message{{
+				ID:        "thread-2-msg-1",
+				ThreadID:  "thread-2",
+				Subject:   "Partner council demo slides",
+				Summary:   "Demo slides due Wednesday for partner council.",
+				Body:      "Please send the final partner council demo slides by Wednesday 17:00 UTC so I can package them for Thursday.",
+				Direction: messaging.DirectionInbound,
+				Sender:    messaging.Participant{Name: "Priya", Address: "priya@example.com", Role: "from"},
+				SentAt:    time.Date(2026, 4, 19, 13, 0, 0, 0, time.UTC),
+			}},
+		},
+	})
+	mondayAcme := time.Date(2026, 4, 20, 13, 30, 0, 0, time.UTC)
+	thursdayCouncil := time.Date(2026, 4, 23, 16, 0, 0, 0, time.UTC)
+	scheduleStore := scheduling.NewEventStore([]scheduling.Event{
+		{
+			ID:       "event-1",
+			Title:    "Acme renewal meeting",
+			Summary:  "Customer renewal meeting needs a named mitigation owner.",
+			Location: "Video",
+			Organizer: scheduling.Participant{
+				Name:    "Casey",
+				Address: "casey@acme.example",
+			},
+			Start:       mondayAcme,
+			End:         mondayAcme.Add(time.Hour),
+			TimeZone:    "UTC",
+			Description: "Bring checkout status, mitigation owner, and the Monday 14:00 UTC customer checkpoint plan.",
+			Tags:        []string{"customer", "renewal", "acme"},
+		},
+		{
+			ID:       "event-2",
+			Title:    "Partner council demo",
+			Summary:  "Demo Q2 launch readiness to the partner council.",
+			Location: "Boardroom",
+			Organizer: scheduling.Participant{
+				Name:    "Priya",
+				Address: "priya@example.com",
+			},
+			Start:       thursdayCouncil,
+			End:         thursdayCouncil.Add(time.Hour),
+			TimeZone:    "UTC",
+			Description: "Requires final demo slides and the Acme mitigation summary before the council.",
+			Tags:        []string{"partner", "launch", "demo"},
+		},
+	})
+	taskStore := tasktools.NewMemoryStore([]tasktools.Task{{
+		ID:     "task-1",
+		Title:  "assemble the week-ahead plan",
+		Status: tasktools.StatusInProgress,
+		Notes:  "persist owner-visible follow-ups as durable tasks with deterministic IDs",
+	}})
+	firstFinal := "Week-ahead task ledger updated: created follow-up tasks for Acme mitigation owner and partner council demo slides."
+	secondFinal := "Resumed week-ahead task ledger: Acme owner follow-up is complete; partner council demo slides remain pending."
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "search-memory-1",
+				Name:  memorytools.SearchToolName,
+				Input: json.RawMessage(`{"query":"week ahead task ledger follow-ups","limit":3}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "search-message-1",
+				Name:  messagetools.SearchToolName,
+				Input: json.RawMessage(`{"query":"Acme owner partner council demo slides","mailboxes":["INBOX"],"unread":true,"since":"2026-04-19T00:00:00Z","until":"2026-04-27T00:00:00Z","limit":4}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "read-thread-1",
+				Name:  messagetools.ReadToolName,
+				Input: json.RawMessage(`{"thread_id":"thread-1"}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "read-thread-2",
+				Name:  messagetools.ReadToolName,
+				Input: json.RawMessage(`{"thread_id":"thread-2"}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "search-schedule-1",
+				Name:  scheduletools.SearchToolName,
+				Input: json.RawMessage(`{"query":"Acme renewal partner council demo","start":"2026-04-20T00:00:00Z","end":"2026-04-27T00:00:00Z","limit":5}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "read-event-1",
+				Name:  scheduletools.ReadToolName,
+				Input: json.RawMessage(`{"id":"event-1"}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "read-event-2",
+				Name:  scheduletools.ReadToolName,
+				Input: json.RawMessage(`{"id":"event-2"}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "upsert-task-1",
+				Name: tasktools.UpsertToolName,
+				Input: json.RawMessage(`{
+					"id":"week-2026-04-20-acme-owner",
+					"title":"Confirm Acme mitigation owner",
+					"status":"pending",
+					"notes":"Casey needs the mitigation owner before the Monday 14:00 UTC customer checkpoint.",
+					"priority":1,
+					"evidence":["thread-1","event-1"]
+				}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "upsert-task-2",
+				Name: tasktools.UpsertToolName,
+				Input: json.RawMessage(`{
+					"id":"week-2026-04-20-demo-slides",
+					"title":"Deliver partner council demo slides",
+					"status":"pending",
+					"notes":"Priya needs final demo slides by Wednesday 17:00 UTC for Thursday partner council.",
+					"priority":2,
+					"evidence":["thread-2","event-2"]
+				}`),
+			},
+		}},
+		[]model.StreamEvent{{Kind: model.StreamText, Text: firstFinal}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "list-tasks-1",
+				Name:  tasktools.ListToolName,
+				Input: json.RawMessage(`{"status":"pending"}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "complete-task-1",
+				Name: tasktools.UpsertToolName,
+				Input: json.RawMessage(`{
+					"id":"week-2026-04-20-acme-owner",
+					"status":"completed",
+					"notes":"Mitigation owner confirmed for the Monday 14:00 UTC customer checkpoint.",
+					"evidence":["thread-1","event-1","owner-confirmed"]
+				}`),
+			},
+		}},
+		[]model.StreamEvent{{Kind: model.StreamText, Text: secondFinal}},
+	)
+
+	config, configErr := personal.PresetPersonalAssistant.Config()
+	config.Memory = memorytools.Config{
+		Source:       memoryStore,
+		DefaultLimit: 3,
+	}
+	config.Messages = messagetools.Config{
+		Searcher:     messageStore,
+		Reader:       messageStore,
+		DefaultLimit: 4,
+	}
+	config.Schedule = scheduletools.Config{
+		Searcher:     scheduleStore,
+		Reader:       scheduleStore,
+		DefaultLimit: 5,
+	}
+	config.Tasks = taskStore
+	stack, stackErr := personal.New(config)
+	prompts := []string{
+		"Prepare my week-ahead follow-up ledger for 2026-04-20 through 2026-04-26. Search durable context, unread inbox metadata, and calendar metadata first; read only selected details, then persist each owner-visible follow-up as a task with a deterministic ID.",
+		"Resume the pending week-ahead follow-ups from the task ledger. Do not rediscover or duplicate tasks; list pending tasks and update only completed work.",
+	}
+
+	return agenteval.Case{
+		Name:   "personal_preset_personal_assistant_week_ahead_task_ledger",
+		Prompt: strings.Join(prompts, " / "),
+		Run: func(ctx context.Context) (<-chan memaxagent.Event, error) {
+			out := make(chan memaxagent.Event)
+			go func() {
+				defer close(out)
+				for _, prompt := range prompts {
+					events, err := memaxagent.Query(ctx, prompt, stack.WithModel(modelClient))
+					if err != nil {
+						out <- memaxagent.Event{Kind: memaxagent.EventError, Err: err, Time: time.Now().UTC()}
+						return
+					}
+					for event := range events {
+						select {
+						case out <- event:
+						case <-ctx.Done():
+							return
+						}
+					}
+				}
+			}()
+			return out, nil
+		},
+		Assertions: []agenteval.Assertion{
+			toolConstructionSucceeded(configErr, stackErr),
+			agenteval.NoToolErrors(),
+			agenteval.ToolUsed(tasktools.UpsertToolName),
+			agenteval.ToolUsed(tasktools.ListToolName),
+			agenteval.FinalEquals(secondFinal),
+			requestCountEquals(modelClient, 13),
+			{
+				Name: "task mutations carry standard task metadata",
+				Check: func(result agenteval.Result) error {
+					results := result.ToolResults()
+					if len(results) != 11 {
+						return fmt.Errorf("tool results = %#v, want 11 results", results)
+					}
+					if results[7].Metadata[model.MetadataTaskID] != "week-2026-04-20-acme-owner" || results[7].Metadata[model.MetadataTaskStatus] != string(tasktools.StatusPending) {
+						return fmt.Errorf("first task metadata = %#v, want pending Acme follow-up", results[7].Metadata)
+					}
+					if results[8].Metadata[model.MetadataTaskID] != "week-2026-04-20-demo-slides" || results[8].Metadata[model.MetadataTaskStatus] != string(tasktools.StatusPending) {
+						return fmt.Errorf("second task metadata = %#v, want pending demo follow-up", results[8].Metadata)
+					}
+					if results[10].Metadata[model.MetadataTaskID] != "week-2026-04-20-acme-owner" || results[10].Metadata[model.MetadataTaskStatus] != string(tasktools.StatusCompleted) {
+						return fmt.Errorf("completed task metadata = %#v, want completed Acme follow-up", results[10].Metadata)
+					}
+					return nil
+				},
+			},
+			{
+				Name: "second run resumes from pending task state before listing",
+				Check: func(result agenteval.Result) error {
+					requests := modelClient.Requests()
+					if len(requests) != 13 {
+						return fmt.Errorf("requests = %d, want 13", len(requests))
+					}
+					secondInitial := requests[10].SystemPrompt
+					for _, want := range []string{
+						"[pending] week-2026-04-20-acme-owner",
+						"Confirm Acme mitigation owner",
+						"[pending] week-2026-04-20-demo-slides",
+						"Deliver partner council demo slides",
+					} {
+						if !strings.Contains(secondInitial, want) {
+							return fmt.Errorf("second run prompt missing %q:\n%s", want, secondInitial)
+						}
+					}
+					return nil
+				},
+			},
+			{
+				Name: "ledger persists follow-ups without duplicates",
+				Check: func(result agenteval.Result) error {
+					tasks, err := taskStore.List(context.Background())
+					if err != nil {
+						return err
+					}
+					byID := make(map[string]tasktools.Task, len(tasks))
+					for _, task := range tasks {
+						if _, exists := byID[task.ID]; exists {
+							return fmt.Errorf("duplicate task id %q in %#v", task.ID, tasks)
+						}
+						byID[task.ID] = task
+					}
+					if len(tasks) != 3 {
+						return fmt.Errorf("tasks = %#v, want initial plan task plus two follow-ups", tasks)
+					}
+					if byID["week-2026-04-20-acme-owner"].Status != tasktools.StatusCompleted {
+						return fmt.Errorf("Acme follow-up = %#v, want completed", byID["week-2026-04-20-acme-owner"])
+					}
+					if byID["week-2026-04-20-demo-slides"].Status != tasktools.StatusPending {
+						return fmt.Errorf("demo follow-up = %#v, want pending", byID["week-2026-04-20-demo-slides"])
+					}
+					if !strings.Contains(strings.Join(byID["week-2026-04-20-acme-owner"].Evidence, ","), "owner-confirmed") {
+						return fmt.Errorf("Acme evidence = %#v, want owner-confirmed evidence", byID["week-2026-04-20-acme-owner"].Evidence)
+					}
+					return nil
+				},
+			},
+			{
+				Name: "resume lists pending tasks before completing one",
+				Check: func(result agenteval.Result) error {
+					results := result.ToolResults()
+					if len(results) < 10 {
+						return fmt.Errorf("tool results = %#v, want list result", results)
+					}
+					list := results[9].Content
+					for _, want := range []string{"week-2026-04-20-acme-owner", "week-2026-04-20-demo-slides"} {
+						if !strings.Contains(list, want) {
+							return fmt.Errorf("pending list = %q, missing %q", list, want)
+						}
+					}
+					return nil
+				},
+			},
+		},
+	}
+}
+
 // PersonalPresetAssistantScheduledDailyBriefing returns a single-use scenario
 // where the personal_assistant preset runs a proactive daily briefing trigger
 // once for its deterministic occurrence, persists the run, and treats a second

@@ -192,7 +192,8 @@ system prompt.
   recovery plus follow-up creation, inbox send backend-failure surfacing after
   approval, JMAP-backed inbox reply workflows over a real remote adapter,
   week-ahead planning across memory, notes, inbox, and calendar metadata,
-  schedule recall, schedule-approval
+  durable week-ahead task-ledger continuity across two runs, schedule recall,
+  schedule-approval
   recovery, and scoped delegation with parent-visible task progress. An
   initial durable `scheduling/sqlitestore` adapter now provides a
   concrete local calendar backend with metadata-first search semantics, and

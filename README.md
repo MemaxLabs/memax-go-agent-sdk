@@ -189,7 +189,7 @@ preset contract, default policy posture, and authoritative eval scenario names.
 
 | Preset | Intended workflow | Eval-backed coverage |
 | --- | --- | --- |
-| `personal_assistant` | careful personal assistance with durable recall plus approval-gated memory, note, message, and schedule writes | `personal_preset_personal_assistant`, `personal_preset_personal_assistant_memory_approval_recovery`, `personal_preset_personal_assistant_note_recall`, `personal_preset_personal_assistant_message_recall`, `personal_preset_personal_assistant_message_approval_recovery`, `personal_preset_personal_assistant_inbox_triage_reply_followup`, `personal_preset_personal_assistant_inbox_send_backend_failure`, `personal_preset_personal_assistant_jmap_inbox_reply`, `personal_preset_personal_assistant_schedule_recall`, `personal_preset_personal_assistant_schedule_approval_recovery`, `personal_preset_personal_assistant_daily_briefing`, `personal_preset_personal_assistant_scheduled_daily_briefing`, `personal_preset_personal_assistant_scheduled_inbox_triage`, `personal_preset_personal_assistant_scheduled_inbox_triage_jmap` |
+| `personal_assistant` | careful personal assistance with durable recall plus approval-gated memory, note, message, and schedule writes | `personal_preset_personal_assistant`, `personal_preset_personal_assistant_memory_approval_recovery`, `personal_preset_personal_assistant_note_recall`, `personal_preset_personal_assistant_message_recall`, `personal_preset_personal_assistant_message_approval_recovery`, `personal_preset_personal_assistant_inbox_triage_reply_followup`, `personal_preset_personal_assistant_inbox_send_backend_failure`, `personal_preset_personal_assistant_jmap_inbox_reply`, `personal_preset_personal_assistant_schedule_recall`, `personal_preset_personal_assistant_schedule_approval_recovery`, `personal_preset_personal_assistant_schedule_conflict_recovery`, `personal_preset_personal_assistant_daily_briefing`, `personal_preset_personal_assistant_week_ahead_planning`, `personal_preset_personal_assistant_week_ahead_task_ledger`, `personal_preset_personal_assistant_scheduled_daily_briefing`, `personal_preset_personal_assistant_scheduled_inbox_triage`, `personal_preset_personal_assistant_scheduled_inbox_triage_jmap` |
 | `research_partner` | longer-horizon personal research and scoped delegation | `personal_preset_research_partner` |
 
 The first real remote inbox backend for the personal stack now exists through
@@ -199,8 +199,11 @@ thread-level metadata only, and full message bodies appear only after an
 explicit thread read. The personal stack now also exposes host-owned proactive
 scheduled runs through `ScheduledRunStore`, `PeriodicTrigger`,
 `StartScheduledRun`, and `WatchScheduledTriggers`, with eval-backed
-idempotency for one deterministic daily-brief occurrence plus an embedded
-SQLite backend in `stack/personal/sqlitestore` for durable trigger state.
+idempotency for deterministic occurrences plus an embedded SQLite backend in
+`stack/personal/sqlitestore`. Week-ahead planning also has eval-backed durable
+task continuity: follow-ups can be written through `upsert_task`, reloaded in a
+later run through planner context, and updated without duplicating the task
+ledger.
 
 ## Try It
 
@@ -853,10 +856,10 @@ if err := report.Error(); err != nil {
 The `agenteval/scenarios` package includes reusable deterministic cases for
 tool recovery, structured output repair, memory search/save, memory
 distillation candidates, session resume, context retry, subagent delegation,
-planner-guided tool use, planner/task-state updates, provider usage mapping,
-and provider tool-use round trips. It also covers governance recovery for permission
-denials, hook denials, oversized tool results, budget stops, and deferred tool
-discovery:
+planner-guided tool use, planner/task-state updates, personal task-ledger
+continuity, provider usage mapping, and provider tool-use round trips. It also
+covers governance recovery for permission denials, hook denials, oversized tool
+results, budget stops, and deferred tool discovery:
 
 ```go
 report := agenteval.Runner{}.Run(ctx, scenarios.All()...)
