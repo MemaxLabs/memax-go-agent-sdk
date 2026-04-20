@@ -137,9 +137,14 @@ Common sources of confusion:
   Stores that implement `ScheduledRunNotificationDeliveryStore` add an
   at-least-once delivery contract: workers claim pending notifications with a
   lease, mark successful attempts delivered, and mark transient failures with a
-  retry time. Notification records carry the scheduled prompt plus terminal
-  result or error text; host-owned delivery backends should apply their own
-  redaction policy before sending them to external channels. The
+  retry time. `DrainScheduledRunNotifications` is the reference worker helper:
+  it claims a bounded batch, invokes a host-owned delivery handler, records
+  successes, and reschedules handler failures with configurable backoff. Host
+  channel failures become retryable outbox state; store claim/ack errors return
+  to the worker because the durable state is uncertain.
+  Notification records carry the scheduled prompt plus terminal result or error
+  text; host-owned delivery backends should apply their own redaction policy
+  before sending them to external channels. The
   `personal_notification_delivery_stack` example demonstrates this durable
   outbox with a transient channel failure, delayed retry, and successful ack.
 - attaching `Tasks` gives personal workflows a durable task ledger. The

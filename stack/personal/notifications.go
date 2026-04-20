@@ -28,6 +28,18 @@ var ErrScheduledRunNotificationWorkerMismatch = errors.New("personal stack: sche
 // attempted for a notification that is not currently leased to a worker.
 var ErrScheduledRunNotificationNotDelivering = errors.New("personal stack: scheduled run notification is not delivering")
 
+// ErrScheduledRunNotificationDeliveryStoreRequired reports that scheduled-run
+// notification delivery draining needs an explicit delivery-capable store.
+var ErrScheduledRunNotificationDeliveryStoreRequired = errors.New("personal stack: scheduled run notification delivery store is required")
+
+// ErrScheduledRunNotificationDeliveryHandlerRequired reports that scheduled-run
+// notification delivery draining needs an explicit host delivery handler.
+var ErrScheduledRunNotificationDeliveryHandlerRequired = errors.New("personal stack: scheduled run notification delivery handler is required")
+
+// ErrScheduledRunNotificationDeliveryWorkerIDRequired reports that scheduled-run
+// notification delivery draining needs an explicit worker identity.
+var ErrScheduledRunNotificationDeliveryWorkerIDRequired = errors.New("personal stack: scheduled run notification delivery worker id is required")
+
 // DefaultScheduledRunNotificationLeaseDuration is the default delivery lease
 // duration used when a claim request does not specify one.
 const DefaultScheduledRunNotificationLeaseDuration = 5 * time.Minute
@@ -167,6 +179,210 @@ type ScheduledRunNotificationDeliveryStore interface {
 	ClaimScheduledRunNotifications(context.Context, ClaimScheduledRunNotificationsRequest) ([]ScheduledRunNotificationRecord, error)
 	MarkScheduledRunNotificationDelivered(context.Context, MarkScheduledRunNotificationDeliveredRequest) (ScheduledRunNotificationRecord, error)
 	MarkScheduledRunNotificationFailed(context.Context, MarkScheduledRunNotificationFailedRequest) (ScheduledRunNotificationRecord, error)
+}
+
+// ScheduledRunNotificationDeliveryHandler delivers one claimed scheduled-run
+// notification to a host-owned channel such as email, push, chat, webhook, or a
+// durable inbox. Returning an error records a retryable delivery failure in the
+// notification store; it does not make DrainScheduledRunNotifications fail when
+// the failure can be acknowledged successfully.
+type ScheduledRunNotificationDeliveryHandler interface {
+	DeliverScheduledRunNotification(context.Context, ScheduledRunNotificationRecord) error
+}
+
+// ScheduledRunNotificationDeliveryHandlerFunc adapts a function into a
+// ScheduledRunNotificationDeliveryHandler.
+type ScheduledRunNotificationDeliveryHandlerFunc func(context.Context, ScheduledRunNotificationRecord) error
+
+// DeliverScheduledRunNotification implements
+// ScheduledRunNotificationDeliveryHandler.
+func (f ScheduledRunNotificationDeliveryHandlerFunc) DeliverScheduledRunNotification(ctx context.Context, record ScheduledRunNotificationRecord) error {
+	if f == nil {
+		return ErrScheduledRunNotificationDeliveryHandlerRequired
+	}
+	return f(ctx, record)
+}
+
+// ScheduledRunNotificationRetryBackoff returns the next retry time for a failed
+// scheduled-run notification delivery attempt. The record has already been
+// claimed for this attempt, so DeliveryAttempts includes the failed attempt.
+// Returning zero, or a time in the past, makes the notification immediately
+// claimable again; callers that want the default policy should pass nil to
+// WithScheduledRunNotificationRetryBackoff instead.
+type ScheduledRunNotificationRetryBackoff func(ScheduledRunNotificationRecord, error, time.Time) time.Time
+
+// ScheduledRunNotificationDrainFailure records one host-channel delivery
+// failure that was durably marked for retry.
+type ScheduledRunNotificationDrainFailure struct {
+	Record ScheduledRunNotificationRecord
+	Err    error
+}
+
+// ScheduledRunNotificationDrainResult summarizes one delivery drain pass.
+// Handler errors appear in Failed and are not returned as the function error
+// when the store successfully records the retry state. The returned error is
+// reserved for claim/ack/store failures or invalid configuration.
+type ScheduledRunNotificationDrainResult struct {
+	Claimed   []ScheduledRunNotificationRecord
+	Delivered []ScheduledRunNotificationRecord
+	Failed    []ScheduledRunNotificationDrainFailure
+}
+
+type scheduledRunNotificationDrainConfig struct {
+	limit         int
+	leaseDuration time.Duration
+	now           time.Time
+	retryBackoff  ScheduledRunNotificationRetryBackoff
+}
+
+// ScheduledRunNotificationDrainOption configures one notification delivery
+// drain pass.
+type ScheduledRunNotificationDrainOption func(*scheduledRunNotificationDrainConfig)
+
+// WithScheduledRunNotificationDrainLimit sets the maximum number of due
+// notification records claimed in one drain pass. Values <= 0 use the default
+// of one.
+func WithScheduledRunNotificationDrainLimit(limit int) ScheduledRunNotificationDrainOption {
+	return func(config *scheduledRunNotificationDrainConfig) {
+		config.limit = limit
+	}
+}
+
+// WithScheduledRunNotificationDrainLeaseDuration sets the delivery lease held
+// while the host handler attempts external delivery. Values <= 0 use
+// DefaultScheduledRunNotificationLeaseDuration.
+func WithScheduledRunNotificationDrainLeaseDuration(duration time.Duration) ScheduledRunNotificationDrainOption {
+	return func(config *scheduledRunNotificationDrainConfig) {
+		config.leaseDuration = duration
+	}
+}
+
+// WithScheduledRunNotificationDrainNow fixes the drain clock for deterministic
+// tests and simulations. Production callers should usually omit it.
+func WithScheduledRunNotificationDrainNow(now time.Time) ScheduledRunNotificationDrainOption {
+	return func(config *scheduledRunNotificationDrainConfig) {
+		config.now = now.UTC()
+	}
+}
+
+// WithScheduledRunNotificationRetryBackoff sets the retry policy used when the
+// host delivery handler returns an error. A nil backoff uses
+// DefaultScheduledRunNotificationRetryBackoff.
+func WithScheduledRunNotificationRetryBackoff(backoff ScheduledRunNotificationRetryBackoff) ScheduledRunNotificationDrainOption {
+	return func(config *scheduledRunNotificationDrainConfig) {
+		config.retryBackoff = backoff
+	}
+}
+
+// DefaultScheduledRunNotificationRetryBackoff returns an exponential retry time
+// capped at 24 hours. Attempt one retries after one minute, attempt two after
+// two minutes, and later attempts double until the cap.
+func DefaultScheduledRunNotificationRetryBackoff(record ScheduledRunNotificationRecord, _ error, now time.Time) time.Time {
+	attempts := record.DeliveryAttempts
+	if attempts <= 0 {
+		attempts = 1
+	}
+	delay := time.Minute
+	for i := 1; i < attempts && delay < 24*time.Hour; i++ {
+		delay *= 2
+	}
+	if delay > 24*time.Hour {
+		delay = 24 * time.Hour
+	}
+	return now.Add(delay).UTC()
+}
+
+// DrainScheduledRunNotifications claims due scheduled-run notifications,
+// delivers each one through handler, and durably acks delivered or retryable
+// failed state in store. It performs one bounded drain pass and returns; hosts
+// that want a long-running worker should call it from their own ticker or queue
+// loop. The SDK owns claim/ack/retry state while external delivery remains
+// host-owned. Store claim/ack errors fail fast; any records already claimed but
+// not yet acked remain under their delivery lease until the lease expires.
+func DrainScheduledRunNotifications(ctx context.Context, store ScheduledRunNotificationDeliveryStore, workerID string, handler ScheduledRunNotificationDeliveryHandler, options ...ScheduledRunNotificationDrainOption) (ScheduledRunNotificationDrainResult, error) {
+	if store == nil {
+		return ScheduledRunNotificationDrainResult{}, ErrScheduledRunNotificationDeliveryStoreRequired
+	}
+	workerID = strings.TrimSpace(workerID)
+	if workerID == "" {
+		return ScheduledRunNotificationDrainResult{}, ErrScheduledRunNotificationDeliveryWorkerIDRequired
+	}
+	if handler == nil {
+		return ScheduledRunNotificationDrainResult{}, ErrScheduledRunNotificationDeliveryHandlerRequired
+	}
+	if handlerFunc, ok := handler.(ScheduledRunNotificationDeliveryHandlerFunc); ok && handlerFunc == nil {
+		return ScheduledRunNotificationDrainResult{}, ErrScheduledRunNotificationDeliveryHandlerRequired
+	}
+	config := scheduledRunNotificationDrainConfig{
+		limit:         1,
+		leaseDuration: DefaultScheduledRunNotificationLeaseDuration,
+		retryBackoff:  DefaultScheduledRunNotificationRetryBackoff,
+	}
+	for _, option := range options {
+		if option != nil {
+			option(&config)
+		}
+	}
+	if config.limit <= 0 {
+		config.limit = 1
+	}
+	if config.leaseDuration <= 0 {
+		config.leaseDuration = DefaultScheduledRunNotificationLeaseDuration
+	}
+	if config.retryBackoff == nil {
+		config.retryBackoff = DefaultScheduledRunNotificationRetryBackoff
+	}
+
+	claimNow := scheduledRunNotificationDrainNow(config)
+	claimed, err := store.ClaimScheduledRunNotifications(ctx, ClaimScheduledRunNotificationsRequest{
+		WorkerID:      workerID,
+		Limit:         config.limit,
+		Now:           claimNow,
+		LeaseDuration: config.leaseDuration,
+	})
+	if err != nil {
+		return ScheduledRunNotificationDrainResult{}, fmt.Errorf("claim scheduled run notifications: %w", err)
+	}
+	result := ScheduledRunNotificationDrainResult{
+		Claimed: append([]ScheduledRunNotificationRecord(nil), claimed...),
+	}
+	for _, record := range claimed {
+		if err := ctx.Err(); err != nil {
+			return result, err
+		}
+		if err := handler.DeliverScheduledRunNotification(ctx, record); err != nil {
+			failedAt := scheduledRunNotificationDrainNow(config)
+			retryAt := config.retryBackoff(record, err, failedAt)
+			if retryAt.IsZero() {
+				retryAt = failedAt
+			}
+			failed, markErr := store.MarkScheduledRunNotificationFailed(ctx, MarkScheduledRunNotificationFailedRequest{
+				ID:       record.ID,
+				WorkerID: workerID,
+				Error:    scheduledRunNotificationDeliveryErrorText(err),
+				RetryAt:  retryAt,
+				FailedAt: failedAt,
+			})
+			if markErr != nil {
+				return result, fmt.Errorf("mark scheduled run notification %s failed: %w", record.ID, markErr)
+			}
+			result.Failed = append(result.Failed, ScheduledRunNotificationDrainFailure{
+				Record: failed,
+				Err:    err,
+			})
+			continue
+		}
+		delivered, err := store.MarkScheduledRunNotificationDelivered(ctx, MarkScheduledRunNotificationDeliveredRequest{
+			ID:          record.ID,
+			WorkerID:    workerID,
+			DeliveredAt: scheduledRunNotificationDrainNow(config),
+		})
+		if err != nil {
+			return result, fmt.Errorf("mark scheduled run notification %s delivered: %w", record.ID, err)
+		}
+		result.Delivered = append(result.Delivered, delivered)
+	}
+	return result, nil
 }
 
 // MemoryScheduledRunNotificationStore is the reference in-memory notification
@@ -600,6 +816,21 @@ func (req MarkScheduledRunNotificationFailedRequest) normalize() (normalizedSche
 		update.failedAt = time.Now().UTC()
 	}
 	return update, nil
+}
+
+func scheduledRunNotificationDrainNow(config scheduledRunNotificationDrainConfig) time.Time {
+	if !config.now.IsZero() {
+		return config.now
+	}
+	return time.Now().UTC()
+}
+
+func scheduledRunNotificationDeliveryErrorText(err error) string {
+	text := strings.TrimSpace(err.Error())
+	if text == "" {
+		return "scheduled run notification delivery failed"
+	}
+	return text
 }
 
 func scheduledRunStatusKnown(status ScheduledRunStatus) bool {

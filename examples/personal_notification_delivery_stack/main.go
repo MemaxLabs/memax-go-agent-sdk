@@ -91,27 +91,29 @@ func runExample(ctx context.Context, w io.Writer) error {
 	// outbox record's own durable clock because notifications are created from
 	// accepted lifecycle transitions.
 	deliveryNow := notification.DeliverAfter
-	firstClaim, err := claimOne(ctx, store, deliveryNow)
+	firstResult, err := personal.DrainScheduledRunNotifications(
+		ctx,
+		store,
+		notificationWorkerID,
+		personal.ScheduledRunNotificationDeliveryHandlerFunc(func(_ context.Context, record personal.ScheduledRunNotificationRecord) error {
+			return channel.Deliver(record)
+		}),
+		personal.WithScheduledRunNotificationDrainNow(deliveryNow),
+		personal.WithScheduledRunNotificationDrainLeaseDuration(time.Minute),
+		personal.WithScheduledRunNotificationRetryBackoff(func(personal.ScheduledRunNotificationRecord, error, time.Time) time.Time {
+			return deliveryNow.Add(2 * time.Minute)
+		}),
+	)
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(w, "claim 1: %s attempts=%d status=%s\n", firstClaim.ID, firstClaim.DeliveryAttempts, firstClaim.DeliveryStatus)
-	if err := channel.Deliver(firstClaim); err != nil {
-		retryAt := deliveryNow.Add(2 * time.Minute)
-		failed, markErr := store.MarkScheduledRunNotificationFailed(ctx, personal.MarkScheduledRunNotificationFailedRequest{
-			ID:       firstClaim.ID,
-			WorkerID: notificationWorkerID,
-			Error:    err.Error(),
-			RetryAt:  retryAt,
-			FailedAt: deliveryNow.Add(10 * time.Second),
-		})
-		if markErr != nil {
-			return markErr
-		}
-		fmt.Fprintf(w, "delivery failed: %s retry_after=2m status=%s\n", failed.DeliveryError, failed.DeliveryStatus)
-	} else {
-		return fmt.Errorf("first delivery unexpectedly succeeded")
+	if len(firstResult.Claimed) != 1 || len(firstResult.Failed) != 1 {
+		return fmt.Errorf("first drain = %#v, want one claimed retryable failure", firstResult)
 	}
+	firstClaim := firstResult.Claimed[0]
+	firstFailure := firstResult.Failed[0].Record
+	fmt.Fprintf(w, "claim 1: %s attempts=%d status=%s\n", firstClaim.ID, firstClaim.DeliveryAttempts, firstClaim.DeliveryStatus)
+	fmt.Fprintf(w, "delivery failed: %s retry_after=2m status=%s\n", firstFailure.DeliveryError, firstFailure.DeliveryStatus)
 
 	notYet, err := store.ClaimScheduledRunNotifications(ctx, personal.ClaimScheduledRunNotificationsRequest{
 		WorkerID:      notificationWorkerID,
@@ -124,31 +126,25 @@ func runExample(ctx context.Context, w io.Writer) error {
 	}
 	fmt.Fprintf(w, "claim before retry: %d\n", len(notYet))
 
-	secondClaim, err := claimOne(ctx, store, deliveryNow.Add(2*time.Minute))
+	secondResult, err := personal.DrainScheduledRunNotifications(
+		ctx,
+		store,
+		notificationWorkerID,
+		personal.ScheduledRunNotificationDeliveryHandlerFunc(func(_ context.Context, record personal.ScheduledRunNotificationRecord) error {
+			return channel.Deliver(record)
+		}),
+		personal.WithScheduledRunNotificationDrainNow(deliveryNow.Add(2*time.Minute)),
+		personal.WithScheduledRunNotificationDrainLeaseDuration(time.Minute),
+	)
 	if err != nil {
 		return err
 	}
+	if len(secondResult.Claimed) != 1 || len(secondResult.Delivered) != 1 || len(secondResult.Failed) != 0 {
+		return fmt.Errorf("second drain = %#v, want one delivered retry", secondResult)
+	}
+	secondClaim := secondResult.Claimed[0]
+	delivered := secondResult.Delivered[0]
 	fmt.Fprintf(w, "claim 2: %s attempts=%d status=%s\n", secondClaim.ID, secondClaim.DeliveryAttempts, secondClaim.DeliveryStatus)
-	if err := channel.Deliver(secondClaim); err != nil {
-		if _, markErr := store.MarkScheduledRunNotificationFailed(ctx, personal.MarkScheduledRunNotificationFailedRequest{
-			ID:       secondClaim.ID,
-			WorkerID: notificationWorkerID,
-			Error:    err.Error(),
-			RetryAt:  deliveryNow.Add(4 * time.Minute),
-			FailedAt: deliveryNow.Add(2*time.Minute + 5*time.Second),
-		}); markErr != nil {
-			return markErr
-		}
-		return fmt.Errorf("retry delivery failed after recording failure: %w", err)
-	}
-	delivered, err := store.MarkScheduledRunNotificationDelivered(ctx, personal.MarkScheduledRunNotificationDeliveredRequest{
-		ID:          secondClaim.ID,
-		WorkerID:    notificationWorkerID,
-		DeliveredAt: deliveryNow.Add(2*time.Minute + 5*time.Second),
-	})
-	if err != nil {
-		return err
-	}
 	fmt.Fprintf(w, "delivery sent to host channel: %s\n", channel.Last())
 	fmt.Fprintf(w, "delivered: %s status=%s attempts=%d\n", delivered.ID, delivered.DeliveryStatus, delivered.DeliveryAttempts)
 
@@ -220,22 +216,6 @@ func openTempSQLite(prefix string) (*sql.DB, string, error) {
 		return nil, "", fmt.Errorf("configure sqlite WAL mode: %w", err)
 	}
 	return db, path, nil
-}
-
-func claimOne(ctx context.Context, store personal.ScheduledRunNotificationDeliveryStore, now time.Time) (personal.ScheduledRunNotificationRecord, error) {
-	claimed, err := store.ClaimScheduledRunNotifications(ctx, personal.ClaimScheduledRunNotificationsRequest{
-		WorkerID:      notificationWorkerID,
-		Limit:         1,
-		Now:           now,
-		LeaseDuration: time.Minute,
-	})
-	if err != nil {
-		return personal.ScheduledRunNotificationRecord{}, err
-	}
-	if len(claimed) != 1 {
-		return personal.ScheduledRunNotificationRecord{}, fmt.Errorf("claimed notifications = %d, want 1", len(claimed))
-	}
-	return claimed[0], nil
 }
 
 func waitForNotifications(store personal.ScheduledRunNotificationStore, runID string, status personal.ScheduledRunNotificationDeliveryStatus, count int) ([]personal.ScheduledRunNotificationRecord, error) {

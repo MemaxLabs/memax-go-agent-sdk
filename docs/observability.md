@@ -225,9 +225,13 @@ the outbox needs first-class drain state. The reference memory store and
 `stack/personal/sqlitestore` support claim/ack delivery: a host delivery worker
 claims ready notifications with a bounded lease, external delivery happens in
 host code, and the worker marks the record delivered or failed with a retry
-time. Expired leases become claimable again, giving hosts an at-least-once
-delivery primitive without hard-coding email, Slack, mobile push, or webhook
-clients into the SDK.
+time. `DrainScheduledRunNotifications` packages that claim, handler, ack, and
+retry bookkeeping into one bounded drain pass while keeping the external
+channel implementation in host code. Handler errors are recorded as retryable
+delivery failures; store claim/ack errors return to the worker and any
+unacked claimed records remain leased until expiry. Expired leases become
+claimable again, giving hosts an at-least-once delivery primitive without
+hard-coding email, Slack, mobile push, or webhook clients into the SDK.
 Use `stack/personal/sqlitestore` when those outbox records and delivery
 attempts need to survive process restarts or be drained by a separate host
 delivery worker.

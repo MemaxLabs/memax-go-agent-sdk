@@ -214,9 +214,12 @@ records; `stack/personal/sqlitestore` persists both scheduled runs and those
 notification records for restart-safe lookback. Notification stores can also
 opt in to the delivery extension: host workers claim pending outbox records,
 hold a bounded delivery lease, then mark records delivered or failed with a
-retry time. The SDK owns durable claim/ack/retry state; email, push, chat, and
-webhook delivery remain host-owned. Week-ahead planning also has eval-backed
-durable task continuity: follow-ups can be written through
+retry time. `DrainScheduledRunNotifications` provides the reusable one-pass
+worker helper for claim, host delivery, ack, and retry bookkeeping: host
+delivery errors are recorded as retryable outbox state, while store errors are
+returned to the worker. Email, push, chat, and webhook delivery remain
+host-owned. Week-ahead planning also has eval-backed durable task continuity:
+follow-ups can be written through
 `upsert_task`, reloaded in a later run through planner context, and updated
 without duplicating the task ledger.
 
