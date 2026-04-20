@@ -211,8 +211,12 @@ reconciliation interface. Hosts can attach `NewScheduledRunNotifier` as an
 event observer to mirror terminal scheduled-run completions, or every lifecycle
 state, into a host-owned notification outbox with idempotent run/status
 records; `stack/personal/sqlitestore` persists both scheduled runs and those
-notification records for restart-safe lookback. Week-ahead planning also has
-eval-backed durable task continuity: follow-ups can be written through
+notification records for restart-safe lookback. Notification stores can also
+opt in to the delivery extension: host workers claim pending outbox records,
+hold a bounded delivery lease, then mark records delivered or failed with a
+retry time. The SDK owns durable claim/ack/retry state; email, push, chat, and
+webhook delivery remain host-owned. Week-ahead planning also has eval-backed
+durable task continuity: follow-ups can be written through
 `upsert_task`, reloaded in a later run through planner context, and updated
 without duplicating the task ledger.
 

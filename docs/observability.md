@@ -220,8 +220,17 @@ leaving the actual delivery channel and buffering policy under host control.
 Notification records include the scheduled prompt plus terminal result or error
 text, so production outbox backends are responsible for any redaction policy
 needed before email, push, chat, or inbox delivery.
-Use `stack/personal/sqlitestore` when those outbox records need to survive
-process restarts or be drained by a separate host delivery worker.
+Stores can optionally implement `ScheduledRunNotificationDeliveryStore` when
+the outbox needs first-class drain state. The reference memory store and
+`stack/personal/sqlitestore` support claim/ack delivery: a host delivery worker
+claims ready notifications with a bounded lease, external delivery happens in
+host code, and the worker marks the record delivered or failed with a retry
+time. Expired leases become claimable again, giving hosts an at-least-once
+delivery primitive without hard-coding email, Slack, mobile push, or webhook
+clients into the SDK.
+Use `stack/personal/sqlitestore` when those outbox records and delivery
+attempts need to survive process restarts or be drained by a separate host
+delivery worker.
 
 ## Regression Coverage
 

@@ -388,6 +388,338 @@ func TestStoreCreateScheduledRunNotificationIsAtomic(t *testing.T) {
 	}
 }
 
+func TestStoreScheduledRunNotificationDeliveryLifecycle(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	now := time.Date(2026, 4, 19, 7, 10, 0, 0, time.UTC)
+	first := scheduledRunNotificationRequest("daily-brief:2026-04-19T07:00:00Z", personal.ScheduledRunSucceeded, 0)
+	second := scheduledRunNotificationRequest("weekly-plan:2026-04-20T07:00:00Z", personal.ScheduledRunSucceeded, time.Minute)
+	for _, req := range []personal.CreateScheduledRunNotificationRequest{first, second} {
+		if _, _, err := store.CreateScheduledRunNotification(context.Background(), req); err != nil {
+			t.Fatalf("CreateScheduledRunNotification(%q) error = %v", req.ID, err)
+		}
+	}
+
+	claimed, err := store.ClaimScheduledRunNotifications(context.Background(), personal.ClaimScheduledRunNotificationsRequest{
+		WorkerID:      "worker-1",
+		Limit:         1,
+		Now:           now,
+		LeaseDuration: time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("ClaimScheduledRunNotifications() error = %v", err)
+	}
+	if len(claimed) != 1 || claimed[0].ID != first.ID || claimed[0].DeliveryStatus != personal.ScheduledRunNotificationDeliveryDelivering || claimed[0].DeliveryAttempts != 1 {
+		t.Fatalf("claimed = %#v, want first notification delivering on first attempt", claimed)
+	}
+	if _, err := store.MarkScheduledRunNotificationDelivered(context.Background(), personal.MarkScheduledRunNotificationDeliveredRequest{
+		ID:          claimed[0].ID,
+		WorkerID:    "other-worker",
+		DeliveredAt: now.Add(10 * time.Second),
+	}); !errors.Is(err, personal.ErrScheduledRunNotificationWorkerMismatch) {
+		t.Fatalf("MarkScheduledRunNotificationDelivered(wrong worker) error = %v, want worker mismatch", err)
+	}
+	delivered, err := store.MarkScheduledRunNotificationDelivered(context.Background(), personal.MarkScheduledRunNotificationDeliveredRequest{
+		ID:          claimed[0].ID,
+		WorkerID:    "worker-1",
+		DeliveredAt: now.Add(10 * time.Second),
+	})
+	if err != nil {
+		t.Fatalf("MarkScheduledRunNotificationDelivered() error = %v", err)
+	}
+	if delivered.DeliveryStatus != personal.ScheduledRunNotificationDeliveryDelivered || delivered.DeliveredAt.IsZero() {
+		t.Fatalf("delivered = %#v, want delivered notification", delivered)
+	}
+	duplicateDelivered, err := store.MarkScheduledRunNotificationDelivered(context.Background(), personal.MarkScheduledRunNotificationDeliveredRequest{
+		ID:          claimed[0].ID,
+		WorkerID:    "worker-1",
+		DeliveredAt: now.Add(20 * time.Second),
+	})
+	if err != nil {
+		t.Fatalf("MarkScheduledRunNotificationDelivered(duplicate) error = %v", err)
+	}
+	if !duplicateDelivered.DeliveredAt.Equal(delivered.DeliveredAt) || !duplicateDelivered.DeliveryUpdatedAt.Equal(delivered.DeliveryUpdatedAt) {
+		t.Fatalf("duplicate delivered = %#v, want idempotent original delivery timestamps %#v", duplicateDelivered, delivered)
+	}
+	if _, err := store.MarkScheduledRunNotificationDelivered(context.Background(), personal.MarkScheduledRunNotificationDeliveredRequest{
+		ID:          claimed[0].ID,
+		WorkerID:    "other-worker",
+		DeliveredAt: now.Add(30 * time.Second),
+	}); !errors.Is(err, personal.ErrScheduledRunNotificationWorkerMismatch) {
+		t.Fatalf("MarkScheduledRunNotificationDelivered(duplicate wrong worker) error = %v, want worker mismatch", err)
+	}
+	if _, err := store.MarkScheduledRunNotificationFailed(context.Background(), personal.MarkScheduledRunNotificationFailedRequest{
+		ID:       claimed[0].ID,
+		WorkerID: "worker-1",
+		Error:    "late failure",
+	}); !errors.Is(err, personal.ErrScheduledRunNotificationNotDelivering) {
+		t.Fatalf("MarkScheduledRunNotificationFailed(delivered) error = %v, want not delivering", err)
+	}
+
+	remaining, err := store.ClaimScheduledRunNotifications(context.Background(), personal.ClaimScheduledRunNotificationsRequest{
+		WorkerID:      "worker-2",
+		Limit:         10,
+		Now:           now,
+		LeaseDuration: time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("ClaimScheduledRunNotifications(remaining) error = %v", err)
+	}
+	if len(remaining) != 1 || remaining[0].ID != second.ID {
+		t.Fatalf("remaining = %#v, want second notification only", remaining)
+	}
+	retryAt := now.Add(2 * time.Minute)
+	failedAt := now.Add(30 * time.Second)
+	failed, err := store.MarkScheduledRunNotificationFailed(context.Background(), personal.MarkScheduledRunNotificationFailedRequest{
+		ID:       remaining[0].ID,
+		WorkerID: "worker-2",
+		Error:    "push gateway unavailable",
+		RetryAt:  retryAt,
+		FailedAt: failedAt,
+	})
+	if err != nil {
+		t.Fatalf("MarkScheduledRunNotificationFailed() error = %v", err)
+	}
+	if failed.DeliveryStatus != personal.ScheduledRunNotificationDeliveryFailed || failed.DeliveryError != "push gateway unavailable" || !failed.DeliverAfter.Equal(retryAt) || !failed.DeliveryUpdatedAt.Equal(failedAt) {
+		t.Fatalf("failed = %#v, want failed retry state", failed)
+	}
+	notYet, err := store.ClaimScheduledRunNotifications(context.Background(), personal.ClaimScheduledRunNotificationsRequest{
+		WorkerID: "worker-3",
+		Limit:    10,
+		Now:      retryAt.Add(-time.Second),
+	})
+	if err != nil {
+		t.Fatalf("ClaimScheduledRunNotifications(before retry) error = %v", err)
+	}
+	if len(notYet) != 0 {
+		t.Fatalf("notYet = %#v, want retry hidden before RetryAt", notYet)
+	}
+	reclaimed, err := store.ClaimScheduledRunNotifications(context.Background(), personal.ClaimScheduledRunNotificationsRequest{
+		WorkerID: "worker-3",
+		Limit:    10,
+		Now:      retryAt,
+	})
+	if err != nil {
+		t.Fatalf("ClaimScheduledRunNotifications(retry) error = %v", err)
+	}
+	if len(reclaimed) != 1 || reclaimed[0].ID != second.ID || reclaimed[0].DeliveryAttempts != 2 || reclaimed[0].DeliveryWorkerID != "worker-3" {
+		t.Fatalf("reclaimed = %#v, want second attempt by worker-3", reclaimed)
+	}
+}
+
+func TestStoreClaimScheduledRunNotificationIsAtomic(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	req := scheduledRunNotificationRequest("daily-brief:2026-04-19T07:00:00Z", personal.ScheduledRunSucceeded, 0)
+	if _, _, err := store.CreateScheduledRunNotification(context.Background(), req); err != nil {
+		t.Fatalf("CreateScheduledRunNotification() error = %v", err)
+	}
+	now := time.Date(2026, 4, 19, 7, 10, 0, 0, time.UTC)
+	const goroutines = 16
+	var (
+		wg           sync.WaitGroup
+		claimedCount int
+		mu           sync.Mutex
+	)
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			claimed, err := store.ClaimScheduledRunNotifications(context.Background(), personal.ClaimScheduledRunNotificationsRequest{
+				WorkerID:      fmt.Sprintf("worker-%d", i),
+				Limit:         1,
+				Now:           now,
+				LeaseDuration: time.Hour,
+			})
+			if err != nil {
+				t.Errorf("ClaimScheduledRunNotifications() error = %v", err)
+				return
+			}
+			if len(claimed) > 0 {
+				mu.Lock()
+				claimedCount += len(claimed)
+				mu.Unlock()
+			}
+		}(i)
+	}
+	wg.Wait()
+	if claimedCount != 1 {
+		t.Fatalf("claimed count = %d, want 1", claimedCount)
+	}
+	list, err := store.ListScheduledRunNotifications(context.Background(), personal.ScheduledRunNotificationFilter{
+		DeliveryStatus: personal.ScheduledRunNotificationDeliveryDelivering,
+	})
+	if err != nil {
+		t.Fatalf("ListScheduledRunNotifications(delivering) error = %v", err)
+	}
+	if len(list) != 1 || list[0].DeliveryAttempts != 1 {
+		t.Fatalf("delivering notifications = %#v, want single first attempt", list)
+	}
+}
+
+func TestStoreReclaimsExpiredScheduledRunNotificationLease(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	req := scheduledRunNotificationRequest("daily-brief:2026-04-19T07:00:00Z", personal.ScheduledRunSucceeded, 0)
+	if _, _, err := store.CreateScheduledRunNotification(context.Background(), req); err != nil {
+		t.Fatalf("CreateScheduledRunNotification() error = %v", err)
+	}
+	now := time.Date(2026, 4, 19, 7, 10, 0, 0, time.UTC)
+	claimed, err := store.ClaimScheduledRunNotifications(context.Background(), personal.ClaimScheduledRunNotificationsRequest{
+		WorkerID:      "worker-1",
+		Limit:         1,
+		Now:           now,
+		LeaseDuration: time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("ClaimScheduledRunNotifications() error = %v", err)
+	}
+	if len(claimed) != 1 {
+		t.Fatalf("claimed = %#v, want one notification", claimed)
+	}
+	blocked, err := store.ClaimScheduledRunNotifications(context.Background(), personal.ClaimScheduledRunNotificationsRequest{
+		WorkerID: "worker-2",
+		Limit:    1,
+		Now:      now.Add(30 * time.Second),
+	})
+	if err != nil {
+		t.Fatalf("ClaimScheduledRunNotifications(active lease) error = %v", err)
+	}
+	if len(blocked) != 0 {
+		t.Fatalf("blocked = %#v, want active lease hidden", blocked)
+	}
+	reclaimed, err := store.ClaimScheduledRunNotifications(context.Background(), personal.ClaimScheduledRunNotificationsRequest{
+		WorkerID: "worker-2",
+		Limit:    1,
+		Now:      now.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("ClaimScheduledRunNotifications(expired lease) error = %v", err)
+	}
+	if len(reclaimed) != 1 || reclaimed[0].DeliveryWorkerID != "worker-2" || reclaimed[0].DeliveryAttempts != 2 {
+		t.Fatalf("reclaimed = %#v, want expired lease reclaimed", reclaimed)
+	}
+}
+
+func TestStoreScheduledRunNotificationDeliverySurvivesReopen(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "scheduled-runs.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("sql.Open() error = %v", err)
+	}
+	store, err := New(context.Background(), db)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	req := scheduledRunNotificationRequest("daily-brief:2026-04-19T07:00:00Z", personal.ScheduledRunSucceeded, 0)
+	if _, _, err := store.CreateScheduledRunNotification(context.Background(), req); err != nil {
+		t.Fatalf("CreateScheduledRunNotification() error = %v", err)
+	}
+	now := time.Date(2026, 4, 19, 7, 10, 0, 0, time.UTC)
+	claimed, err := store.ClaimScheduledRunNotifications(context.Background(), personal.ClaimScheduledRunNotificationsRequest{
+		WorkerID: "worker-1",
+		Limit:    1,
+		Now:      now,
+	})
+	if err != nil {
+		t.Fatalf("ClaimScheduledRunNotifications() error = %v", err)
+	}
+	delivered, err := store.MarkScheduledRunNotificationDelivered(context.Background(), personal.MarkScheduledRunNotificationDeliveredRequest{
+		ID:          claimed[0].ID,
+		WorkerID:    "worker-1",
+		DeliveredAt: now.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("MarkScheduledRunNotificationDelivered() error = %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	reopenedDB, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("sql.Open(reopen) error = %v", err)
+	}
+	defer reopenedDB.Close()
+	reopened, err := New(context.Background(), reopenedDB)
+	if err != nil {
+		t.Fatalf("New(reopen) error = %v", err)
+	}
+	list, err := reopened.ListScheduledRunNotifications(context.Background(), personal.ScheduledRunNotificationFilter{
+		DeliveryStatus: personal.ScheduledRunNotificationDeliveryDelivered,
+	})
+	if err != nil {
+		t.Fatalf("ListScheduledRunNotifications(reopen) error = %v", err)
+	}
+	if len(list) != 1 || list[0].ID != delivered.ID || list[0].DeliveryAttempts != 1 || list[0].DeliveredAt.IsZero() {
+		t.Fatalf("reopened notifications = %#v, want persisted delivered state", list)
+	}
+}
+
+func TestStoreMigratesLegacyScheduledRunNotificationSchema(t *testing.T) {
+	t.Parallel()
+
+	db, err := sql.Open("sqlite", "file:"+t.Name()+"?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatalf("sql.Open() error = %v", err)
+	}
+	defer db.Close()
+	if _, err := db.ExecContext(context.Background(), `
+		CREATE TABLE memax_personal_scheduled_run_notifications (
+			id TEXT PRIMARY KEY,
+			run_id TEXT NOT NULL,
+			status TEXT NOT NULL,
+			trigger_name TEXT NOT NULL,
+			occurrence_at_unix_ms INTEGER NOT NULL,
+			prompt TEXT NOT NULL,
+			result TEXT NOT NULL DEFAULT '',
+			error TEXT NOT NULL DEFAULT '',
+			created_at_unix_ms INTEGER NOT NULL
+		)
+	`); err != nil {
+		t.Fatalf("create legacy notification schema: %v", err)
+	}
+	createdAt := time.Date(2026, 4, 19, 7, 5, 0, 0, time.UTC)
+	if _, err := db.ExecContext(context.Background(), `
+		INSERT INTO memax_personal_scheduled_run_notifications (
+			id, run_id, status, trigger_name, occurrence_at_unix_ms,
+			prompt, result, error, created_at_unix_ms
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, "legacy:succeeded", "legacy", string(personal.ScheduledRunSucceeded), "daily-brief",
+		time.Date(2026, 4, 19, 7, 0, 0, 0, time.UTC).UnixMilli(),
+		"Prepare the morning briefing.", "Morning briefing ready.", "", createdAt.UnixMilli()); err != nil {
+		t.Fatalf("insert legacy notification: %v", err)
+	}
+
+	store, err := New(context.Background(), db)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	list, err := store.ListScheduledRunNotifications(context.Background(), personal.ScheduledRunNotificationFilter{})
+	if err != nil {
+		t.Fatalf("ListScheduledRunNotifications() error = %v", err)
+	}
+	if len(list) != 1 || list[0].DeliveryStatus != personal.ScheduledRunNotificationDeliveryPending || !list[0].DeliverAfter.Equal(createdAt) {
+		t.Fatalf("migrated notifications = %#v, want pending delivery defaults from created_at", list)
+	}
+	claimed, err := store.ClaimScheduledRunNotifications(context.Background(), personal.ClaimScheduledRunNotificationsRequest{
+		WorkerID: "worker-1",
+		Limit:    1,
+		Now:      createdAt,
+	})
+	if err != nil {
+		t.Fatalf("ClaimScheduledRunNotifications() error = %v", err)
+	}
+	if len(claimed) != 1 || claimed[0].ID != "legacy:succeeded" {
+		t.Fatalf("claimed = %#v, want migrated legacy notification claimable", claimed)
+	}
+}
+
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
 

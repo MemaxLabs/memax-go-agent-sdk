@@ -219,8 +219,10 @@ system prompt.
   reconciliation interface, and can mirror scheduled-run lifecycle into a
   host-owned notification outbox through `NewScheduledRunNotifier`; the
   personal SQLite store now persists both scheduled runs and notification
-  records for restart-safe lookback. Next steps are host delivery adapters for
-  external personal systems plus more adversarial preset suites
+  records for restart-safe lookback. Notification stores can opt in to
+  `ScheduledRunNotificationDeliveryStore` for at-least-once claim/ack delivery
+  with retry times and expired-lease reclaim. Next steps are host delivery
+  adapters for external personal systems plus more adversarial preset suites
   for privacy-sensitive and long-horizon personal workflows.
 - Add `stack/cloudmanaged` for multi-tenant, server-embedded, remote-execution
   products with durable jobs, tenancy-aware policy, quotas, audit hooks, and

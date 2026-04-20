@@ -134,8 +134,12 @@ Common sources of confusion:
   reference memory outbox is intentionally small; `stack/personal/sqlitestore`
   persists the same outbox records for restart-safe lookback. Production hosts
   can replace or drain it into email, push, chat, or durable inbox delivery.
-  Notification records carry the scheduled prompt plus terminal result or error
-  text; host-owned delivery backends should apply their own redaction policy.
+  Stores that implement `ScheduledRunNotificationDeliveryStore` add an
+  at-least-once delivery contract: workers claim pending notifications with a
+  lease, mark successful attempts delivered, and mark transient failures with a
+  retry time. Notification records carry the scheduled prompt plus terminal
+  result or error text; host-owned delivery backends should apply their own
+  redaction policy before sending them to external channels.
 - attaching `Tasks` gives personal workflows a durable task ledger. The
   planner reloads task state before every model request, so follow-ups created
   in one run through `upsert_task` can be visible to a later run before the
