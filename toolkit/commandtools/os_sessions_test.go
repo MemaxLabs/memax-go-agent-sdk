@@ -226,12 +226,44 @@ func TestOSSessionManagerClassifiesStateErrors(t *testing.T) {
 	if _, err := manager.StartCommand(context.Background(), StartRequest{
 		SessionID: "session-1",
 		ID:        "fixed",
-		Argv:      []string{os.Args[0], "-test.run=TestHelperProcess", "--", "session", "linger"},
-		Env:       map[string]string{"GO_WANT_HELPER_PROCESS": "1"},
+		// Use an executable path that cannot start. Duplicate explicit IDs must
+		// be rejected before the OS adapter attempts process creation.
+		Argv: []string{filepath.Join(t.TempDir(), "missing-helper")},
+		Env:  map[string]string{"GO_WANT_HELPER_PROCESS": "1"},
 	}); err != nil {
 		assertCommandSessionError(t, err, ErrCommandSessionAlreadyExists, "commandtools: command session fixed already exists")
 	} else {
 		t.Fatal("StartCommand duplicate returned nil error, want ErrCommandSessionAlreadyExists")
+	}
+}
+
+func TestOSSessionManagerReleasesReservedIDAfterStartFailure(t *testing.T) {
+	manager, err := NewOSSessionManager(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewOSSessionManager returned error: %v", err)
+	}
+	id := "retry-after-start-failure"
+	if _, err := manager.StartCommand(context.Background(), StartRequest{
+		SessionID: "session-1",
+		ID:        id,
+		Argv:      []string{filepath.Join(t.TempDir(), "missing-helper")},
+	}); err == nil || errors.Is(err, ErrCommandSessionAlreadyExists) {
+		t.Fatalf("StartCommand missing executable error = %v, want non-duplicate start failure", err)
+	}
+	started, err := manager.StartCommand(context.Background(), StartRequest{
+		SessionID: "session-1",
+		ID:        id,
+		Argv:      []string{os.Args[0], "-test.run=TestHelperProcess", "--", "session", "linger"},
+		Env:       map[string]string{"GO_WANT_HELPER_PROCESS": "1"},
+	})
+	if err != nil {
+		t.Fatalf("StartCommand retry returned error: %v", err)
+	}
+	defer func() {
+		_, _ = manager.StopCommand(context.Background(), StopRequest{SessionID: "session-1", ID: started.ID, Force: true})
+	}()
+	if started.ID != id {
+		t.Fatalf("started.ID = %q, want %q", started.ID, id)
 	}
 }
 

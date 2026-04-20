@@ -132,6 +132,7 @@ type OSSessionManager struct {
 	drainTimeout      time.Duration
 	nextID            int
 	sessions          map[string]*osSessionState
+	reservedIDs       map[string]struct{}
 }
 
 // OSSessionManagerOption configures an OSSessionManager.
@@ -210,6 +211,7 @@ func NewOSSessionManager(root string, opts ...OSSessionManagerOption) (*OSSessio
 		stopGrace:         defaultSessionStopGrace,
 		drainTimeout:      defaultSessionDrainTimeout,
 		sessions:          map[string]*osSessionState{},
+		reservedIDs:       map[string]struct{}{},
 	}
 	if root != "" {
 		abs, err := filepath.Abs(root)
@@ -278,6 +280,16 @@ func (m *OSSessionManager) StartCommand(ctx context.Context, req StartRequest) (
 	if err != nil {
 		return CommandSession{}, err
 	}
+	id, err := m.reserveSessionID(req.ID)
+	if err != nil {
+		return CommandSession{}, err
+	}
+	reserved := true
+	defer func() {
+		if reserved {
+			m.releaseReservedSessionID(id)
+		}
+	}()
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = cwd
 	cmd.Env = m.runner.env(req.Env)
@@ -315,30 +327,13 @@ func (m *OSSessionManager) StartCommand(ctx context.Context, req StartRequest) (
 		done:    make(chan struct{}),
 		updates: make(chan struct{}, 1),
 	}
+	state.session.ID = id
 	if timeout > 0 {
 		state.timer = time.AfterFunc(timeout, state.timeout)
 	}
 
-	m.mu.Lock()
-	id := strings.TrimSpace(req.ID)
-	if id != "" {
-		if _, exists := m.sessions[id]; exists {
-			m.mu.Unlock()
-			cleanupFailedSessionRuntime(runtime)
-			return CommandSession{}, commandSessionError(ErrCommandSessionAlreadyExists, "commandtools: command session %s already exists", id)
-		}
-	} else {
-		for {
-			m.nextID++
-			id = fmt.Sprintf("cmd-%d", m.nextID)
-			if _, exists := m.sessions[id]; !exists {
-				break
-			}
-		}
-	}
-	state.session.ID = id
-	m.sessions[id] = state
-	m.mu.Unlock()
+	m.registerReservedSession(id, state)
+	reserved = false
 
 	if req.Stdin != "" {
 		input := runtime.inputWriter()
@@ -346,6 +341,7 @@ func (m *OSSessionManager) StartCommand(ctx context.Context, req StartRequest) (
 			m.mu.Lock()
 			delete(m.sessions, state.session.ID)
 			m.mu.Unlock()
+			state.stopTimer()
 			cleanupFailedSessionRuntime(runtime)
 			return CommandSession{}, commandSessionError(ErrCommandSessionStdinClosed, "commandtools: command session %s stdin is closed", state.session.ID)
 		}
@@ -353,6 +349,7 @@ func (m *OSSessionManager) StartCommand(ctx context.Context, req StartRequest) (
 			m.mu.Lock()
 			delete(m.sessions, state.session.ID)
 			m.mu.Unlock()
+			state.stopTimer()
 			cleanupFailedSessionRuntime(runtime)
 			return CommandSession{}, fmt.Errorf("commandtools: write initial stdin: %w", err)
 		}
@@ -366,6 +363,47 @@ func (m *OSSessionManager) StartCommand(ctx context.Context, req StartRequest) (
 	go state.waitAndFinish(runtime.readers, doneChans)
 
 	return state.snapshot(), nil
+}
+
+func (m *OSSessionManager) reserveSessionID(requested string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	id := strings.TrimSpace(requested)
+	if id != "" {
+		if _, exists := m.sessions[id]; exists {
+			return "", commandSessionError(ErrCommandSessionAlreadyExists, "commandtools: command session %s already exists", id)
+		}
+		if _, reserved := m.reservedIDs[id]; reserved {
+			return "", commandSessionError(ErrCommandSessionAlreadyExists, "commandtools: command session %s already exists", id)
+		}
+		m.reservedIDs[id] = struct{}{}
+		return id, nil
+	}
+	for {
+		m.nextID++
+		id = fmt.Sprintf("cmd-%d", m.nextID)
+		if _, exists := m.sessions[id]; exists {
+			continue
+		}
+		if _, reserved := m.reservedIDs[id]; reserved {
+			continue
+		}
+		m.reservedIDs[id] = struct{}{}
+		return id, nil
+	}
+}
+
+func (m *OSSessionManager) releaseReservedSessionID(id string) {
+	m.mu.Lock()
+	delete(m.reservedIDs, id)
+	m.mu.Unlock()
+}
+
+func (m *OSSessionManager) registerReservedSession(id string, state *osSessionState) {
+	m.mu.Lock()
+	delete(m.reservedIDs, id)
+	m.sessions[id] = state
+	m.mu.Unlock()
 }
 
 func (m *OSSessionManager) ReadCommandOutput(ctx context.Context, req ReadRequest) (ReadResult, error) {
@@ -803,6 +841,15 @@ func (s *osSessionState) isDraining() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.draining
+}
+
+func (s *osSessionState) stopTimer() {
+	s.mu.Lock()
+	if s.timer != nil {
+		s.timer.Stop()
+		s.timer = nil
+	}
+	s.mu.Unlock()
 }
 
 func (s *osSessionState) stop(ctx context.Context, force bool) (CommandSession, error) {
