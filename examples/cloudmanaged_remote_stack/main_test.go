@@ -20,6 +20,7 @@ func TestRunDemoShowsRemoteWorkerLifecycle(t *testing.T) {
 		"run state: running",
 		"run state: succeeded",
 		"result: remote worker finished the managed run",
+		"server GET /ready:",
 		"server GET /claim:",
 		"worker: example-worker-1",
 		"run:",

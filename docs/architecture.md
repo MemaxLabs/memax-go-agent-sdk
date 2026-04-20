@@ -143,7 +143,9 @@ hosts coordinate remote claiming separately while worker-side execution still
 flows through the existing tenant seam. An initial host-owned helper now also
 exists through `stack/cloudmanaged/remote`, which keeps claim discovery and
 reference HTTP polling outside the core stack while routing actual execution
-through `ExecuteRun`. Cloudmanaged observability now has the same event-plus-
+through `ExecuteRun`; it also exposes a non-mutating readiness probe so claim
+servers can report whether queued-run discovery is reachable without claiming
+work. Cloudmanaged observability now has the same event-plus-
 metrics split as the rest of the SDK: run lifecycle transitions and tenant
 denials remain structured events for audit/debug ordering, while
 `Config.Base.Meter` records aggregate managed-runtime metrics for run states

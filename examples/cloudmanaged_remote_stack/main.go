@@ -90,22 +90,43 @@ func runDemo(ctx context.Context, w io.Writer) error {
 	if err != nil {
 		return err
 	}
-	var serverGETs int
+	readyHandler := remote.ReadinessHandler(serverStack.RunStore())
+	var serverClaimGETs, serverReadyGETs int
 	var serverMu sync.Mutex
 	server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
 		serverMu.Lock()
-		serverGETs++
+		switch req.URL.Path {
+		case "/claim":
+			serverClaimGETs++
+		case "/ready":
+			serverReadyGETs++
+		}
 		serverMu.Unlock()
-		handler.ServeHTTP(rw, req)
+		switch req.URL.Path {
+		case "/claim":
+			handler.ServeHTTP(rw, req)
+		case "/ready":
+			readyHandler.ServeHTTP(rw, req)
+		default:
+			http.NotFound(rw, req)
+		}
 	}))
 	defer server.Close()
+	readyResp, err := server.Client().Get(server.URL + "/ready")
+	if err != nil {
+		return fmt.Errorf("check readiness: %w", err)
+	}
+	readyResp.Body.Close()
+	if readyResp.StatusCode != http.StatusOK {
+		return fmt.Errorf("readiness status = %s", readyResp.Status)
+	}
 
 	workerStack, workerDB, err := buildStack(ctx, dbPath, modelClient)
 	if err != nil {
 		return err
 	}
 	defer workerDB.Close()
-	pool, err := remote.NewHTTPPool(server.URL)
+	pool, err := remote.NewHTTPPool(server.URL + "/claim")
 	if err != nil {
 		return err
 	}
@@ -141,9 +162,11 @@ func runDemo(ctx context.Context, w io.Writer) error {
 		}
 	}
 	serverMu.Lock()
-	gets := serverGETs
+	claimGets := serverClaimGETs
+	readyGets := serverReadyGETs
 	serverMu.Unlock()
-	fmt.Fprintf(w, "server GET /claim: %d\n", gets)
+	fmt.Fprintf(w, "server GET /ready: %d\n", readyGets)
+	fmt.Fprintf(w, "server GET /claim: %d\n", claimGets)
 	fmt.Fprintf(w, "worker: %s\n", final.WorkerID)
 	fmt.Fprintf(w, "run: %s %s\n", final.ID, final.Status)
 	fmt.Fprintf(w, "session: %s\n", final.SessionID)
@@ -166,8 +189,10 @@ func runServer(ctx context.Context, w io.Writer, addr, dbPath string) error {
 	}
 	mux := http.NewServeMux()
 	mux.Handle("/claim", handler)
+	mux.Handle("/ready", remote.ReadinessHandler(stack.RunStore()))
 	fmt.Fprintf(w, "queued run: %s\n", record.ID)
 	fmt.Fprintf(w, "claim endpoint: http://%s/claim\n", addr)
+	fmt.Fprintf(w, "readiness endpoint: http://%s/ready\n", addr)
 	return http.ListenAndServe(addr, mux)
 }
 

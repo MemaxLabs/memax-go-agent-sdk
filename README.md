@@ -166,13 +166,15 @@ run seam instead of inventing a second job abstraction. A reference
 `stack/cloudmanaged/remote` package now layers host-owned claim discovery and
 HTTP polling on top of the same `ExecuteRun` path, keeping remote workers on
 the same tenant-validator configuration as the enqueueing side instead of
-introducing SDK-level worker delegation tokens. The managed eval suite now
+introducing SDK-level worker delegation tokens. The same remote package also
+includes a GET-only readiness handler so claim servers can expose a non-mutating
+store probe for orchestrators before workers start polling. The managed eval suite now
 also locks in mid-run tenant revocation as a first-class failure path for
 queued workers, plus a host-owned remote HTTP poll path over the same run
 contract. `examples/cloudmanaged_remote_stack` now shows both ends of that
 wire: the default mode runs an in-process demo, while `-mode=server` serves
-`ClaimHandler` and `-mode=worker` runs `remote.Watch` against the same SQLite
-run database.
+`ClaimHandler` plus `/ready`, and `-mode=worker` runs `remote.Watch` against
+the same SQLite run database.
 The managed stack now also records provider-neutral operational metrics through
 `Config.Base.Meter`: run lifecycle counters and duration measurements, tenant
 denial counters, quota store fallback counters, worker claim and heartbeat

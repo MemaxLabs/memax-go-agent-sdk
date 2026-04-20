@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -196,6 +197,101 @@ func TestClaimHandlerRequiresQueuedRunDiscovery(t *testing.T) {
 	}
 }
 
+func TestReadinessHandlerReportsReadyForEmptyQueue(t *testing.T) {
+	t.Parallel()
+
+	req := httptest.NewRequest(http.MethodGet, "/ready", nil)
+	rec := httptest.NewRecorder()
+
+	ReadinessHandler(cloudmanaged.NewMemoryRunStore()).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var report ReadinessReport
+	if err := json.NewDecoder(rec.Body).Decode(&report); err != nil {
+		t.Fatalf("decode report: %v", err)
+	}
+	if report.Status != ReadinessOK || !report.QueuedRunDiscovery || report.Error != "" {
+		t.Fatalf("report = %#v, want ready queued-run discovery", report)
+	}
+}
+
+func TestReadinessHandlerReportsStoreFailure(t *testing.T) {
+	t.Parallel()
+
+	req := httptest.NewRequest(http.MethodGet, "/ready", nil)
+	rec := httptest.NewRecorder()
+
+	ReadinessHandler(failingQueueStore{err: fmt.Errorf("sqlite down")}).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
+	}
+	var report ReadinessReport
+	if err := json.NewDecoder(rec.Body).Decode(&report); err != nil {
+		t.Fatalf("decode report: %v", err)
+	}
+	if report.Status != ReadinessNotReady || !report.QueuedRunDiscovery || report.Error != "sqlite down" {
+		t.Fatalf("report = %#v, want not-ready store failure", report)
+	}
+}
+
+func TestReadinessHandlerReportsUnsupportedStore(t *testing.T) {
+	t.Parallel()
+
+	req := httptest.NewRequest(http.MethodGet, "/ready", nil)
+	rec := httptest.NewRecorder()
+
+	ReadinessHandler(staticRunStore{}).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
+	}
+	var report ReadinessReport
+	if err := json.NewDecoder(rec.Body).Decode(&report); err != nil {
+		t.Fatalf("decode report: %v", err)
+	}
+	if report.Status != ReadinessNotReady || report.QueuedRunDiscovery || report.Error == "" {
+		t.Fatalf("report = %#v, want not-ready unsupported store", report)
+	}
+}
+
+func TestReadinessHandlerRejectsUnsupportedMethod(t *testing.T) {
+	t.Parallel()
+
+	req := httptest.NewRequest(http.MethodPost, "/ready", nil)
+	rec := httptest.NewRecorder()
+
+	ReadinessHandler(cloudmanaged.NewMemoryRunStore()).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
+	}
+	if got := rec.Header().Get("Allow"); got != "GET, HEAD" {
+		t.Fatalf("Allow = %q, want GET, HEAD", got)
+	}
+}
+
+func TestReadinessHandlerSupportsHEAD(t *testing.T) {
+	t.Parallel()
+
+	req := httptest.NewRequest(http.MethodHead, "/ready", nil)
+	rec := httptest.NewRecorder()
+
+	ReadinessHandler(cloudmanaged.NewMemoryRunStore()).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if got := rec.Body.String(); got != "" {
+		t.Fatalf("body = %q, want empty HEAD response", got)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/json" {
+		t.Fatalf("Content-Type = %q, want application/json", got)
+	}
+}
+
 func TestRunOnceTreatsClaimRaceAsNoWork(t *testing.T) {
 	t.Parallel()
 
@@ -252,4 +348,13 @@ func (staticRunStore) UpdateRun(context.Context, cloudmanaged.RunUpdate) (cloudm
 
 func (staticRunStore) GetRun(context.Context, string) (cloudmanaged.RunRecord, error) {
 	return cloudmanaged.RunRecord{}, nil
+}
+
+type failingQueueStore struct {
+	staticRunStore
+	err error
+}
+
+func (s failingQueueStore) NextQueuedRun(context.Context) (cloudmanaged.RunRecord, error) {
+	return cloudmanaged.RunRecord{}, s.err
 }
