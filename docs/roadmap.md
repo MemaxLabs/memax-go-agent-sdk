@@ -209,10 +209,11 @@ system prompt.
   over JMAP mail instead of hidden full-message prompt injection. Initial
   host-owned proactive scheduling now also exists through
   `stack/personal` `ScheduledRunStore`, `PeriodicTrigger`, `StartScheduledRun`,
-  and `WatchScheduledTriggers`, with eval-backed idempotency for one daily
-  briefing occurrence. Next steps are broader host adapters for external
-  personal systems plus more adversarial preset suites for privacy-sensitive
-  and long-horizon personal workflows.
+  `FireScheduledTriggers`, `WatchScheduledTriggers`, and named
+  `ScheduledWorkflowRegistry` firing, with eval-backed idempotency for daily
+  briefing, inbox triage, and task-ledger maintenance occurrences. Next steps
+  are broader host adapters for external personal systems plus more adversarial
+  preset suites for privacy-sensitive and long-horizon personal workflows.
 - Add `stack/cloudmanaged` for multi-tenant, server-embedded, remote-execution
   products with durable jobs, tenancy-aware policy, quotas, audit hooks, and
   managed-agent DX.

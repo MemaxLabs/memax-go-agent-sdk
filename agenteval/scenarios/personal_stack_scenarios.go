@@ -1547,6 +1547,12 @@ func PersonalPresetAssistantScheduledTaskLedgerMaintenance() agenteval.Case {
 		Every:  24 * time.Hour,
 		Anchor: time.Date(2026, 4, 20, 8, 0, 0, 0, time.UTC),
 	}
+	registry, registryErr := personal.NewMemoryScheduledWorkflowRegistry(personal.ScheduledWorkflow{
+		Name:        "task-ledger-maintenance",
+		Description: "Maintain the durable task ledger for the current planning window.",
+		Tags:        []string{"tasks", "maintenance"},
+		Trigger:     trigger,
+	})
 
 	var (
 		finalRun       personal.ScheduledRunRecord
@@ -1577,6 +1583,9 @@ func PersonalPresetAssistantScheduledTaskLedgerMaintenance() agenteval.Case {
 			if stackErr != nil {
 				return nil, stackErr
 			}
+			if registryErr != nil {
+				return nil, registryErr
+			}
 			out := make(chan memaxagent.Event, 32)
 			observer := memaxagent.EventObserverFunc(func(_ context.Context, event memaxagent.Event) {
 				select {
@@ -1586,7 +1595,7 @@ func PersonalPresetAssistantScheduledTaskLedgerMaintenance() agenteval.Case {
 			})
 			go func() {
 				defer close(out)
-				finalRun, duplicateRun, duplicateStart, duplicateErr = fireScheduledTriggerOnce(memaxagent.WithEventObserver(ctx, observer), stack, runStore, now, trigger)
+				finalRun, duplicateRun, duplicateStart, duplicateErr = fireScheduledWorkflowOnce(memaxagent.WithEventObserver(ctx, observer), stack, runStore, registry, now, "task-ledger-maintenance")
 			}()
 			return out, nil
 		},
@@ -1599,7 +1608,7 @@ func PersonalPresetAssistantScheduledTaskLedgerMaintenance() agenteval.Case {
 			}
 		},
 		Assertions: []agenteval.Assertion{
-			toolConstructionSucceeded(configErr, taskDBErr, taskStoreErr, runDBErr, runStoreErr, stackErr),
+			toolConstructionSucceeded(configErr, taskDBErr, taskStoreErr, runDBErr, runStoreErr, stackErr, registryErr),
 			agenteval.NoToolErrors(),
 			agenteval.ToolUsed(tasktools.ListToolName),
 			agenteval.ToolUsed(tasktools.UpsertToolName),
@@ -4406,6 +4415,25 @@ func fireScheduledTriggerOnce(ctx context.Context, stack personal.Stack, store p
 		return finalRun, personal.ScheduledRunRecord{}, false, fmt.Errorf("duplicate scheduled trigger fire = %#v, want existing run", duplicateResults)
 	}
 	return finalRun, duplicateResults[0].Record, duplicateResults[0].Created, nil
+}
+
+func fireScheduledWorkflowOnce(ctx context.Context, stack personal.Stack, store personal.ScheduledRunStore, registry personal.ScheduledWorkflowRegistry, now time.Time, name string) (personal.ScheduledRunRecord, personal.ScheduledRunRecord, bool, error) {
+	results, err := stack.FireScheduledWorkflows(ctx, store, registry, now, name)
+	if err != nil {
+		return personal.ScheduledRunRecord{}, personal.ScheduledRunRecord{}, false, err
+	}
+	if len(results) != 1 || results[0].Workflow.Name != name || !results[0].Fire.Created {
+		return personal.ScheduledRunRecord{}, personal.ScheduledRunRecord{}, false, fmt.Errorf("scheduled workflow fire = %#v, want one created run for %q", results, name)
+	}
+	finalRun := waitForScheduledRun(store, results[0].Fire.Record.ID)
+	duplicateResults, err := stack.FireScheduledWorkflows(ctx, store, registry, now, name)
+	if err != nil {
+		return finalRun, personal.ScheduledRunRecord{}, false, err
+	}
+	if len(duplicateResults) != 1 || duplicateResults[0].Workflow.Name != name {
+		return finalRun, personal.ScheduledRunRecord{}, false, fmt.Errorf("duplicate scheduled workflow fire = %#v, want existing run for %q", duplicateResults, name)
+	}
+	return finalRun, duplicateResults[0].Fire.Record, duplicateResults[0].Fire.Created, nil
 }
 
 func waitForScheduledRun(store personal.ScheduledRunStore, id string) personal.ScheduledRunRecord {

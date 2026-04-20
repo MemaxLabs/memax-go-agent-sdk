@@ -15,6 +15,14 @@ import (
 // needs an explicit store.
 var ErrScheduledRunStoreRequired = errors.New("personal stack: scheduled run store is required")
 
+// ErrScheduledWorkflowRegistryRequired reports that proactive workflow
+// execution needs an explicit workflow registry.
+var ErrScheduledWorkflowRegistryRequired = errors.New("personal stack: scheduled workflow registry is required")
+
+// ErrScheduledWorkflowNotFound reports that one requested scheduled workflow
+// does not exist in a registry.
+var ErrScheduledWorkflowNotFound = errors.New("personal stack: scheduled workflow not found")
+
 // ErrScheduledRunNotFound reports that one scheduled run record does not
 // exist.
 var ErrScheduledRunNotFound = errors.New("personal stack: scheduled run not found")
@@ -196,12 +204,64 @@ type ScheduledTrigger interface {
 	IntentAt(now time.Time) (ScheduledIntent, bool)
 }
 
+// ScheduledWorkflow describes one named proactive workflow exposed by a host.
+// Names are trimmed, exact, and case-sensitive identifiers. Trigger
+// implementations should be immutable or concurrency-safe because registries
+// return shallow copies of the trigger value. The registry is intentionally
+// separate from ScheduledRunStore: it is discoverable workflow configuration,
+// while ScheduledRunStore is durable execution state.
+type ScheduledWorkflow struct {
+	Name        string
+	Description string
+	Tags        []string
+	Trigger     ScheduledTrigger
+}
+
+// ScheduledWorkflowRegistry lists host-owned proactive workflows.
+type ScheduledWorkflowRegistry interface {
+	ListScheduledWorkflows(context.Context) ([]ScheduledWorkflow, error)
+}
+
+// MemoryScheduledWorkflowRegistry is the reference in-memory scheduled
+// workflow registry.
+type MemoryScheduledWorkflowRegistry struct {
+	mu        sync.RWMutex
+	workflows []ScheduledWorkflow
+}
+
+// NewMemoryScheduledWorkflowRegistry constructs a reference in-memory
+// scheduled workflow registry.
+func NewMemoryScheduledWorkflowRegistry(workflows ...ScheduledWorkflow) (*MemoryScheduledWorkflowRegistry, error) {
+	normalized, err := normalizeScheduledWorkflows(workflows)
+	if err != nil {
+		return nil, err
+	}
+	return &MemoryScheduledWorkflowRegistry{workflows: normalized}, nil
+}
+
+// ListScheduledWorkflows implements ScheduledWorkflowRegistry.
+func (r *MemoryScheduledWorkflowRegistry) ListScheduledWorkflows(_ context.Context) ([]ScheduledWorkflow, error) {
+	if r == nil {
+		return nil, fmt.Errorf("memory scheduled workflow registry is nil")
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return cloneScheduledWorkflows(r.workflows), nil
+}
+
 // ScheduledFireResult reports the outcome of evaluating one due scheduled
 // trigger.
 type ScheduledFireResult struct {
 	Intent  ScheduledIntent
 	Record  ScheduledRunRecord
 	Created bool
+}
+
+// ScheduledWorkflowFireResult reports the outcome of firing one workflow
+// occurrence from a ScheduledWorkflowRegistry.
+type ScheduledWorkflowFireResult struct {
+	Workflow ScheduledWorkflow
+	Fire     ScheduledFireResult
 }
 
 // PeriodicTrigger fires one deterministic occurrence each time its cadence
@@ -302,6 +362,46 @@ func (s Stack) FireScheduledTriggers(ctx context.Context, store ScheduledRunStor
 	return results, nil
 }
 
+// FireScheduledWorkflows lists workflows from registry, evaluates the selected
+// workflows once at now, and starts due proactive runs that have not already
+// been recorded. If names is empty, all registered workflows are evaluated. If
+// the selected workflow set is empty, an error is returned. If one workflow
+// fails after earlier workflows started, the returned results include the
+// successful earlier fires.
+func (s Stack) FireScheduledWorkflows(ctx context.Context, store ScheduledRunStore, registry ScheduledWorkflowRegistry, now time.Time, names ...string) ([]ScheduledWorkflowFireResult, error) {
+	if store == nil {
+		return nil, ErrScheduledRunStoreRequired
+	}
+	if registry == nil {
+		return nil, ErrScheduledWorkflowRegistryRequired
+	}
+	workflows, err := registry.ListScheduledWorkflows(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list scheduled workflows: %w", err)
+	}
+	selected, err := selectScheduledWorkflows(workflows, names)
+	if err != nil {
+		return nil, err
+	}
+	if len(selected) == 0 {
+		return nil, fmt.Errorf("at least one scheduled workflow is required")
+	}
+	var results []ScheduledWorkflowFireResult
+	for _, workflow := range selected {
+		fires, err := s.FireScheduledTriggers(ctx, store, now, workflow.Trigger)
+		for _, fire := range fires {
+			results = append(results, ScheduledWorkflowFireResult{
+				Workflow: cloneScheduledWorkflow(workflow),
+				Fire:     fire,
+			})
+		}
+		if err != nil {
+			return results, err
+		}
+	}
+	return results, nil
+}
+
 // WatchScheduledTriggers polls the supplied triggers on a ticker and starts
 // any due proactive runs. Cancel ctx to stop the watcher.
 func (s Stack) WatchScheduledTriggers(ctx context.Context, store ScheduledRunStore, options TriggerWatcherOptions, triggers ...ScheduledTrigger) error {
@@ -377,4 +477,97 @@ func (s Stack) executeScheduledRun(ctx context.Context, store ScheduledRunStore,
 
 func cloneScheduledRunRecord(record ScheduledRunRecord) ScheduledRunRecord {
 	return record
+}
+
+func normalizeScheduledWorkflows(workflows []ScheduledWorkflow) ([]ScheduledWorkflow, error) {
+	normalized := make([]ScheduledWorkflow, 0, len(workflows))
+	seen := make(map[string]struct{}, len(workflows))
+	for _, workflow := range workflows {
+		workflow, err := normalizeScheduledWorkflow(workflow)
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := seen[workflow.Name]; ok {
+			return nil, fmt.Errorf("duplicate scheduled workflow %q", workflow.Name)
+		}
+		seen[workflow.Name] = struct{}{}
+		normalized = append(normalized, workflow)
+	}
+	return normalized, nil
+}
+
+func normalizeScheduledWorkflow(workflow ScheduledWorkflow) (ScheduledWorkflow, error) {
+	name := strings.TrimSpace(workflow.Name)
+	if name == "" {
+		return ScheduledWorkflow{}, fmt.Errorf("scheduled workflow name is required")
+	}
+	if workflow.Trigger == nil {
+		return ScheduledWorkflow{}, fmt.Errorf("scheduled workflow %q trigger is required", name)
+	}
+	workflow.Name = name
+	workflow.Description = strings.TrimSpace(workflow.Description)
+	workflow.Tags = cloneScheduledWorkflowTags(workflow.Tags)
+	return workflow, nil
+}
+
+func selectScheduledWorkflows(workflows []ScheduledWorkflow, names []string) ([]ScheduledWorkflow, error) {
+	normalized, err := normalizeScheduledWorkflows(workflows)
+	if err != nil {
+		return nil, err
+	}
+	if len(names) == 0 {
+		return normalized, nil
+	}
+	byName := make(map[string]ScheduledWorkflow, len(normalized))
+	for _, workflow := range normalized {
+		byName[workflow.Name] = workflow
+	}
+	selected := make([]ScheduledWorkflow, 0, len(names))
+	seen := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return nil, fmt.Errorf("scheduled workflow name is required")
+		}
+		if _, ok := seen[name]; ok {
+			return nil, fmt.Errorf("duplicate scheduled workflow selection %q", name)
+		}
+		workflow, ok := byName[name]
+		if !ok {
+			return nil, fmt.Errorf("%w: %s", ErrScheduledWorkflowNotFound, name)
+		}
+		seen[name] = struct{}{}
+		selected = append(selected, workflow)
+	}
+	return selected, nil
+}
+
+func cloneScheduledWorkflows(workflows []ScheduledWorkflow) []ScheduledWorkflow {
+	if len(workflows) == 0 {
+		return nil
+	}
+	cloned := make([]ScheduledWorkflow, 0, len(workflows))
+	for _, workflow := range workflows {
+		cloned = append(cloned, cloneScheduledWorkflow(workflow))
+	}
+	return cloned
+}
+
+func cloneScheduledWorkflow(workflow ScheduledWorkflow) ScheduledWorkflow {
+	workflow.Tags = cloneScheduledWorkflowTags(workflow.Tags)
+	return workflow
+}
+
+func cloneScheduledWorkflowTags(tags []string) []string {
+	if len(tags) == 0 {
+		return nil
+	}
+	cloned := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		tag = strings.TrimSpace(tag)
+		if tag != "" {
+			cloned = append(cloned, tag)
+		}
+	}
+	return cloned
 }

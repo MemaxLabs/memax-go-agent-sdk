@@ -113,6 +113,11 @@ Common sources of confusion:
 - proactive workflows can persist trigger state through
   `stack/personal/sqlitestore` when hosts need scheduled runs to survive
   process restarts instead of using the in-memory reference store
+- hosts that run multiple proactive workflows can register named
+  `stack/personal` scheduled workflows and fire all or selected names through
+  `FireScheduledWorkflows`; the registry is discoverable workflow
+  configuration, while the scheduled-run store remains the durable idempotency
+  boundary
 - attaching `Tasks` gives personal workflows a durable task ledger. The
   planner reloads task state before every model request, so follow-ups created
   in one run through `upsert_task` can be visible to a later run before the

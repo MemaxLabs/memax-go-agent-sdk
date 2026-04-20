@@ -27,6 +27,7 @@ func TestRunExampleShowsProactiveBriefingWorkflow(t *testing.T) {
 		"Design review",
 		"result: Morning briefing: urgent change first, your design review is at 09:00 UTC in Room 5A, and Jordan says the flight moved to 3:30 PM so bring your passport.",
 		"scheduled run: daily-brief:2026-04-19T07:00:00Z succeeded",
+		"scheduled workflow: daily-brief",
 		"duplicate fire reused run: daily-brief:2026-04-19T07:00:00Z created=false",
 	} {
 		if !strings.Contains(got, want) {

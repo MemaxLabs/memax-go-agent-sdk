@@ -30,13 +30,14 @@ func main() {
 	}
 }
 
-// runExample walks through one host-owned proactive daily-brief trigger. The
-// trigger fires once for its deterministic occurrence, the agent searches note,
-// message, and schedule metadata before reading the matched items, and a second
-// fire for the same occurrence is deduplicated by the scheduled-run store.
+// runExample walks through one named host-owned proactive daily-brief workflow.
+// The workflow fires once for its deterministic occurrence, the agent searches
+// note, message, and schedule metadata before reading the matched items, and a
+// second fire for the same occurrence is deduplicated by the scheduled-run
+// store.
 func runExample(ctx context.Context, w io.Writer) error {
 	now := time.Date(2026, 4, 19, 7, 1, 0, 0, time.UTC)
-	stack, store, trigger, err := buildProactiveExample(now)
+	stack, store, registry, err := buildProactiveExample(now)
 	if err != nil {
 		return err
 	}
@@ -52,27 +53,27 @@ func runExample(ctx context.Context, w io.Writer) error {
 	})
 
 	runCtx := memaxagent.WithEventObserver(ctx, observer)
-	results, err := stack.FireScheduledTriggers(runCtx, store, now, trigger)
+	results, err := stack.FireScheduledWorkflows(runCtx, store, registry, now, "daily-brief")
 	if err != nil {
 		return err
 	}
-	if len(results) != 1 || !results[0].Created {
-		return fmt.Errorf("scheduled trigger fire = %#v, want one created daily brief run", results)
+	if len(results) != 1 || results[0].Workflow.Name != "daily-brief" || !results[0].Fire.Created {
+		return fmt.Errorf("scheduled workflow fire = %#v, want one created daily brief run", results)
 	}
-	runID := results[0].Record.ID
+	runID := results[0].Fire.Record.ID
 	finalRun, err := waitForScheduledRun(store, runID, func(record personal.ScheduledRunRecord) bool { return record.Terminal() })
 	if err != nil {
 		return err
 	}
-	duplicateResults, err := stack.FireScheduledTriggers(runCtx, store, now, trigger)
+	duplicateResults, err := stack.FireScheduledWorkflows(runCtx, store, registry, now, "daily-brief")
 	if err != nil {
 		return err
 	}
-	if len(duplicateResults) != 1 {
-		return fmt.Errorf("duplicate trigger fire = %#v, want existing daily brief run", duplicateResults)
+	if len(duplicateResults) != 1 || duplicateResults[0].Workflow.Name != "daily-brief" {
+		return fmt.Errorf("duplicate workflow fire = %#v, want existing daily brief run", duplicateResults)
 	}
-	duplicateRun := duplicateResults[0].Record
-	created := duplicateResults[0].Created
+	duplicateRun := duplicateResults[0].Fire.Record
+	created := duplicateResults[0].Fire.Created
 
 	mu.Lock()
 	captured := append([]memaxagent.Event(nil), events...)
@@ -92,12 +93,13 @@ func runExample(ctx context.Context, w io.Writer) error {
 	}
 
 	fmt.Fprintf(w, "scheduled run: %s %s\n", finalRun.ID, finalRun.Status)
+	fmt.Fprintf(w, "scheduled workflow: %s\n", results[0].Workflow.Name)
 	fmt.Fprintf(w, "scheduled session: %s\n", finalRun.SessionID)
 	fmt.Fprintf(w, "duplicate fire reused run: %s created=%t\n", duplicateRun.ID, created)
 	return nil
 }
 
-func buildProactiveExample(now time.Time) (personal.Stack, personal.ScheduledRunStore, personal.PeriodicTrigger, error) {
+func buildProactiveExample(now time.Time) (personal.Stack, personal.ScheduledRunStore, personal.ScheduledWorkflowRegistry, error) {
 	memoryStore := memory.NewMemoryStore([]memory.Memory{{
 		ID:      "memory-1",
 		Name:    "briefing-style",
@@ -179,7 +181,7 @@ func buildProactiveExample(now time.Time) (personal.Stack, personal.ScheduledRun
 
 	stack, err := personal.New(config)
 	if err != nil {
-		return personal.Stack{}, nil, personal.PeriodicTrigger{}, err
+		return personal.Stack{}, nil, nil, err
 	}
 	store := personal.NewMemoryScheduledRunStore()
 	trigger := personal.PeriodicTrigger{
@@ -188,7 +190,16 @@ func buildProactiveExample(now time.Time) (personal.Stack, personal.ScheduledRun
 		Every:  24 * time.Hour,
 		Anchor: time.Date(now.Year(), now.Month(), now.Day(), 7, 0, 0, 0, time.UTC),
 	}
-	return stack, store, trigger, nil
+	registry, err := personal.NewMemoryScheduledWorkflowRegistry(personal.ScheduledWorkflow{
+		Name:        "daily-brief",
+		Description: "Prepare a metadata-first daily briefing.",
+		Tags:        []string{"briefing", "morning"},
+		Trigger:     trigger,
+	})
+	if err != nil {
+		return personal.Stack{}, nil, nil, err
+	}
+	return stack, store, registry, nil
 }
 
 type proactiveBriefingModel struct {

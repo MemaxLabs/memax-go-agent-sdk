@@ -226,6 +226,212 @@ func TestStackFireScheduledTriggersReturnsSuccessfulResultsOnLaterFailure(t *tes
 	}
 }
 
+func TestMemoryScheduledWorkflowRegistryListsDefensiveCopies(t *testing.T) {
+	t.Parallel()
+
+	trigger := PeriodicTrigger{
+		Name:   "daily-brief",
+		Prompt: "Prepare the morning briefing.",
+		Every:  24 * time.Hour,
+		Anchor: time.Date(2026, 4, 19, 7, 0, 0, 0, time.UTC),
+	}
+	registry, err := NewMemoryScheduledWorkflowRegistry(ScheduledWorkflow{
+		Name:        " daily-brief ",
+		Description: " Prepare the morning briefing. ",
+		Tags:        []string{" briefings ", "", " personal "},
+		Trigger:     trigger,
+	})
+	if err != nil {
+		t.Fatalf("NewMemoryScheduledWorkflowRegistry() error = %v", err)
+	}
+	workflows, err := registry.ListScheduledWorkflows(context.Background())
+	if err != nil {
+		t.Fatalf("ListScheduledWorkflows() error = %v", err)
+	}
+	if len(workflows) != 1 || workflows[0].Name != "daily-brief" || workflows[0].Description != "Prepare the morning briefing." {
+		t.Fatalf("ListScheduledWorkflows() = %#v, want normalized workflow", workflows)
+	}
+	if len(workflows[0].Tags) != 2 || workflows[0].Tags[0] != "briefings" || workflows[0].Tags[1] != "personal" {
+		t.Fatalf("workflow tags = %#v, want trimmed non-empty tags", workflows[0].Tags)
+	}
+
+	workflows[0].Tags[0] = "mutated"
+	again, err := registry.ListScheduledWorkflows(context.Background())
+	if err != nil {
+		t.Fatalf("ListScheduledWorkflows(again) error = %v", err)
+	}
+	if again[0].Tags[0] != "briefings" {
+		t.Fatalf("registry leaked mutable tags: %#v", again[0].Tags)
+	}
+}
+
+func TestStackFireScheduledWorkflowsFiltersByNameAndDeduplicates(t *testing.T) {
+	t.Parallel()
+
+	modelClient := &scheduledRunModel{
+		turns: [][]model.StreamEvent{
+			{{Kind: model.StreamText, Text: "Inbox triage ready."}},
+		},
+	}
+	stack, err := New(Config{
+		Base: memaxagent.Options{
+			Model: modelClient,
+		},
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	store := NewMemoryScheduledRunStore()
+	now := time.Date(2026, 4, 19, 9, 1, 0, 0, time.UTC)
+	registry, err := NewMemoryScheduledWorkflowRegistry(
+		ScheduledWorkflow{
+			Name:        "daily-brief",
+			Description: "Daily briefing.",
+			Tags:        []string{"briefing"},
+			Trigger: PeriodicTrigger{
+				Name:   "daily-brief",
+				Prompt: "Prepare the daily briefing.",
+				Every:  24 * time.Hour,
+				Anchor: time.Date(2026, 4, 19, 7, 0, 0, 0, time.UTC),
+			},
+		},
+		ScheduledWorkflow{
+			Name:        "inbox-triage",
+			Description: "Unread inbox triage.",
+			Tags:        []string{"inbox"},
+			Trigger: PeriodicTrigger{
+				Name:   "inbox-triage",
+				Prompt: "Triage unread inbox threads.",
+				Every:  time.Hour,
+				Anchor: time.Date(2026, 4, 19, 9, 0, 0, 0, time.UTC),
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewMemoryScheduledWorkflowRegistry() error = %v", err)
+	}
+
+	results, err := stack.FireScheduledWorkflows(context.Background(), store, registry, now, "inbox-triage")
+	if err != nil {
+		t.Fatalf("FireScheduledWorkflows() error = %v", err)
+	}
+	if len(results) != 1 || results[0].Workflow.Name != "inbox-triage" || !results[0].Fire.Created {
+		t.Fatalf("FireScheduledWorkflows() = %#v, want one created selected workflow run", results)
+	}
+	final := waitForScheduledRun(t, store, results[0].Fire.Record.ID, func(r ScheduledRunRecord) bool { return r.Terminal() })
+	if final.Status != ScheduledRunSucceeded || final.Result != "Inbox triage ready." {
+		t.Fatalf("final run = %#v, want succeeded selected workflow run", final)
+	}
+
+	duplicates, err := stack.FireScheduledWorkflows(context.Background(), store, registry, now, "inbox-triage")
+	if err != nil {
+		t.Fatalf("FireScheduledWorkflows(duplicate) error = %v", err)
+	}
+	if len(duplicates) != 1 || duplicates[0].Fire.Created || duplicates[0].Fire.Record.ID != final.ID {
+		t.Fatalf("FireScheduledWorkflows(duplicate) = %#v, want existing workflow run", duplicates)
+	}
+	if len(modelClient.requests) != 1 {
+		t.Fatalf("model requests = %d, want one selected workflow run", len(modelClient.requests))
+	}
+}
+
+func TestStackFireScheduledWorkflowsValidatesSelections(t *testing.T) {
+	t.Parallel()
+
+	stack, err := New(Config{
+		Base: memaxagent.Options{
+			Model: &scheduledRunModel{},
+		},
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	store := NewMemoryScheduledRunStore()
+	registry, err := NewMemoryScheduledWorkflowRegistry(ScheduledWorkflow{
+		Name: "daily-brief",
+		Trigger: PeriodicTrigger{
+			Name:   "daily-brief",
+			Prompt: "Prepare the daily briefing.",
+			Every:  24 * time.Hour,
+			Anchor: time.Date(2026, 4, 19, 7, 0, 0, 0, time.UTC),
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewMemoryScheduledWorkflowRegistry() error = %v", err)
+	}
+
+	_, err = stack.FireScheduledWorkflows(context.Background(), store, registry, time.Date(2026, 4, 19, 7, 0, 0, 0, time.UTC), "missing-workflow")
+	if err == nil {
+		t.Fatal("FireScheduledWorkflows(missing) error = nil, want not found error")
+	}
+	if !errors.Is(err, ErrScheduledWorkflowNotFound) {
+		t.Fatalf("FireScheduledWorkflows(missing) error = %v, want ErrScheduledWorkflowNotFound", err)
+	}
+
+	empty, err := NewMemoryScheduledWorkflowRegistry()
+	if err != nil {
+		t.Fatalf("NewMemoryScheduledWorkflowRegistry(empty) error = %v", err)
+	}
+	_, err = stack.FireScheduledWorkflows(context.Background(), store, empty, time.Date(2026, 4, 19, 7, 0, 0, 0, time.UTC))
+	if err == nil {
+		t.Fatal("FireScheduledWorkflows(empty) error = nil, want workflow-required error")
+	}
+}
+
+func TestStackFireScheduledWorkflowsReturnsSuccessfulResultsOnLaterFailure(t *testing.T) {
+	t.Parallel()
+
+	modelClient := &scheduledRunModel{
+		turns: [][]model.StreamEvent{
+			{{Kind: model.StreamText, Text: "Morning briefing ready."}},
+		},
+	}
+	stack, err := New(Config{
+		Base: memaxagent.Options{
+			Model: modelClient,
+		},
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	store := NewMemoryScheduledRunStore()
+	now := time.Date(2026, 4, 19, 7, 1, 0, 0, time.UTC)
+	registry, err := NewMemoryScheduledWorkflowRegistry(
+		ScheduledWorkflow{
+			Name: "daily-brief",
+			Trigger: staticScheduledTrigger{intent: ScheduledIntent{
+				ID:           "daily-brief:2026-04-19T07:00:00Z",
+				TriggerName:  "daily-brief",
+				OccurrenceAt: time.Date(2026, 4, 19, 7, 0, 0, 0, time.UTC),
+				Prompt:       "Prepare the morning briefing.",
+			}},
+		},
+		ScheduledWorkflow{
+			Name: "invalid-brief",
+			Trigger: staticScheduledTrigger{intent: ScheduledIntent{
+				ID:           "invalid-brief:2026-04-19T07:00:00Z",
+				TriggerName:  "invalid-brief",
+				OccurrenceAt: time.Date(2026, 4, 19, 7, 0, 0, 0, time.UTC),
+			}},
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewMemoryScheduledWorkflowRegistry() error = %v", err)
+	}
+
+	results, err := stack.FireScheduledWorkflows(context.Background(), store, registry, now)
+	if err == nil {
+		t.Fatal("FireScheduledWorkflows() error = nil, want invalid prompt error")
+	}
+	if len(results) != 1 || results[0].Workflow.Name != "daily-brief" || !results[0].Fire.Created {
+		t.Fatalf("FireScheduledWorkflows() results = %#v, want successful first workflow fire preserved", results)
+	}
+	final := waitForScheduledRun(t, store, results[0].Fire.Record.ID, func(r ScheduledRunRecord) bool { return r.Terminal() })
+	if final.Status != ScheduledRunSucceeded {
+		t.Fatalf("final run = %#v, want first workflow run to complete despite later failure", final)
+	}
+}
+
 func TestStackWatchScheduledTriggersFiresOncePerOccurrence(t *testing.T) {
 	t.Parallel()
 
