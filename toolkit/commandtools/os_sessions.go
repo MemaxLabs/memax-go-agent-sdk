@@ -502,6 +502,11 @@ func cleanupFailedSessionRuntime(runtime sessionRuntime) {
 		runtime.process.Wait()
 		_ = runtime.process.Close()
 	}
+	for _, reader := range runtime.readers {
+		if reader.closer != nil {
+			_ = reader.closer.Close()
+		}
+	}
 	if runtime.stdin != nil {
 		_ = runtime.stdin.Close()
 	}
@@ -529,22 +534,34 @@ func startSessionIO(cmd *exec.Cmd, req StartRequest) (sessionRuntime, error) {
 	if err != nil {
 		return sessionRuntime{}, fmt.Errorf("commandtools: stdin pipe: %w", err)
 	}
-	stdout, err := cmd.StdoutPipe()
+	// Use host-owned pipes instead of exec.Cmd.StdoutPipe/StderrPipe so
+	// cmd.Wait cannot close the read side before capture goroutines drain. The
+	// parent must also drop its write-end copies after Start so EOF is delivered
+	// when the child exits.
+	stdout, stdoutWriter, err := os.Pipe()
 	if err != nil {
 		_ = stdin.Close()
 		return sessionRuntime{}, fmt.Errorf("commandtools: stdout pipe: %w", err)
 	}
-	stderr, err := cmd.StderrPipe()
+	stderr, stderrWriter, err := os.Pipe()
 	if err != nil {
 		_ = stdin.Close()
+		_ = stdout.Close()
+		_ = stdoutWriter.Close()
 		return sessionRuntime{}, fmt.Errorf("commandtools: stderr pipe: %w", err)
 	}
+	cmd.Stdout = stdoutWriter
+	cmd.Stderr = stderrWriter
 	if err := cmd.Start(); err != nil {
 		_ = stdin.Close()
 		_ = stdout.Close()
+		_ = stdoutWriter.Close()
 		_ = stderr.Close()
+		_ = stderrWriter.Close()
 		return sessionRuntime{}, fmt.Errorf("commandtools: start command: %w", err)
 	}
+	_ = stdoutWriter.Close()
+	_ = stderrWriter.Close()
 	return sessionRuntime{
 		process: newExecCommandProcess(cmd),
 		stdin:   stdin,
