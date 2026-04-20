@@ -159,6 +159,8 @@ type OutputChunk struct {
 
 // StartRequest starts a managed command session.
 type StartRequest struct {
+	// ID optionally sets the command session ID. Managers must honor a
+	// non-empty ID and reject duplicates with ErrCommandSessionAlreadyExists.
 	ID              string
 	SessionID       string
 	ParentSessionID string
@@ -262,7 +264,9 @@ type Resizer interface {
 	ResizeCommandTerminal(context.Context, ResizeRequest) (CommandSession, error)
 }
 
-// Stopper stops managed command sessions.
+// Stopper stops managed command sessions. A successful StopCommand returns a
+// terminal session snapshot; subsequent running-only operations should treat
+// the session as not running.
 type Stopper interface {
 	StopCommand(context.Context, StopRequest) (CommandSession, error)
 }

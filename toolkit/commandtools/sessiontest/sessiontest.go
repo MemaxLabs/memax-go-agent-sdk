@@ -71,6 +71,18 @@ type Contract struct {
 	// read across a session boundary. The default matches
 	// commandtools.ErrCommandSessionNotVisible.
 	IsNotVisible func(error) bool
+	// IsAlreadyExists classifies the expected error returned when a command is
+	// started with an ID already owned by the manager. The default matches
+	// commandtools.ErrCommandSessionAlreadyExists.
+	IsAlreadyExists func(error) bool
+	// IsNotRunning classifies the expected error returned when a running-only
+	// operation targets a completed command. The default matches
+	// commandtools.ErrCommandSessionNotRunning.
+	IsNotRunning func(error) bool
+	// IsNotPTY classifies the expected error returned when a terminal-only
+	// operation targets a non-TTY command. The default matches
+	// commandtools.ErrCommandSessionNotPTY.
+	IsNotPTY func(error) bool
 	// IsTTYUnsupported classifies adapter errors that mean PTY/TTY sessions are
 	// unavailable on this platform. The resize scenario skips when it returns
 	// true. The default matches commandtools.ErrCommandSessionPTYUnsupported.
@@ -177,6 +189,88 @@ func Run(t *testing.T, contract Contract) {
 		if !containsSession(all, started.ID, commandtools.SessionStopped) {
 			t.Fatalf("completed sessions = %#v, want stopped %q", all, started.ID)
 		}
+	})
+
+	t.Run("state-error-classification", func(t *testing.T) {
+		c := contract.withDefaults()
+
+		t.Run("duplicate-id", func(t *testing.T) {
+			manager := c.newManager(t, ScenarioStopCleanup)
+			req := c.LongRunningRequest(t)
+			req.SessionID = "contract-state-errors-duplicate"
+			req.ID = "contract-duplicate"
+			started, err := manager.StartCommand(context.Background(), req)
+			if err != nil {
+				t.Fatalf("StartCommand first returned error: %v", err)
+			}
+			defer func() {
+				_, _ = manager.StopCommand(context.Background(), commandtools.StopRequest{SessionID: req.SessionID, ID: started.ID, Force: true})
+			}()
+			if _, err := manager.StartCommand(context.Background(), req); err == nil || !c.IsAlreadyExists(err) {
+				t.Fatalf("StartCommand duplicate error = %v, want already-exists classification", err)
+			}
+		})
+
+		t.Run("resize-non-tty", func(t *testing.T) {
+			manager := c.newManager(t, ScenarioStopCleanup)
+			resizer, ok := any(manager).(commandtools.Resizer)
+			if !ok {
+				t.Skip("manager does not implement commandtools.Resizer")
+			}
+			req := c.LongRunningRequest(t)
+			req.SessionID = "contract-state-errors-non-tty"
+			req.ID = "contract-non-tty"
+			// Force the non-TTY shape even if a custom LongRunningRequest
+			// fixture defaults to TTY.
+			req.TTY = false
+			started, err := manager.StartCommand(context.Background(), req)
+			if err != nil {
+				t.Fatalf("StartCommand returned error: %v", err)
+			}
+			defer func() {
+				_, _ = manager.StopCommand(context.Background(), commandtools.StopRequest{SessionID: req.SessionID, ID: started.ID, Force: true})
+			}()
+			if _, err := resizer.ResizeCommandTerminal(context.Background(), commandtools.ResizeRequest{
+				SessionID: req.SessionID,
+				ID:        started.ID,
+				Cols:      100,
+				Rows:      30,
+			}); err == nil || !c.IsNotPTY(err) {
+				t.Fatalf("ResizeCommandTerminal non-TTY error = %v, want not-PTY classification", err)
+			}
+		})
+
+		t.Run("resize-stopped-tty", func(t *testing.T) {
+			if c.TTYRequest == nil {
+				t.Skip("contract has no TTY command")
+			}
+			manager := c.newManager(t, ScenarioResizeTTY)
+			resizer, ok := any(manager).(commandtools.Resizer)
+			if !ok {
+				t.Skip("manager does not implement commandtools.Resizer")
+			}
+			req := c.TTYRequest(t)
+			req.SessionID = "contract-state-errors-stopped-tty"
+			req.ID = "contract-stopped-tty"
+			started, err := manager.StartCommand(context.Background(), req)
+			if err != nil {
+				if c.IsTTYUnsupported(err) {
+					t.Skipf("TTY sessions unsupported: %v", err)
+				}
+				t.Fatalf("StartCommand returned error: %v", err)
+			}
+			if _, err := manager.StopCommand(context.Background(), commandtools.StopRequest{SessionID: req.SessionID, ID: started.ID, Force: true}); err != nil {
+				t.Fatalf("StopCommand returned error: %v", err)
+			}
+			if _, err := resizer.ResizeCommandTerminal(context.Background(), commandtools.ResizeRequest{
+				SessionID: req.SessionID,
+				ID:        started.ID,
+				Cols:      req.Cols + 7,
+				Rows:      req.Rows + 3,
+			}); err == nil || !c.IsNotRunning(err) {
+				t.Fatalf("ResizeCommandTerminal stopped TTY error = %v, want not-running classification", err)
+			}
+		})
 	})
 
 	t.Run("cleanup", func(t *testing.T) {
@@ -333,6 +427,21 @@ func (c Contract) withDefaults() Contract {
 	if c.IsNotVisible == nil {
 		c.IsNotVisible = func(err error) bool {
 			return errors.Is(err, commandtools.ErrCommandSessionNotVisible)
+		}
+	}
+	if c.IsAlreadyExists == nil {
+		c.IsAlreadyExists = func(err error) bool {
+			return errors.Is(err, commandtools.ErrCommandSessionAlreadyExists)
+		}
+	}
+	if c.IsNotRunning == nil {
+		c.IsNotRunning = func(err error) bool {
+			return errors.Is(err, commandtools.ErrCommandSessionNotRunning)
+		}
+	}
+	if c.IsNotPTY == nil {
+		c.IsNotPTY = func(err error) bool {
+			return errors.Is(err, commandtools.ErrCommandSessionNotPTY)
 		}
 	}
 	if c.IsTTYUnsupported == nil {
