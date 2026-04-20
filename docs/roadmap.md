@@ -231,7 +231,9 @@ system prompt.
   reconstruction.
   `GetScheduledRunNotificationStats` adds a store-backed health snapshot for
   current pending, leased, claimable, delivered, failed, dead-lettered, attempt,
-  and delivery-lag state.
+  and delivery-lag state. `NewScheduledRunNotificationMetrics` and
+  `RecordScheduledRunNotificationStats` turn those ordered transition and
+  snapshot signals into provider-neutral telemetry meters.
   `stack/personal/webhook` now ships the first host delivery adapter: a signed
   HTTP handler with idempotency headers and typed status errors. Next steps are
   additional delivery adapters for external personal systems plus more

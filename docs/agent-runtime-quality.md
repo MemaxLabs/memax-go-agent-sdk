@@ -440,8 +440,8 @@ finalization gating into one deterministic run. Personal proactive workflows
 now have eval coverage for scheduled-run idempotency, lifecycle events, stale
 reconciliation, and terminal notification outbox mirroring, plus unit coverage
 for SQLite notification lookback, claim/ack delivery state, notification
-delivery lifecycle observer events, and the reference signed webhook
-notification handler.
+delivery lifecycle observer events, notification delivery metrics, and the
+reference signed webhook notification handler.
 
 **Gap:** Most evals still test feature plumbing; composed long-horizon
 intelligence coverage is only starting to land.

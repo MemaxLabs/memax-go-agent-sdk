@@ -185,10 +185,29 @@ Important metric names include:
 - `memax.approval.requests`, `memax.approval.grants`,
   `memax.approval.denials`, `memax.approval.consumed`
 - `memax.tenant.denials`
+- `memax.personal.notification.delivery.events`,
+  `memax.personal.notification.delivery.attempts`
+- `memax.personal.notification.outbox.records`,
+  `memax.personal.notification.outbox.total`,
+  `memax.personal.notification.outbox.claimable`,
+  `memax.personal.notification.outbox.leased`,
+  `memax.personal.notification.outbox.delivery_attempts`,
+  `memax.personal.notification.outbox.oldest_undelivered_age_ms`
 
 Telemetry complements events; it should not be the only source of application
 state. Use events for ordered behavior and spans/metrics for aggregate
 monitoring.
+
+`stack/personal.NewScheduledRunNotificationMetrics` adapts the root
+`EventObserver` stream into notification delivery counters, and
+`RecordScheduledRunNotificationStats` records current outbox health from
+`GetScheduledRunNotificationStats`. This mirrors the split used by production
+agent runtimes: events are the chronological audit/debug trace, while metrics
+are cheap aggregate signals for dashboards and paging.
+
+Use stable, low-cardinality trigger names when recording notification metrics.
+The metrics observer includes `trigger_name` only for host-registered trigger
+names; dynamic per-run names belong in events or logs, not metric labels.
 
 For managed-host products, `stack/cloudmanaged` now exposes a host-owned audit
 subscriber over the same event stream plus reference memory and JSONL sinks.

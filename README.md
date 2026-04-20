@@ -223,7 +223,9 @@ claimed, delivered, failed, dead-lettered, and requeued outbox records, giving
 audit sinks an ordered lifecycle stream without polling. Hosts can call
 `GetScheduledRunNotificationStats` for a current health snapshot covering
 pending, leased, claimable, delivered, failed, dead-lettered, retry-attempt,
-oldest-undelivered, and next-claimable state.
+oldest-undelivered, and next-claimable state, and can record those transition
+and snapshot signals through `NewScheduledRunNotificationMetrics` and
+`RecordScheduledRunNotificationStats`.
 Hosts can opt into `WithScheduledRunNotificationMaxAttempts`
 to move poison notifications to `dead_lettered` state after exhausted retries
 when the store implements the dead-letter extension. Stores can also implement

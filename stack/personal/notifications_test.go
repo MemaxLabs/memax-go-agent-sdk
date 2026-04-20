@@ -10,6 +10,7 @@ import (
 	"time"
 
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
+	"github.com/MemaxLabs/memax-go-agent-sdk/telemetry"
 )
 
 func TestMemoryScheduledRunNotificationStoreCreatesAndListsIdempotently(t *testing.T) {
@@ -329,6 +330,72 @@ func TestMemoryScheduledRunNotificationStoreObservesDeliveryLifecycle(t *testing
 		finalEvent.Attempts != 3 ||
 		!finalEvent.DeliveredAt.Equal(delivered.DeliveredAt) {
 		t.Fatalf("final notification event = %#v, want delivered third attempt by worker-3", finalEvent)
+	}
+}
+
+func TestScheduledRunNotificationMetricsObserver(t *testing.T) {
+	t.Parallel()
+
+	meter := &recordingNotificationMeter{}
+	observer := NewScheduledRunNotificationMetrics(meter)
+	record := ScheduledRunNotificationRecord{
+		ID:                "daily-brief:2026-04-19T07:00:00Z:succeeded",
+		RunID:             "daily-brief:2026-04-19T07:00:00Z",
+		Status:            ScheduledRunSucceeded,
+		TriggerName:       "daily-brief",
+		DeliveryStatus:    ScheduledRunNotificationDeliveryDelivered,
+		DeliveryWorkerID:  "worker-1",
+		DeliveryAttempts:  2,
+		DeliveryUpdatedAt: time.Date(2026, 4, 19, 7, 10, 0, 0, time.UTC),
+		DeliveredAt:       time.Date(2026, 4, 19, 7, 10, 0, 0, time.UTC),
+	}
+
+	for _, kind := range []memaxagent.EventKind{
+		memaxagent.EventScheduledRunNotificationClaimed,
+		memaxagent.EventScheduledRunNotificationDelivered,
+		memaxagent.EventScheduledRunNotificationFailed,
+		memaxagent.EventScheduledRunNotificationDeadLettered,
+		memaxagent.EventScheduledRunNotificationRequeued,
+	} {
+		observer.ObserveEvent(context.Background(), ScheduledRunNotificationDeliveryEvent(kind, record))
+	}
+	observer.ObserveEvent(context.Background(), memaxagent.Event{Kind: memaxagent.EventResult})
+
+	adds := meter.addsFor(metricScheduledRunNotificationDeliveryEvents)
+	if len(adds) != 5 {
+		t.Fatalf("%s count = %d, want five delivery events", metricScheduledRunNotificationDeliveryEvents, len(adds))
+	}
+	for _, add := range adds {
+		if add.value != 1 {
+			t.Fatalf("%s add = %#v, want unit counter increment", metricScheduledRunNotificationDeliveryEvents, add)
+		}
+	}
+	for _, wantKind := range []memaxagent.EventKind{
+		memaxagent.EventScheduledRunNotificationClaimed,
+		memaxagent.EventScheduledRunNotificationDelivered,
+		memaxagent.EventScheduledRunNotificationFailed,
+		memaxagent.EventScheduledRunNotificationDeadLettered,
+		memaxagent.EventScheduledRunNotificationRequeued,
+	} {
+		var found bool
+		for _, add := range adds {
+			if !metricAttrsContain(add.attrs, "event_kind", string(wantKind)) {
+				continue
+			}
+			assertMetricAttr(t, add.attrs, "scheduled_run_status", string(ScheduledRunSucceeded))
+			assertMetricAttr(t, add.attrs, "delivery_status", string(ScheduledRunNotificationDeliveryDelivered))
+			assertMetricAttr(t, add.attrs, "trigger_name", "daily-brief")
+			found = true
+			break
+		}
+		if !found {
+			t.Fatalf("%s missing event_kind=%s in %#v", metricScheduledRunNotificationDeliveryEvents, wantKind, adds)
+		}
+	}
+
+	recording := meter.record(metricScheduledRunNotificationDeliveryAttempts, "")
+	if recording == nil || recording.value != 2 {
+		t.Fatalf("%s = %#v, want attempts histogram value 2", metricScheduledRunNotificationDeliveryAttempts, recording)
 	}
 }
 
@@ -802,6 +869,61 @@ func TestGetScheduledRunNotificationStats(t *testing.T) {
 		OldestUndeliveredAge:  now.Sub(leasedClaim.CreatedAt),
 		NextClaimableAt:       pendingDue.CreatedAt,
 	})
+}
+
+func TestRecordScheduledRunNotificationStatsMetrics(t *testing.T) {
+	t.Parallel()
+
+	meter := &recordingNotificationMeter{}
+	stats := ScheduledRunNotificationStats{
+		TotalCount:            15,
+		PendingCount:          2,
+		DeliveringCount:       1,
+		DeliveredCount:        3,
+		FailedCount:           4,
+		DeadLetteredCount:     5,
+		ClaimableCount:        6,
+		LeasedCount:           7,
+		DeliveryAttemptsTotal: 8,
+		OldestUndeliveredAge:  9 * time.Second,
+	}
+
+	RecordScheduledRunNotificationStats(context.Background(), meter, stats, telemetry.String("stack", "personal"))
+
+	for status, want := range map[string]float64{
+		string(ScheduledRunNotificationDeliveryPending):      2,
+		string(ScheduledRunNotificationDeliveryDelivering):   1,
+		string(ScheduledRunNotificationDeliveryDelivered):    3,
+		string(ScheduledRunNotificationDeliveryFailed):       4,
+		string(ScheduledRunNotificationDeliveryDeadLettered): 5,
+	} {
+		recording := meter.record(metricScheduledRunNotificationOutboxRecords, status)
+		if recording == nil || recording.value != want {
+			t.Fatalf("%s{%s} = %#v, want %v", metricScheduledRunNotificationOutboxRecords, status, recording, want)
+		}
+		assertMetricAttr(t, recording.attrs, "stack", "personal")
+	}
+	for name, want := range map[string]float64{
+		metricScheduledRunNotificationOutboxTotal:     15,
+		metricScheduledRunNotificationOutboxClaimable: 6,
+		metricScheduledRunNotificationOutboxLeased:    7,
+		metricScheduledRunNotificationOutboxAttempts:  8,
+		metricScheduledRunNotificationOldestAgeMS:     9000,
+	} {
+		recording := meter.record(name, "")
+		if recording == nil || recording.value != want {
+			t.Fatalf("%s = %#v, want %v", name, recording, want)
+		}
+		assertMetricAttr(t, recording.attrs, "stack", "personal")
+	}
+
+	emptyMeter := &recordingNotificationMeter{}
+	RecordScheduledRunNotificationStats(context.Background(), emptyMeter, ScheduledRunNotificationStats{}, telemetry.String("stack", "personal"))
+	recording := emptyMeter.record(metricScheduledRunNotificationOldestAgeMS, "")
+	if recording == nil || recording.value != 0 {
+		t.Fatalf("%s empty = %#v, want explicit zero", metricScheduledRunNotificationOldestAgeMS, recording)
+	}
+	assertMetricAttr(t, recording.attrs, "stack", "personal")
 }
 
 func TestGetScheduledRunNotificationStatsEmptyStore(t *testing.T) {
@@ -1441,4 +1563,86 @@ func waitForDeliveredNotifications(t *testing.T, store ScheduledRunNotificationS
 		}
 		time.Sleep(time.Millisecond)
 	}
+}
+
+type notificationMetricAdd struct {
+	name  string
+	value int64
+	attrs []telemetry.Attribute
+}
+
+type notificationMetricRecord struct {
+	name  string
+	value float64
+	attrs []telemetry.Attribute
+}
+
+type recordingNotificationMeter struct {
+	mu      sync.Mutex
+	adds    []notificationMetricAdd
+	records []notificationMetricRecord
+}
+
+func (m *recordingNotificationMeter) Add(_ context.Context, name string, value int64, attrs ...telemetry.Attribute) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.adds = append(m.adds, notificationMetricAdd{
+		name:  name,
+		value: value,
+		attrs: append([]telemetry.Attribute(nil), attrs...),
+	})
+}
+
+func (m *recordingNotificationMeter) Record(_ context.Context, name string, value float64, attrs ...telemetry.Attribute) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.records = append(m.records, notificationMetricRecord{
+		name:  name,
+		value: value,
+		attrs: append([]telemetry.Attribute(nil), attrs...),
+	})
+}
+
+func (m *recordingNotificationMeter) addsFor(name string) []notificationMetricAdd {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var adds []notificationMetricAdd
+	for i := range m.adds {
+		if m.adds[i].name == name {
+			adds = append(adds, m.adds[i])
+		}
+	}
+	return adds
+}
+
+func (m *recordingNotificationMeter) record(name, deliveryStatus string) *notificationMetricRecord {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := range m.records {
+		if m.records[i].name != name {
+			continue
+		}
+		if deliveryStatus != "" && !metricAttrsContain(m.records[i].attrs, "delivery_status", deliveryStatus) {
+			continue
+		}
+		record := m.records[i]
+		return &record
+	}
+	return nil
+}
+
+func assertMetricAttr(t *testing.T, attrs []telemetry.Attribute, key string, want any) {
+	t.Helper()
+	if !metricAttrsContain(attrs, key, want) {
+		t.Fatalf("attrs %#v missing %s=%v", attrs, key, want)
+	}
+}
+
+func metricAttrsContain(attrs []telemetry.Attribute, key string, want any) bool {
+	for _, attr := range attrs {
+		if attr.Key == key && attr.Value == want {
+			return true
+		}
+	}
+	return false
 }

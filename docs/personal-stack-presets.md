@@ -148,6 +148,9 @@ Common sources of confusion:
   dead-lettered, and requeued records emit structured events with notification
   ID, run ID, worker, attempt count, error, and timing fields. These ordered
   events are the audit trail; stats remain the current outbox snapshot.
+  `NewScheduledRunNotificationMetrics` records those lifecycle events through
+  `telemetry.Meter`, and `RecordScheduledRunNotificationStats` turns the
+  snapshot into gauge-like measurements for dashboards and alerting.
   `GetScheduledRunNotificationStats` reports current outbox health for
   dashboard and alert loops: pending, leased, claimable, delivered, failed,
   dead-lettered, total attempts, oldest-undelivered age, and next-claimable
