@@ -183,6 +183,49 @@ func TestStackFireScheduledTriggersStartsDueOnlyAndDeduplicates(t *testing.T) {
 	}
 }
 
+func TestStackFireScheduledTriggersReturnsSuccessfulResultsOnLaterFailure(t *testing.T) {
+	t.Parallel()
+
+	modelClient := &scheduledRunModel{
+		turns: [][]model.StreamEvent{
+			{{Kind: model.StreamText, Text: "Morning briefing ready."}},
+		},
+	}
+	stack, err := New(Config{
+		Base: memaxagent.Options{
+			Model: modelClient,
+		},
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	store := NewMemoryScheduledRunStore()
+	now := time.Date(2026, 4, 19, 7, 1, 0, 0, time.UTC)
+	good := staticScheduledTrigger{intent: ScheduledIntent{
+		ID:           "daily-brief:2026-04-19T07:00:00Z",
+		TriggerName:  "daily-brief",
+		OccurrenceAt: time.Date(2026, 4, 19, 7, 0, 0, 0, time.UTC),
+		Prompt:       "Prepare the morning briefing.",
+	}}
+	bad := staticScheduledTrigger{intent: ScheduledIntent{
+		ID:           "invalid-brief:2026-04-19T07:00:00Z",
+		TriggerName:  "invalid-brief",
+		OccurrenceAt: time.Date(2026, 4, 19, 7, 0, 0, 0, time.UTC),
+	}}
+
+	results, err := stack.FireScheduledTriggers(context.Background(), store, now, good, bad)
+	if err == nil {
+		t.Fatal("FireScheduledTriggers() error = nil, want invalid prompt error")
+	}
+	if len(results) != 1 || !results[0].Created || results[0].Record.ID != good.intent.ID {
+		t.Fatalf("FireScheduledTriggers() results = %#v, want successful first fire preserved", results)
+	}
+	final := waitForScheduledRun(t, store, good.intent.ID, func(r ScheduledRunRecord) bool { return r.Terminal() })
+	if final.Status != ScheduledRunSucceeded {
+		t.Fatalf("final run = %#v, want first run to complete despite later failure", final)
+	}
+}
+
 func TestStackWatchScheduledTriggersFiresOncePerOccurrence(t *testing.T) {
 	t.Parallel()
 
@@ -236,6 +279,14 @@ func TestStackWatchScheduledTriggersFiresOncePerOccurrence(t *testing.T) {
 type scheduledRunModel struct {
 	turns    [][]model.StreamEvent
 	requests []model.Request
+}
+
+type staticScheduledTrigger struct {
+	intent ScheduledIntent
+}
+
+func (t staticScheduledTrigger) IntentAt(time.Time) (ScheduledIntent, bool) {
+	return t.intent, true
 }
 
 func (m *scheduledRunModel) Stream(_ context.Context, req model.Request) (model.Stream, error) {

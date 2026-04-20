@@ -191,6 +191,7 @@ type ScheduledIntent struct {
 }
 
 // ScheduledTrigger resolves whether a proactive workflow should fire at now.
+// Stack trigger evaluators pass now as UTC.
 type ScheduledTrigger interface {
 	IntentAt(now time.Time) (ScheduledIntent, bool)
 }
@@ -269,10 +270,12 @@ func (s Stack) StartScheduledRun(ctx context.Context, store ScheduledRunStore, i
 	return record, true, nil
 }
 
-// FireScheduledTriggers evaluates triggers once at now and starts any due
-// proactive runs. This is the one-shot counterpart to WatchScheduledTriggers
-// for cron jobs, serverless handlers, examples, and tests that already have an
-// external scheduler.
+// FireScheduledTriggers evaluates triggers once at now and starts due
+// proactive runs that have not already been recorded. This is the one-shot
+// counterpart to WatchScheduledTriggers for cron jobs, serverless handlers,
+// examples, and tests that already have an external scheduler. If one trigger
+// fails after earlier triggers started, the returned results include the
+// successful earlier fires.
 func (s Stack) FireScheduledTriggers(ctx context.Context, store ScheduledRunStore, now time.Time, triggers ...ScheduledTrigger) ([]ScheduledFireResult, error) {
 	if store == nil {
 		return nil, ErrScheduledRunStoreRequired
@@ -288,7 +291,7 @@ func (s Stack) FireScheduledTriggers(ctx context.Context, store ScheduledRunStor
 		}
 		record, created, err := s.StartScheduledRun(ctx, store, intent)
 		if err != nil {
-			return nil, err
+			return results, err
 		}
 		results = append(results, ScheduledFireResult{
 			Intent:  intent,
