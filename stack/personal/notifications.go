@@ -48,6 +48,10 @@ var ErrScheduledRunNotificationWatchIntervalRequired = errors.New("personal stac
 // delivery draining needs a store that supports dead-letter acknowledgements.
 var ErrScheduledRunNotificationDeadLetterStoreRequired = errors.New("personal stack: scheduled run notification store must implement ScheduledRunNotificationDeadLetterStore")
 
+// ErrScheduledRunNotificationNotRecoverable reports that a notification is not
+// in a failed or dead-lettered state that can be requeued for delivery.
+var ErrScheduledRunNotificationNotRecoverable = errors.New("personal stack: scheduled run notification is not recoverable")
+
 // DefaultScheduledRunNotificationLeaseDuration is the default delivery lease
 // duration used when a claim request does not specify one.
 const DefaultScheduledRunNotificationLeaseDuration = 5 * time.Minute
@@ -180,6 +184,19 @@ type MarkScheduledRunNotificationDeadLetteredRequest struct {
 	DeadLetteredAt time.Time
 }
 
+// RequeueScheduledRunNotificationRequest moves a failed or dead-lettered
+// notification back to pending delivery after host inspection or repair.
+// Pending, delivering, and delivered records are rejected with
+// ErrScheduledRunNotificationNotRecoverable. DeliverAfter defaults to
+// RequeuedAt so callers can requeue immediately or schedule another retry.
+// Requeue clears the current delivery worker and delivery error, preserves
+// DeliveryAttempts for audit history, and leaves DeliveredAt unchanged.
+type RequeueScheduledRunNotificationRequest struct {
+	ID           string
+	DeliverAfter time.Time
+	RequeuedAt   time.Time
+}
+
 // ScheduledRunNotificationStore persists host-owned scheduled-run notification
 // outbox records. Implementations should treat CreateScheduledRunNotification
 // as idempotent by ID, returning created=false with the existing record when a
@@ -210,6 +227,17 @@ type ScheduledRunNotificationDeliveryStore interface {
 // source-compatible.
 type ScheduledRunNotificationDeadLetterStore interface {
 	MarkScheduledRunNotificationDeadLettered(context.Context, MarkScheduledRunNotificationDeadLetteredRequest) (ScheduledRunNotificationRecord, error)
+}
+
+// ScheduledRunNotificationRecoveryStore is the optional delivery extension for
+// hosts that want to inspect a failed or dead-lettered notification and
+// manually requeue it after remediation. Delivered, pending, and actively
+// delivering records are not recoverable through this method. Implementations
+// should return ErrScheduledRunNotificationNotFound and
+// ErrScheduledRunNotificationNotRecoverable for the matching failure modes so
+// hosts can switch on errors without string matching.
+type ScheduledRunNotificationRecoveryStore interface {
+	RequeueScheduledRunNotification(context.Context, RequeueScheduledRunNotificationRequest) (ScheduledRunNotificationRecord, error)
 }
 
 // ScheduledRunNotificationDeliveryHandler delivers one claimed scheduled-run
@@ -519,6 +547,7 @@ type MemoryScheduledRunNotificationStore struct {
 
 var _ ScheduledRunNotificationDeliveryStore = (*MemoryScheduledRunNotificationStore)(nil)
 var _ ScheduledRunNotificationDeadLetterStore = (*MemoryScheduledRunNotificationStore)(nil)
+var _ ScheduledRunNotificationRecoveryStore = (*MemoryScheduledRunNotificationStore)(nil)
 
 // NewMemoryScheduledRunNotificationStore constructs a reference in-memory
 // scheduled-run notification outbox.
@@ -726,6 +755,37 @@ func (s *MemoryScheduledRunNotificationStore) MarkScheduledRunNotificationDeadLe
 	record.DeliveryError = update.errorText
 	record.DeliverAfter = update.deadLetteredAt
 	record.DeliveryUpdatedAt = update.deadLetteredAt
+	s.byID[record.ID] = record
+	return cloneScheduledRunNotification(record), nil
+}
+
+// RequeueScheduledRunNotification implements
+// ScheduledRunNotificationRecoveryStore.
+func (s *MemoryScheduledRunNotificationStore) RequeueScheduledRunNotification(ctx context.Context, req RequeueScheduledRunNotificationRequest) (ScheduledRunNotificationRecord, error) {
+	if s == nil {
+		return ScheduledRunNotificationRecord{}, fmt.Errorf("memory scheduled run notification store is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return ScheduledRunNotificationRecord{}, err
+	}
+	update, err := req.normalize()
+	if err != nil {
+		return ScheduledRunNotificationRecord{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record, ok := s.byID[update.id]
+	if !ok {
+		return ScheduledRunNotificationRecord{}, ErrScheduledRunNotificationNotFound
+	}
+	if record.DeliveryStatus != ScheduledRunNotificationDeliveryFailed && record.DeliveryStatus != ScheduledRunNotificationDeliveryDeadLettered {
+		return ScheduledRunNotificationRecord{}, ErrScheduledRunNotificationNotRecoverable
+	}
+	record.DeliveryStatus = ScheduledRunNotificationDeliveryPending
+	record.DeliveryWorkerID = ""
+	record.DeliveryError = ""
+	record.DeliverAfter = update.deliverAfter
+	record.DeliveryUpdatedAt = update.requeuedAt
 	s.byID[record.ID] = record
 	return cloneScheduledRunNotification(record), nil
 }
@@ -999,6 +1059,30 @@ func (req MarkScheduledRunNotificationDeadLetteredRequest) normalize() (normaliz
 	}
 	if update.deadLetteredAt.IsZero() {
 		update.deadLetteredAt = time.Now().UTC()
+	}
+	return update, nil
+}
+
+type normalizedScheduledRunNotificationRequeue struct {
+	id           string
+	deliverAfter time.Time
+	requeuedAt   time.Time
+}
+
+func (req RequeueScheduledRunNotificationRequest) normalize() (normalizedScheduledRunNotificationRequeue, error) {
+	update := normalizedScheduledRunNotificationRequeue{
+		id:           strings.TrimSpace(req.ID),
+		deliverAfter: req.DeliverAfter.UTC(),
+		requeuedAt:   req.RequeuedAt.UTC(),
+	}
+	if update.id == "" {
+		return normalizedScheduledRunNotificationRequeue{}, fmt.Errorf("scheduled run notification id is required")
+	}
+	if update.requeuedAt.IsZero() {
+		update.requeuedAt = time.Now().UTC()
+	}
+	if update.deliverAfter.IsZero() {
+		update.deliverAfter = update.requeuedAt
 	}
 	return update, nil
 }

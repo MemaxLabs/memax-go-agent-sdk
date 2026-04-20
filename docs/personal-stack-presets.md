@@ -144,9 +144,12 @@ Common sources of confusion:
   a ticker for long-running host delivery workers, and the drain result observer
   option lets hosts emit delivery metrics for successful drain passes. Hosts
   can opt into `WithScheduledRunNotificationMaxAttempts` to stop retrying
-  poison notifications and mark them `dead_lettered` for manual recovery. Host
-  channel failures become retryable or terminal outbox state; store claim/ack
-  errors return to the worker because the durable state is uncertain.
+  poison notifications and mark them `dead_lettered` for manual recovery.
+  Stores that implement `ScheduledRunNotificationRecoveryStore` let hosts
+  requeue inspected failed or dead-lettered records after remediation while
+  preserving attempt history. Host channel failures become retryable or terminal
+  outbox state; store claim/ack errors return to the worker because the durable
+  state is uncertain.
   Notification records carry the scheduled prompt plus terminal result or error
   text; host-owned delivery backends should apply their own redaction policy
   before sending them to external channels. The

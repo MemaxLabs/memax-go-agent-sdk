@@ -220,9 +220,13 @@ worker helper for claim, host delivery, ack, and retry bookkeeping, while
 host services. Hosts can attach a drain result observer for successful-pass
 delivery metrics. Hosts can opt into `WithScheduledRunNotificationMaxAttempts`
 to move poison notifications to `dead_lettered` state after exhausted retries
-when the store implements the dead-letter extension. Host delivery errors are
-recorded as retryable or terminal outbox state, while store errors are returned
-to the worker. Email, push, chat, and webhook delivery remain host-owned.
+when the store implements the dead-letter extension. Stores can also implement
+`ScheduledRunNotificationRecoveryStore` so hosts can inspect a failed or
+dead-lettered record, repair the channel or payload, and call
+`RequeueScheduledRunNotification` to move it back to pending delivery while
+preserving attempt history. Host delivery errors are recorded as retryable or
+terminal outbox state, while store errors are returned to the worker. Email,
+push, chat, and webhook delivery remain host-owned.
 Week-ahead planning also has eval-backed durable task
 continuity:
 follow-ups can be written through

@@ -402,6 +402,194 @@ func TestDrainScheduledRunNotificationsDeadLettersAfterMaxAttempts(t *testing.T)
 	}
 }
 
+func TestRequeueScheduledRunNotificationRecoversDeadLetter(t *testing.T) {
+	t.Parallel()
+
+	store := NewMemoryScheduledRunNotificationStore()
+	req := scheduledRunNotificationRequestForTest("daily-brief:2026-04-19T07:00:00Z", ScheduledRunSucceeded, 0)
+	if _, _, err := store.CreateScheduledRunNotification(context.Background(), req); err != nil {
+		t.Fatalf("CreateScheduledRunNotification() error = %v", err)
+	}
+	now := time.Date(2026, 4, 19, 7, 10, 0, 0, time.UTC)
+	pushErr := errors.New("push gateway unavailable")
+	result, err := DrainScheduledRunNotifications(
+		context.Background(),
+		store,
+		"worker-1",
+		ScheduledRunNotificationDeliveryHandlerFunc(func(context.Context, ScheduledRunNotificationRecord) error {
+			return pushErr
+		}),
+		WithScheduledRunNotificationDrainNow(now),
+		WithScheduledRunNotificationMaxAttempts(1),
+	)
+	if err != nil {
+		t.Fatalf("DrainScheduledRunNotifications() error = %v", err)
+	}
+	if len(result.DeadLettered) != 1 {
+		t.Fatalf("DrainScheduledRunNotifications() = %#v, want one dead-lettered notification", result)
+	}
+	if result.DeadLettered[0].Record.DeliveryError != pushErr.Error() {
+		t.Fatalf("dead-lettered delivery error = %q, want %q before requeue", result.DeadLettered[0].Record.DeliveryError, pushErr.Error())
+	}
+
+	requeuedAt := now.Add(time.Minute)
+	deliverAfter := requeuedAt.Add(time.Minute)
+	requeued, err := store.RequeueScheduledRunNotification(context.Background(), RequeueScheduledRunNotificationRequest{
+		ID:           result.DeadLettered[0].Record.ID,
+		DeliverAfter: deliverAfter,
+		RequeuedAt:   requeuedAt,
+	})
+	if err != nil {
+		t.Fatalf("RequeueScheduledRunNotification() error = %v", err)
+	}
+	if requeued.DeliveryStatus != ScheduledRunNotificationDeliveryPending ||
+		requeued.DeliveryWorkerID != "" ||
+		requeued.DeliveryError != "" ||
+		requeued.DeliveryAttempts != 1 ||
+		!requeued.DeliverAfter.Equal(deliverAfter) ||
+		!requeued.DeliveryUpdatedAt.Equal(requeuedAt) {
+		t.Fatalf("requeued = %#v, want pending requeue preserving attempt history", requeued)
+	}
+
+	early, err := DrainScheduledRunNotifications(
+		context.Background(),
+		store,
+		"worker-2",
+		ScheduledRunNotificationDeliveryHandlerFunc(func(context.Context, ScheduledRunNotificationRecord) error {
+			t.Fatalf("handler should not run before requeued deliver_after")
+			return nil
+		}),
+		WithScheduledRunNotificationDrainNow(deliverAfter.Add(-time.Second)),
+	)
+	if err != nil {
+		t.Fatalf("DrainScheduledRunNotifications(early) error = %v", err)
+	}
+	if len(early.Claimed) != 0 {
+		t.Fatalf("early drain = %#v, want no claim before requeued deliver_after", early)
+	}
+
+	delivered, err := DrainScheduledRunNotifications(
+		context.Background(),
+		store,
+		"worker-2",
+		ScheduledRunNotificationDeliveryHandlerFunc(func(context.Context, ScheduledRunNotificationRecord) error {
+			return nil
+		}),
+		WithScheduledRunNotificationDrainNow(deliverAfter),
+	)
+	if err != nil {
+		t.Fatalf("DrainScheduledRunNotifications(requeued) error = %v", err)
+	}
+	if len(delivered.Delivered) != 1 || delivered.Delivered[0].DeliveryAttempts != 2 || delivered.Delivered[0].DeliveryWorkerID != "worker-2" {
+		t.Fatalf("delivered = %#v, want requeued notification delivered on second attempt", delivered)
+	}
+}
+
+func TestRequeueScheduledRunNotificationRecoversFailed(t *testing.T) {
+	t.Parallel()
+
+	store := NewMemoryScheduledRunNotificationStore()
+	req := scheduledRunNotificationRequestForTest("daily-brief:2026-04-19T07:00:00Z", ScheduledRunSucceeded, 0)
+	if _, _, err := store.CreateScheduledRunNotification(context.Background(), req); err != nil {
+		t.Fatalf("CreateScheduledRunNotification() error = %v", err)
+	}
+	now := time.Date(2026, 4, 19, 7, 10, 0, 0, time.UTC)
+	pushErr := errors.New("push gateway unavailable")
+	result, err := DrainScheduledRunNotifications(
+		context.Background(),
+		store,
+		"worker-1",
+		ScheduledRunNotificationDeliveryHandlerFunc(func(context.Context, ScheduledRunNotificationRecord) error {
+			return pushErr
+		}),
+		WithScheduledRunNotificationDrainNow(now),
+		WithScheduledRunNotificationRetryBackoff(func(ScheduledRunNotificationRecord, error, time.Time) time.Time {
+			return now.Add(time.Hour)
+		}),
+	)
+	if err != nil {
+		t.Fatalf("DrainScheduledRunNotifications() error = %v", err)
+	}
+	if len(result.Failed) != 1 {
+		t.Fatalf("DrainScheduledRunNotifications() = %#v, want one failed notification", result)
+	}
+	if result.Failed[0].Record.DeliveryError != pushErr.Error() {
+		t.Fatalf("failed delivery error = %q, want %q before requeue", result.Failed[0].Record.DeliveryError, pushErr.Error())
+	}
+
+	requeuedAt := now.Add(time.Minute)
+	requeued, err := store.RequeueScheduledRunNotification(context.Background(), RequeueScheduledRunNotificationRequest{
+		ID:         result.Failed[0].Record.ID,
+		RequeuedAt: requeuedAt,
+	})
+	if err != nil {
+		t.Fatalf("RequeueScheduledRunNotification(failed) error = %v", err)
+	}
+	if requeued.DeliveryStatus != ScheduledRunNotificationDeliveryPending ||
+		requeued.DeliveryWorkerID != "" ||
+		requeued.DeliveryError != "" ||
+		requeued.DeliveryAttempts != 1 ||
+		!requeued.DeliverAfter.Equal(requeuedAt) ||
+		!requeued.DeliveryUpdatedAt.Equal(requeuedAt) {
+		t.Fatalf("requeued = %#v, want immediate pending requeue preserving attempt history", requeued)
+	}
+}
+
+func TestRequeueScheduledRunNotificationRejectsNonRecoverableStates(t *testing.T) {
+	t.Parallel()
+
+	store := NewMemoryScheduledRunNotificationStore()
+	req := scheduledRunNotificationRequestForTest("daily-brief:2026-04-19T07:00:00Z", ScheduledRunSucceeded, 0)
+	now := time.Date(2026, 4, 19, 7, 10, 0, 0, time.UTC)
+	if _, err := store.RequeueScheduledRunNotification(context.Background(), RequeueScheduledRunNotificationRequest{
+		ID:         "missing",
+		RequeuedAt: now,
+	}); !errors.Is(err, ErrScheduledRunNotificationNotFound) {
+		t.Fatalf("RequeueScheduledRunNotification(missing) error = %v, want not found", err)
+	}
+	if _, _, err := store.CreateScheduledRunNotification(context.Background(), req); err != nil {
+		t.Fatalf("CreateScheduledRunNotification() error = %v", err)
+	}
+	if _, err := store.RequeueScheduledRunNotification(context.Background(), RequeueScheduledRunNotificationRequest{
+		ID:         req.ID,
+		RequeuedAt: now,
+	}); !errors.Is(err, ErrScheduledRunNotificationNotRecoverable) {
+		t.Fatalf("RequeueScheduledRunNotification(pending) error = %v, want not recoverable", err)
+	}
+
+	claimed, err := store.ClaimScheduledRunNotifications(context.Background(), ClaimScheduledRunNotificationsRequest{
+		WorkerID: "worker-1",
+		Limit:    1,
+		Now:      now,
+	})
+	if err != nil {
+		t.Fatalf("ClaimScheduledRunNotifications() error = %v", err)
+	}
+	if len(claimed) != 1 {
+		t.Fatalf("claimed = %#v, want one notification", claimed)
+	}
+	if _, err := store.RequeueScheduledRunNotification(context.Background(), RequeueScheduledRunNotificationRequest{
+		ID:         req.ID,
+		RequeuedAt: now,
+	}); !errors.Is(err, ErrScheduledRunNotificationNotRecoverable) {
+		t.Fatalf("RequeueScheduledRunNotification(delivering) error = %v, want not recoverable", err)
+	}
+
+	if _, err := store.MarkScheduledRunNotificationDelivered(context.Background(), MarkScheduledRunNotificationDeliveredRequest{
+		ID:          req.ID,
+		WorkerID:    "worker-1",
+		DeliveredAt: now.Add(time.Second),
+	}); err != nil {
+		t.Fatalf("MarkScheduledRunNotificationDelivered() error = %v", err)
+	}
+	if _, err := store.RequeueScheduledRunNotification(context.Background(), RequeueScheduledRunNotificationRequest{
+		ID:         req.ID,
+		RequeuedAt: now.Add(2 * time.Second),
+	}); !errors.Is(err, ErrScheduledRunNotificationNotRecoverable) {
+		t.Fatalf("RequeueScheduledRunNotification(delivered) error = %v, want not recoverable", err)
+	}
+}
+
 func TestDrainScheduledRunNotificationsMaxAttemptsRequiresDeadLetterStore(t *testing.T) {
 	t.Parallel()
 

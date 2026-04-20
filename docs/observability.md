@@ -238,6 +238,16 @@ helper marks the record `dead_lettered` through
 Delivery claims are at-least-once, so a worker crash after claim still consumes
 an attempt before the lease expires; strict handlers should choose a max attempt
 count that leaves room for crash recovery.
+Stores can implement `ScheduledRunNotificationRecoveryStore` to make those
+failed and dead-lettered records manually recoverable. Hosts list or inspect the
+record, remediate the external channel or payload, then call
+`RequeueScheduledRunNotification` to clear the worker/error fields and move the
+record back to pending delivery without resetting `DeliveryAttempts`.
+Because the prior delivery error is cleared, operators that need the last error
+in an external ticket or audit trail should capture it before requeueing.
+Recovered records keep their attempt count; workers using
+`WithScheduledRunNotificationMaxAttempts` may need a higher limit for recovered
+records that should receive another full retry window.
 `WatchScheduledRunNotifications` runs the same drain pass immediately and then on
 a ticker until its context is canceled, which gives long-running services a
 reusable delivery worker loop. Handler errors are recorded as retryable delivery
