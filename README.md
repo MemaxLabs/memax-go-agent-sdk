@@ -528,7 +528,10 @@ forced termination of the top-level process immediately.
 `commandtools.ScriptedSessionManager` remains available for deterministic tests
 and evals. `commandtools.SessionCleanupOptions(...)` installs `SessionEnded`
 cleanup hooks so session-owned commands do not outlive the parent agent run;
-hosts using managed sessions should install it by default. `commandtools.NewSessionTools(...)`
+hosts using managed sessions should install it by default.
+`commandtools/sessiontest` provides a shared adapter conformance harness for
+the start/read/list/stop lifecycle and optional write, resize, and cleanup
+extensions. `commandtools.NewSessionTools(...)`
 builds the standard tool set for hosts that implement the full managed-session
 surface:
 

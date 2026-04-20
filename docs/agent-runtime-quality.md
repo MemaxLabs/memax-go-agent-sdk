@@ -290,7 +290,8 @@ patches, snapshots, restore, reviewable mutations, and sandbox boundaries.
   support exists, including a reference OS-backed managed-session adapter with
   rooted cwd resolution, bounded buffered output, explicit PTY terminal
   geometry, live resize, Unix process-group cleanup for descendants, and
-  session cleanup hooks.
+  session cleanup hooks. A reusable `commandtools/sessiontest` conformance
+  harness now verifies the public lifecycle contract across session adapters.
 - More isolated execution can stay outside the core loop through adapter seams
   that let hosts wire related sandbox-backed workspace, one-shot command, and
   managed command-session toolkits together.
@@ -320,7 +321,8 @@ patches, snapshots, restore, reviewable mutations, and sandbox boundaries.
   of the eval contract. Unix stop and timeout paths now cover ordinary
   descendant process cleanup through process groups; shells can still create
   separate job-control process groups that require sandbox-level cleanup.
-  Initial coverage exists.
+  Initial coverage exists. Shared session adapter conformance coverage now
+  exists for OS-backed and scripted managers.
 - Command approval denial drives an exact-input `request_approval` call and a
   single-use approved retry. Initial coverage exists.
 - Command verification policy denial prevents finalization after a matching

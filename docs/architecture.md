@@ -403,8 +403,11 @@ must wrap or replace it. Graceful stop is best-effort and platform dependent:
 Unix hosts usually get an interrupt-before-kill sequence against the session's
 process group, while job-control children that move into different process
 groups can still require host sandbox cleanup and Windows may fall back to
-forced termination of only the top-level process immediately. `ScriptedSessionManager` continues to provide
-deterministic managed sessions for evals.
+forced termination of only the top-level process immediately.
+`ScriptedSessionManager` continues to provide deterministic managed sessions for
+evals. The `commandtools/sessiontest` package defines the shared conformance
+contract that OS, scripted, sandbox, and future remote session adapters can run
+without depending on one another's implementation details.
 The `sandbox` package complements these local adapters by adapting host-owned
 sandbox-backed command/session backends into the same commandtool interfaces
 plus hook cleanup, making remote or container-backed execution an adapter

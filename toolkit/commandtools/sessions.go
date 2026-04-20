@@ -98,7 +98,10 @@ type CommandSession struct {
 	DroppedBytes       int
 }
 
-// OutputChunk is one ordered piece of buffered command output.
+// OutputChunk is one ordered piece of buffered command output. Seq is
+// monotonically increasing within a command session and remains stable across
+// reads so callers can pass ReadRequest.AfterSeq to resume from the last seen
+// chunk.
 type OutputChunk struct {
 	Seq    int
 	Stream string
