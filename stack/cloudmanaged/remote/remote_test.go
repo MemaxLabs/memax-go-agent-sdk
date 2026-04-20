@@ -37,13 +37,10 @@ func TestHTTPPoolClaim(t *testing.T) {
 	}))
 	defer server.Close()
 
-	pool, err := NewHTTPPool(server.URL,
+	pool := newHTTPPoolForTest(t, server,
 		WithBearerToken("token-1"),
 		WithHeader("X-Memax-Worker", "worker-1"),
 	)
-	if err != nil {
-		t.Fatalf("NewHTTPPool() error = %v", err)
-	}
 	got, err := pool.Claim(context.Background())
 	if err != nil {
 		t.Fatalf("Claim() error = %v", err)
@@ -61,11 +58,8 @@ func TestHTTPPoolClaimNoRunAvailable(t *testing.T) {
 	}))
 	defer server.Close()
 
-	pool, err := NewHTTPPool(server.URL)
-	if err != nil {
-		t.Fatalf("NewHTTPPool() error = %v", err)
-	}
-	_, err = pool.Claim(context.Background())
+	pool := newHTTPPoolForTest(t, server)
+	_, err := pool.Claim(context.Background())
 	if !errors.Is(err, ErrNoRunAvailable) {
 		t.Fatalf("Claim() error = %v, want ErrNoRunAvailable", err)
 	}
@@ -97,10 +91,7 @@ func TestClaimHandlerServesNextQueuedRun(t *testing.T) {
 	server := httptest.NewServer(handler)
 	defer server.Close()
 
-	pool, err := NewHTTPPool(server.URL)
-	if err != nil {
-		t.Fatalf("NewHTTPPool() error = %v", err)
-	}
+	pool := newHTTPPoolForTest(t, server)
 	got, err := pool.Claim(context.Background())
 	if err != nil {
 		t.Fatalf("Claim() error = %v", err)
@@ -132,10 +123,7 @@ func TestClaimHandlerNoQueuedRun(t *testing.T) {
 	server := httptest.NewServer(handler)
 	defer server.Close()
 
-	pool, err := NewHTTPPool(server.URL)
-	if err != nil {
-		t.Fatalf("NewHTTPPool() error = %v", err)
-	}
+	pool := newHTTPPoolForTest(t, server)
 	_, err = pool.Claim(context.Background())
 	if !errors.Is(err, ErrNoRunAvailable) {
 		t.Fatalf("Claim() error = %v, want ErrNoRunAvailable", err)
@@ -176,10 +164,7 @@ func TestRunOnceExecutesQueuedRun(t *testing.T) {
 	}))
 	defer server.Close()
 
-	pool, err := NewHTTPPool(server.URL)
-	if err != nil {
-		t.Fatalf("NewHTTPPool() error = %v", err)
-	}
+	pool := newHTTPPoolForTest(t, server)
 	final, executed, err := RunOnce(context.Background(), stack, pool, cloudmanaged.WorkerOptions{
 		ID:                "worker-1",
 		HeartbeatInterval: time.Millisecond,
@@ -233,6 +218,16 @@ func TestRunOnceTreatsClaimRaceAsNoWork(t *testing.T) {
 type staticPool struct {
 	record cloudmanaged.RunRecord
 	err    error
+}
+
+func newHTTPPoolForTest(t *testing.T, server *httptest.Server, options ...HTTPPoolOption) *HTTPPool {
+	t.Helper()
+	allOptions := append([]HTTPPoolOption{WithHTTPClient(server.Client())}, options...)
+	pool, err := NewHTTPPool(server.URL, allOptions...)
+	if err != nil {
+		t.Fatalf("NewHTTPPool() error = %v", err)
+	}
+	return pool
 }
 
 func (p staticPool) Claim(context.Context) (cloudmanaged.RunRecord, error) {
