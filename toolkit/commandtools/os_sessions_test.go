@@ -200,6 +200,79 @@ func TestOSSessionManagerWriteInputEchoesAndExits(t *testing.T) {
 	}
 }
 
+func TestOSSessionManagerClassifiesStateErrors(t *testing.T) {
+	manager, err := NewOSSessionManager(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewOSSessionManager returned error: %v", err)
+	}
+	started, err := manager.StartCommand(context.Background(), StartRequest{
+		SessionID: "session-1",
+		ID:        "fixed",
+		Argv: []string{
+			os.Args[0],
+			"-test.run=TestHelperProcess",
+			"--",
+			"session",
+			"linger",
+		},
+		Env: map[string]string{"GO_WANT_HELPER_PROCESS": "1"},
+	})
+	if err != nil {
+		t.Fatalf("StartCommand first returned error: %v", err)
+	}
+	defer func() {
+		_, _ = manager.StopCommand(context.Background(), StopRequest{SessionID: "session-1", ID: started.ID, Force: true})
+	}()
+	if _, err := manager.StartCommand(context.Background(), StartRequest{
+		SessionID: "session-1",
+		ID:        "fixed",
+		Argv:      []string{os.Args[0], "-test.run=TestHelperProcess", "--", "session", "linger"},
+		Env:       map[string]string{"GO_WANT_HELPER_PROCESS": "1"},
+	}); err != nil {
+		assertCommandSessionError(t, err, ErrCommandSessionAlreadyExists, "commandtools: command session fixed already exists")
+	} else {
+		t.Fatal("StartCommand duplicate returned nil error, want ErrCommandSessionAlreadyExists")
+	}
+}
+
+func TestOSSessionStateClassifiesInputAndResizeErrors(t *testing.T) {
+	stdinClosed := &osSessionState{
+		session: CommandSession{ID: "cmd-stdin", Status: SessionRunning, StartedAt: time.Now().UTC()},
+	}
+	if _, err := stdinClosed.writeInput(context.Background(), WriteRequest{ID: "cmd-stdin", Input: "hello"}); err != nil {
+		assertCommandSessionError(t, err, ErrCommandSessionStdinClosed, "commandtools: command session cmd-stdin stdin is closed")
+	} else {
+		t.Fatal("writeInput with closed stdin returned nil error, want ErrCommandSessionStdinClosed")
+	}
+
+	notPTY := &osSessionState{
+		session: CommandSession{ID: "cmd-plain", Status: SessionRunning, StartedAt: time.Now().UTC()},
+	}
+	if _, err := notPTY.resizeTerminal(context.Background(), ResizeRequest{ID: "cmd-plain", Cols: 100, Rows: 30}); err != nil {
+		assertCommandSessionError(t, err, ErrCommandSessionNotPTY, "commandtools: command session cmd-plain is not PTY-backed")
+	} else {
+		t.Fatal("resizeTerminal non-PTY returned nil error, want ErrCommandSessionNotPTY")
+	}
+
+	notRunning := &osSessionState{
+		session: CommandSession{ID: "cmd-exited", TTY: true, Status: SessionExited, StartedAt: time.Now().UTC()},
+	}
+	if _, err := notRunning.resizeTerminal(context.Background(), ResizeRequest{ID: "cmd-exited", Cols: 100, Rows: 30}); err != nil {
+		assertCommandSessionError(t, err, ErrCommandSessionNotRunning, "commandtools: command session cmd-exited is not running")
+	} else {
+		t.Fatal("resizeTerminal exited session returned nil error, want ErrCommandSessionNotRunning")
+	}
+
+	terminalClosed := &osSessionState{
+		session: CommandSession{ID: "cmd-terminal", TTY: true, Status: SessionRunning, StartedAt: time.Now().UTC()},
+	}
+	if _, err := terminalClosed.resizeTerminal(context.Background(), ResizeRequest{ID: "cmd-terminal", Cols: 100, Rows: 30}); err != nil {
+		assertCommandSessionError(t, err, ErrCommandSessionTerminalClosed, "commandtools: command session cmd-terminal terminal is closed")
+	} else {
+		t.Fatal("resizeTerminal with closed terminal returned nil error, want ErrCommandSessionTerminalClosed")
+	}
+}
+
 func TestOSSessionManagerBoundsInheritedStdoutDrain(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell fd-inheritance fixture is Unix-specific")

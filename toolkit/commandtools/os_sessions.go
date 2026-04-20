@@ -325,7 +325,7 @@ func (m *OSSessionManager) StartCommand(ctx context.Context, req StartRequest) (
 		if _, exists := m.sessions[id]; exists {
 			m.mu.Unlock()
 			cleanupFailedSessionRuntime(runtime)
-			return CommandSession{}, fmt.Errorf("commandtools: command session %s already exists", id)
+			return CommandSession{}, commandSessionError(ErrCommandSessionAlreadyExists, "commandtools: command session %s already exists", id)
 		}
 	} else {
 		for {
@@ -347,7 +347,7 @@ func (m *OSSessionManager) StartCommand(ctx context.Context, req StartRequest) (
 			delete(m.sessions, state.session.ID)
 			m.mu.Unlock()
 			cleanupFailedSessionRuntime(runtime)
-			return CommandSession{}, fmt.Errorf("commandtools: command session %s stdin is closed", state.session.ID)
+			return CommandSession{}, commandSessionError(ErrCommandSessionStdinClosed, "commandtools: command session %s stdin is closed", state.session.ID)
 		}
 		if _, err := io.WriteString(input, req.Stdin); err != nil {
 			m.mu.Lock()
@@ -678,9 +678,9 @@ func (s *osSessionState) writeInput(ctx context.Context, req WriteRequest) (Writ
 		if input == nil {
 			s.stdinMu.Unlock()
 			if s.isDraining() {
-				return WriteResult{}, fmt.Errorf("commandtools: command session %s is not running", session.ID)
+				return WriteResult{}, commandSessionError(ErrCommandSessionNotRunning, "commandtools: command session %s is not running", session.ID)
 			}
-			return WriteResult{}, fmt.Errorf("commandtools: command session %s stdin is closed", session.ID)
+			return WriteResult{}, commandSessionError(ErrCommandSessionStdinClosed, "commandtools: command session %s stdin is closed", session.ID)
 		}
 		_, err := io.WriteString(input, req.Input)
 		s.stdinMu.Unlock()
@@ -705,17 +705,17 @@ func (s *osSessionState) resizeTerminal(ctx context.Context, req ResizeRequest) 
 	defer s.stdinMu.Unlock()
 	session := s.snapshot()
 	if !session.TTY {
-		return CommandSession{}, fmt.Errorf("commandtools: command session %s is not PTY-backed", session.ID)
+		return CommandSession{}, commandSessionError(ErrCommandSessionNotPTY, "commandtools: command session %s is not PTY-backed", session.ID)
 	}
 	if session.Status != SessionRunning {
-		return CommandSession{}, fmt.Errorf("commandtools: command session %s is not running", session.ID)
+		return CommandSession{}, commandSessionError(ErrCommandSessionNotRunning, "commandtools: command session %s is not running", session.ID)
 	}
 	terminal := s.terminal
 	if terminal == nil {
 		if s.isDraining() {
-			return CommandSession{}, fmt.Errorf("commandtools: command session %s is not running", session.ID)
+			return CommandSession{}, commandSessionError(ErrCommandSessionNotRunning, "commandtools: command session %s is not running", session.ID)
 		}
-		return CommandSession{}, fmt.Errorf("commandtools: command session %s terminal is closed", session.ID)
+		return CommandSession{}, commandSessionError(ErrCommandSessionTerminalClosed, "commandtools: command session %s terminal is closed", session.ID)
 	}
 	if err := terminal.Resize(req.Cols, req.Rows); err != nil {
 		return CommandSession{}, fmt.Errorf("commandtools: resize command session %s: %w", session.ID, err)

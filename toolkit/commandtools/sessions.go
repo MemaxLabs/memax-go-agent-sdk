@@ -53,6 +53,21 @@ var (
 	// ErrCommandSessionNotVisible is returned when a managed command session
 	// exists but belongs to a different agent session boundary.
 	ErrCommandSessionNotVisible = errors.New("commandtools: command session is not visible in this agent session")
+	// ErrCommandSessionAlreadyExists is returned when a caller requests a
+	// managed command session ID that is already active in the manager.
+	ErrCommandSessionAlreadyExists = errors.New("commandtools: command session already exists")
+	// ErrCommandSessionNotRunning is returned when an operation requires a
+	// running managed command session but the session has already terminated.
+	ErrCommandSessionNotRunning = errors.New("commandtools: command session is not running")
+	// ErrCommandSessionNotPTY is returned when a terminal-only operation is
+	// requested for a command session that was not started with TTY enabled.
+	ErrCommandSessionNotPTY = errors.New("commandtools: command session is not PTY-backed")
+	// ErrCommandSessionStdinClosed is returned when stdin is unavailable for a
+	// managed command session that otherwise accepts input operations.
+	ErrCommandSessionStdinClosed = errors.New("commandtools: command session stdin is closed")
+	// ErrCommandSessionTerminalClosed is returned when a PTY-backed command
+	// session no longer has an open terminal handle.
+	ErrCommandSessionTerminalClosed = errors.New("commandtools: command session terminal is closed")
 	// ErrCommandSessionPTYUnsupported is returned when the current manager or
 	// platform cannot start PTY-backed command sessions.
 	ErrCommandSessionPTYUnsupported = errors.New("commandtools: PTY sessions are not supported")
@@ -1148,7 +1163,6 @@ func (m *ScriptedSessionManager) StartCommand(ctx context.Context, req StartRequ
 		return CommandSession{}, fmt.Errorf("commandtools: scripted session manager exhausted")
 	}
 	cmd := m.commands[0]
-	m.commands = m.commands[1:]
 	id := strings.TrimSpace(req.ID)
 	if id == "" {
 		id = strings.TrimSpace(cmd.ID)
@@ -1156,6 +1170,10 @@ func (m *ScriptedSessionManager) StartCommand(ctx context.Context, req StartRequ
 	if id == "" {
 		id = fmt.Sprintf("cmd-%d", len(m.sessions)+1)
 	}
+	if _, exists := m.sessions[id]; exists {
+		return CommandSession{}, commandSessionError(ErrCommandSessionAlreadyExists, "commandtools: command session %s already exists", id)
+	}
+	m.commands = m.commands[1:]
 	tty := cmd.TTY || req.TTY
 	cols := req.Cols
 	rows := req.Rows
@@ -1309,10 +1327,10 @@ func (m *ScriptedSessionManager) ResizeCommandTerminal(ctx context.Context, req 
 		return CommandSession{}, err
 	}
 	if !state.session.TTY {
-		return CommandSession{}, fmt.Errorf("commandtools: command session %s is not PTY-backed", state.session.ID)
+		return CommandSession{}, commandSessionError(ErrCommandSessionNotPTY, "commandtools: command session %s is not PTY-backed", state.session.ID)
 	}
 	if state.session.Status != SessionRunning {
-		return CommandSession{}, fmt.Errorf("commandtools: command session %s is not running", state.session.ID)
+		return CommandSession{}, commandSessionError(ErrCommandSessionNotRunning, "commandtools: command session %s is not running", state.session.ID)
 	}
 	state.session.Cols = req.Cols
 	state.session.Rows = req.Rows

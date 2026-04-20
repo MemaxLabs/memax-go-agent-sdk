@@ -87,18 +87,83 @@ func TestScriptedSessionManagerClassifiesLookupErrors(t *testing.T) {
 	if _, err := manager.ReadCommandOutput(context.Background(), ReadRequest{
 		SessionID: "session-2",
 		ID:        started.ID,
-	}); !errors.Is(err, ErrCommandSessionNotVisible) {
-		t.Fatalf("ReadCommandOutput cross-session error = %v, want ErrCommandSessionNotVisible", err)
-	} else if want := "commandtools: command session server-1 is not visible in this agent session"; err.Error() != want {
-		t.Fatalf("ReadCommandOutput cross-session error = %q, want %q", err.Error(), want)
+	}); err != nil {
+		assertCommandSessionError(t, err, ErrCommandSessionNotVisible, "commandtools: command session server-1 is not visible in this agent session")
+	} else {
+		t.Fatal("ReadCommandOutput cross-session returned nil error, want ErrCommandSessionNotVisible")
 	}
 	if _, err := manager.ReadCommandOutput(context.Background(), ReadRequest{
 		SessionID: "session-1",
 		ID:        "missing",
-	}); !errors.Is(err, ErrCommandSessionUnknown) {
-		t.Fatalf("ReadCommandOutput missing-session error = %v, want ErrCommandSessionUnknown", err)
-	} else if want := "commandtools: unknown command session missing"; err.Error() != want {
-		t.Fatalf("ReadCommandOutput missing-session error = %q, want %q", err.Error(), want)
+	}); err != nil {
+		assertCommandSessionError(t, err, ErrCommandSessionUnknown, "commandtools: unknown command session missing")
+	} else {
+		t.Fatal("ReadCommandOutput missing-session returned nil error, want ErrCommandSessionUnknown")
+	}
+}
+
+func TestScriptedSessionManagerClassifiesStateErrors(t *testing.T) {
+	manager := NewScriptedSessionManager(
+		ScriptedCommand{ID: "server-1", PID: 4242},
+		ScriptedCommand{ID: "server-2", PID: 4243},
+	)
+	if _, err := manager.StartCommand(context.Background(), StartRequest{
+		SessionID: "session-1",
+		ID:        "server-1",
+		Argv:      []string{"first"},
+	}); err != nil {
+		t.Fatalf("StartCommand first returned error: %v", err)
+	}
+	if _, err := manager.StartCommand(context.Background(), StartRequest{
+		SessionID: "session-1",
+		ID:        "server-1",
+		Argv:      []string{"duplicate"},
+	}); err != nil {
+		assertCommandSessionError(t, err, ErrCommandSessionAlreadyExists, "commandtools: command session server-1 already exists")
+	} else {
+		t.Fatal("StartCommand duplicate returned nil error, want ErrCommandSessionAlreadyExists")
+	}
+	if _, err := manager.ResizeCommandTerminal(context.Background(), ResizeRequest{
+		SessionID: "session-1",
+		ID:        "server-1",
+		Cols:      100,
+		Rows:      30,
+	}); err != nil {
+		assertCommandSessionError(t, err, ErrCommandSessionNotPTY, "commandtools: command session server-1 is not PTY-backed")
+	} else {
+		t.Fatal("ResizeCommandTerminal non-PTY returned nil error, want ErrCommandSessionNotPTY")
+	}
+
+	ttyManager := NewScriptedSessionManager(ScriptedCommand{
+		ID:  "tty-1",
+		PID: 4244,
+		TTY: true,
+		Pages: []ScriptedOutputPage{{
+			Running:  false,
+			ExitCode: intPtr(0),
+		}},
+	})
+	if _, err := ttyManager.StartCommand(context.Background(), StartRequest{
+		SessionID: "session-1",
+		Argv:      []string{"tty"},
+	}); err != nil {
+		t.Fatalf("StartCommand tty returned error: %v", err)
+	}
+	if _, err := ttyManager.ReadCommandOutput(context.Background(), ReadRequest{
+		SessionID: "session-1",
+		ID:        "tty-1",
+	}); err != nil {
+		t.Fatalf("ReadCommandOutput tty terminal page returned error: %v", err)
+	}
+	if _, err := ttyManager.ResizeCommandTerminal(context.Background(), ResizeRequest{
+		SessionID: "session-1",
+		ID:        "tty-1",
+		Cols:      100,
+		Rows:      30,
+	}); err != nil {
+		assertCommandSessionError(t, err, ErrCommandSessionNotRunning, "commandtools: command session tty-1 is not running")
+	} else {
+		t.Fatal("ResizeCommandTerminal exited session returned nil error, want ErrCommandSessionNotRunning")
 	}
 }
 
@@ -650,6 +715,16 @@ func TestNewSessionToolsIncludesWriteWhenSupported(t *testing.T) {
 	}
 	if !sameStrings(names, want) {
 		t.Fatalf("tool names = %#v, want %#v", names, want)
+	}
+}
+
+func assertCommandSessionError(t testing.TB, err, kind error, want string) {
+	t.Helper()
+	if !errors.Is(err, kind) {
+		t.Fatalf("error = %v, want %v", err, kind)
+	}
+	if err.Error() != want {
+		t.Fatalf("error = %q, want %q", err.Error(), want)
 	}
 }
 
