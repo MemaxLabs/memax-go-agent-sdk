@@ -4,8 +4,8 @@ package commandtools
 
 import (
 	"context"
+	"errors"
 	"os"
-	"strings"
 	"testing"
 
 	"github.com/creack/pty"
@@ -31,7 +31,7 @@ func TestOSSessionManagerResizeTTYSession(t *testing.T) {
 		Env: map[string]string{"GO_WANT_HELPER_PROCESS": "1"},
 	})
 	if err != nil {
-		if strings.Contains(err.Error(), "PTY sessions are not supported") {
+		if errors.Is(err, ErrCommandSessionPTYUnsupported) {
 			t.Skipf("pty unsupported: %v", err)
 		}
 		t.Fatalf("StartCommand returned error: %v", err)

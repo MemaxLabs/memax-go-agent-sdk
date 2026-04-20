@@ -3,6 +3,7 @@ package commandtools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -64,6 +65,40 @@ func TestScriptedSessionManagerStartReadStop(t *testing.T) {
 	}
 	if stopped.Status != SessionExited || stopped.ExitCode == nil || *stopped.ExitCode != 0 {
 		t.Fatalf("stopped = %#v, want exited session unchanged after natural exit", stopped)
+	}
+}
+
+func TestScriptedSessionManagerClassifiesLookupErrors(t *testing.T) {
+	manager := NewScriptedSessionManager(ScriptedCommand{
+		ID:  "server-1",
+		PID: 4242,
+		Pages: []ScriptedOutputPage{{
+			Chunks:  []OutputChunk{{Seq: 1, Stream: "stdout", Text: "ready\n", Time: time.Unix(1, 0).UTC()}},
+			Running: true,
+		}},
+	})
+	started, err := manager.StartCommand(context.Background(), StartRequest{
+		SessionID: "session-1",
+		Argv:      []string{"dev-server"},
+	})
+	if err != nil {
+		t.Fatalf("StartCommand returned error: %v", err)
+	}
+	if _, err := manager.ReadCommandOutput(context.Background(), ReadRequest{
+		SessionID: "session-2",
+		ID:        started.ID,
+	}); !errors.Is(err, ErrCommandSessionNotVisible) {
+		t.Fatalf("ReadCommandOutput cross-session error = %v, want ErrCommandSessionNotVisible", err)
+	} else if want := "commandtools: command session server-1 is not visible in this agent session"; err.Error() != want {
+		t.Fatalf("ReadCommandOutput cross-session error = %q, want %q", err.Error(), want)
+	}
+	if _, err := manager.ReadCommandOutput(context.Background(), ReadRequest{
+		SessionID: "session-1",
+		ID:        "missing",
+	}); !errors.Is(err, ErrCommandSessionUnknown) {
+		t.Fatalf("ReadCommandOutput missing-session error = %v, want ErrCommandSessionUnknown", err)
+	} else if want := "commandtools: unknown command session missing"; err.Error() != want {
+		t.Fatalf("ReadCommandOutput missing-session error = %q, want %q", err.Error(), want)
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/hook"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/commandtools"
+	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/commandtools/sessiontest"
 	"github.com/MemaxLabs/memax-go-agent-sdk/workspace"
 )
 
@@ -147,6 +148,57 @@ func TestNewSessionToolsNil(t *testing.T) {
 	if _, err := NewSessionTools(nil); err == nil {
 		t.Fatal("NewSessionTools returned nil error, want backend required error")
 	}
+}
+
+// This exercises the sandbox pass-through adapters under the shared
+// commandtools contract. NewSessionTools capability detection is covered by the
+// includes/omits optional-capabilities tests above.
+func TestSessionAdaptersSatisfyCommandToolsContract(t *testing.T) {
+	sessiontest.Run(t, sessiontest.Contract{
+		NewManager: func(t testing.TB, scenario sessiontest.Scenario) commandtools.SessionManager {
+			t.Helper()
+			var backend *commandtools.ScriptedSessionManager
+			switch scenario {
+			case sessiontest.ScenarioNaturalExit:
+				backend = commandtools.NewScriptedSessionManager(sandboxScriptedNaturalExitCommand())
+			case sessiontest.ScenarioStopCleanup:
+				backend = commandtools.NewScriptedSessionManager(
+					sandboxScriptedLongRunningCommand("sandbox-long-1"),
+					sandboxScriptedLongRunningCommand("sandbox-long-2"),
+				)
+			case sessiontest.ScenarioWriteInput:
+				backend = commandtools.NewScriptedSessionManager(sandboxScriptedInteractiveCommand())
+			case sessiontest.ScenarioResizeTTY:
+				backend = commandtools.NewScriptedSessionManager(commandtools.ScriptedCommand{
+					ID:   "sandbox-tty-1",
+					PID:  4245,
+					TTY:  true,
+					Cols: 90,
+					Rows: 30,
+				})
+			default:
+				t.Fatalf("unexpected scenario %q", scenario)
+			}
+			return newSandboxSessionContractManager(backend)
+		},
+		NaturalExitRequest: func(testing.TB) commandtools.StartRequest {
+			return commandtools.StartRequest{Argv: []string{"sandbox", "natural"}}
+		},
+		LongRunningRequest: func(testing.TB) commandtools.StartRequest {
+			return commandtools.StartRequest{Argv: []string{"sandbox", "linger"}}
+		},
+		InteractiveRequest: func(testing.TB) commandtools.StartRequest {
+			return commandtools.StartRequest{Argv: []string{"sandbox", "interactive"}}
+		},
+		TTYRequest: func(testing.TB) commandtools.StartRequest {
+			return commandtools.StartRequest{
+				Argv: []string{"sandbox", "tty"},
+				TTY:  true,
+				Cols: 90,
+				Rows: 30,
+			}
+		},
+	})
 }
 
 func TestSessionCleanupOptionsInvokesCleaner(t *testing.T) {
@@ -432,6 +484,116 @@ func (f *fakeSessionBackend) ResizeCommandTerminal(_ context.Context, req comman
 func (f *fakeSessionBackend) CleanupSession(_ context.Context, sessionID string) error {
 	f.cleanedSessionID = sessionID
 	return nil
+}
+
+type sandboxSessionContractManager struct {
+	starter commandtools.Starter
+	reader  commandtools.Reader
+	writer  commandtools.Writer
+	resizer commandtools.Resizer
+	stopper commandtools.Stopper
+	lister  commandtools.Lister
+	cleaner commandtools.Cleaner
+}
+
+func newSandboxSessionContractManager(backend *commandtools.ScriptedSessionManager) sandboxSessionContractManager {
+	return sandboxSessionContractManager{
+		starter: sessionStarterAdapter{backend: backend},
+		reader:  sessionReaderAdapter{backend: backend},
+		writer:  sessionWriterAdapter{backend: backend},
+		resizer: sessionResizerAdapter{backend: backend},
+		stopper: sessionStopperAdapter{backend: backend},
+		lister:  sessionListerAdapter{backend: backend},
+		cleaner: sessionCleanerAdapter{backend: backend},
+	}
+}
+
+func (m sandboxSessionContractManager) StartCommand(ctx context.Context, req commandtools.StartRequest) (commandtools.CommandSession, error) {
+	return m.starter.StartCommand(ctx, req)
+}
+
+func (m sandboxSessionContractManager) ReadCommandOutput(ctx context.Context, req commandtools.ReadRequest) (commandtools.ReadResult, error) {
+	return m.reader.ReadCommandOutput(ctx, req)
+}
+
+func (m sandboxSessionContractManager) WriteCommandInput(ctx context.Context, req commandtools.WriteRequest) (commandtools.WriteResult, error) {
+	return m.writer.WriteCommandInput(ctx, req)
+}
+
+func (m sandboxSessionContractManager) ResizeCommandTerminal(ctx context.Context, req commandtools.ResizeRequest) (commandtools.CommandSession, error) {
+	return m.resizer.ResizeCommandTerminal(ctx, req)
+}
+
+func (m sandboxSessionContractManager) StopCommand(ctx context.Context, req commandtools.StopRequest) (commandtools.CommandSession, error) {
+	return m.stopper.StopCommand(ctx, req)
+}
+
+func (m sandboxSessionContractManager) ListCommands(ctx context.Context, req commandtools.ListRequest) ([]commandtools.CommandSession, error) {
+	return m.lister.ListCommands(ctx, req)
+}
+
+func (m sandboxSessionContractManager) CleanupSession(ctx context.Context, sessionID string) error {
+	return m.cleaner.CleanupSession(ctx, sessionID)
+}
+
+func sandboxScriptedNaturalExitCommand() commandtools.ScriptedCommand {
+	return commandtools.ScriptedCommand{
+		ID:  "sandbox-natural-1",
+		PID: 4242,
+		Pages: []commandtools.ScriptedOutputPage{
+			{
+				Chunks:  []commandtools.OutputChunk{{Seq: 1, Stream: "stdout", Text: "ready\n", Time: time.Unix(1, 0).UTC()}},
+				Running: true,
+			},
+			{
+				Chunks:   []commandtools.OutputChunk{{Seq: 2, Stream: "stdout", Text: "done\n", Time: time.Unix(2, 0).UTC()}},
+				Running:  false,
+				ExitCode: intPtr(0),
+			},
+		},
+	}
+}
+
+func sandboxScriptedLongRunningCommand(id string) commandtools.ScriptedCommand {
+	return commandtools.ScriptedCommand{
+		ID:  id,
+		PID: 4243,
+		Pages: []commandtools.ScriptedOutputPage{{
+			Chunks:  []commandtools.OutputChunk{{Seq: 1, Stream: "stdout", Text: "ready\n", Time: time.Unix(1, 0).UTC()}},
+			Running: true,
+		}},
+		StopExitCode: intPtr(143),
+	}
+}
+
+func sandboxScriptedInteractiveCommand() commandtools.ScriptedCommand {
+	return commandtools.ScriptedCommand{
+		ID:  "sandbox-interactive-1",
+		PID: 4244,
+		Pages: []commandtools.ScriptedOutputPage{{
+			Chunks:  []commandtools.OutputChunk{{Seq: 1, Stream: "stdout", Text: "ready\n", Time: time.Unix(1, 0).UTC()}},
+			Running: true,
+		}},
+		WritePages: []commandtools.ScriptedWritePage{
+			{
+				Page: commandtools.ScriptedOutputPage{
+					Chunks:  []commandtools.OutputChunk{{Seq: 2, Stream: "stdout", Text: "echo:hello\n", Time: time.Unix(2, 0).UTC()}},
+					Running: true,
+				},
+			},
+			{
+				Page: commandtools.ScriptedOutputPage{
+					Chunks:   []commandtools.OutputChunk{{Seq: 3, Stream: "stdout", Text: "bye\n", Time: time.Unix(3, 0).UTC()}},
+					Running:  false,
+					ExitCode: intPtr(0),
+				},
+			},
+		},
+	}
+}
+
+func intPtr(value int) *int {
+	return &value
 }
 
 type errorCleaner struct {

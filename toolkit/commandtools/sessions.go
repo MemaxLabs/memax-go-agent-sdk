@@ -3,6 +3,7 @@ package commandtools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -44,6 +45,38 @@ const (
 	defaultTTYRows        = 24
 	maxTTYDimension       = 32767
 )
+
+var (
+	// ErrCommandSessionUnknown is returned when a managed command session ID is
+	// not known to the session manager.
+	ErrCommandSessionUnknown = errors.New("commandtools: unknown command session")
+	// ErrCommandSessionNotVisible is returned when a managed command session
+	// exists but belongs to a different agent session boundary.
+	ErrCommandSessionNotVisible = errors.New("commandtools: command session is not visible in this agent session")
+	// ErrCommandSessionPTYUnsupported is returned when the current manager or
+	// platform cannot start PTY-backed command sessions.
+	ErrCommandSessionPTYUnsupported = errors.New("commandtools: PTY sessions are not supported")
+)
+
+type classifiedCommandSessionError struct {
+	kind error
+	msg  string
+}
+
+func (e classifiedCommandSessionError) Error() string {
+	return e.msg
+}
+
+func (e classifiedCommandSessionError) Unwrap() error {
+	return e.kind
+}
+
+func commandSessionError(kind error, format string, args ...any) error {
+	return classifiedCommandSessionError{
+		kind: kind,
+		msg:  fmt.Sprintf(format, args...),
+	}
+}
 
 // Metadata for managed command sessions.
 const (
@@ -1426,10 +1459,10 @@ func (m *ScriptedSessionManager) StopRequests() []StopRequest {
 func (m *ScriptedSessionManager) lookupSession(sessionID, id string) (*scriptedSessionState, error) {
 	state, ok := m.sessions[id]
 	if !ok {
-		return nil, fmt.Errorf("commandtools: unknown command session %s", id)
+		return nil, commandSessionError(ErrCommandSessionUnknown, "commandtools: unknown command session %s", id)
 	}
 	if sessionID != "" && state.session.SessionID != "" && state.session.SessionID != sessionID {
-		return nil, fmt.Errorf("commandtools: command session %s is not visible in this agent session", id)
+		return nil, commandSessionError(ErrCommandSessionNotVisible, "commandtools: command session %s is not visible in this agent session", id)
 	}
 	return state, nil
 }

@@ -2,6 +2,7 @@ package commandtools
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -60,7 +61,7 @@ func TestOSSessionManagerStartReadNaturalExitAndVisibility(t *testing.T) {
 	if len(otherSessions) != 0 {
 		t.Fatalf("otherSessions = %#v, want no cross-session visibility", otherSessions)
 	}
-	if _, err := manager.ReadCommandOutput(context.Background(), ReadRequest{SessionID: "session-2", ID: started.ID}); err == nil || !strings.Contains(err.Error(), "not visible") {
+	if _, err := manager.ReadCommandOutput(context.Background(), ReadRequest{SessionID: "session-2", ID: started.ID}); !errors.Is(err, ErrCommandSessionNotVisible) {
 		t.Fatalf("ReadCommandOutput cross-session error = %v, want visibility error", err)
 	}
 
@@ -134,7 +135,7 @@ func TestOSSessionManagerStopAndCleanup(t *testing.T) {
 	if len(sessions) != 0 {
 		t.Fatalf("sessions = %#v, want cleanup to remove session-owned commands", sessions)
 	}
-	if _, err := manager.ReadCommandOutput(context.Background(), ReadRequest{SessionID: "session-2", ID: second.ID}); err == nil || !strings.Contains(err.Error(), "unknown command session") {
+	if _, err := manager.ReadCommandOutput(context.Background(), ReadRequest{SessionID: "session-2", ID: second.ID}); !errors.Is(err, ErrCommandSessionUnknown) {
 		t.Fatalf("ReadCommandOutput after cleanup error = %v, want unknown session", err)
 	}
 }
@@ -251,7 +252,7 @@ func TestOSSessionManagerTTYSessionUsesPTYStream(t *testing.T) {
 		Env: map[string]string{"GO_WANT_HELPER_PROCESS": "1"},
 	})
 	if err != nil {
-		if strings.Contains(err.Error(), "PTY sessions are not supported") {
+		if errors.Is(err, ErrCommandSessionPTYUnsupported) {
 			t.Skipf("pty unsupported on %s: %v", runtime.GOOS, err)
 		}
 		t.Fatalf("StartCommand returned error: %v", err)

@@ -9,6 +9,7 @@ package sessiontest
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -67,13 +68,12 @@ type Contract struct {
 	ExitText string
 
 	// IsNotVisible classifies the expected error returned when a command is
-	// read across a session boundary. The default accepts the OS adapter's
-	// current "not visible" phrasing.
+	// read across a session boundary. The default matches
+	// commandtools.ErrCommandSessionNotVisible.
 	IsNotVisible func(error) bool
 	// IsTTYUnsupported classifies adapter errors that mean PTY/TTY sessions are
 	// unavailable on this platform. The resize scenario skips when it returns
-	// true. The default accepts the OS adapter's current unsupported-PTY
-	// phrasing.
+	// true. The default matches commandtools.ErrCommandSessionPTYUnsupported.
 	IsTTYUnsupported func(error) bool
 
 	// WaitTimeout bounds each polling wait in the conformance harness.
@@ -332,12 +332,12 @@ func (c Contract) withDefaults() Contract {
 	}
 	if c.IsNotVisible == nil {
 		c.IsNotVisible = func(err error) bool {
-			return err != nil && strings.Contains(err.Error(), "not visible")
+			return errors.Is(err, commandtools.ErrCommandSessionNotVisible)
 		}
 	}
 	if c.IsTTYUnsupported == nil {
 		c.IsTTYUnsupported = func(err error) bool {
-			return err != nil && strings.Contains(err.Error(), "PTY sessions are not supported")
+			return errors.Is(err, commandtools.ErrCommandSessionPTYUnsupported)
 		}
 	}
 	return c

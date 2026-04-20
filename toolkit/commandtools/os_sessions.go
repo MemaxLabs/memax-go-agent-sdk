@@ -505,11 +505,11 @@ func (m *OSSessionManager) lookupSession(sessionID, id string) (*osSessionState,
 	state, ok := m.sessions[id]
 	m.mu.RUnlock()
 	if !ok {
-		return nil, fmt.Errorf("commandtools: unknown command session %s", id)
+		return nil, commandSessionError(ErrCommandSessionUnknown, "commandtools: unknown command session %s", id)
 	}
 	session := state.snapshot()
 	if sessionID != "" && session.SessionID != "" && session.SessionID != sessionID {
-		return nil, fmt.Errorf("commandtools: command session %s is not visible in this agent session", id)
+		return nil, commandSessionError(ErrCommandSessionNotVisible, "commandtools: command session %s is not visible in this agent session", id)
 	}
 	return state, nil
 }
