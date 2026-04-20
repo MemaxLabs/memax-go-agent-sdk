@@ -23,6 +23,9 @@ jobs:
           cache: true
           cache-dependency-path: go.sum
 
+      - name: Lint GitHub Actions
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+
       - name: Test
         run: go test ./...
 
