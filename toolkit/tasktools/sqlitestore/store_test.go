@@ -26,6 +26,14 @@ func TestStoreCreateListUpdateDelete(t *testing.T) {
 	t.Parallel()
 
 	store := newTestStore(t)
+	empty, err := store.List(context.Background())
+	if err != nil {
+		t.Fatalf("List(empty) error = %v", err)
+	}
+	if empty == nil || len(empty) != 0 {
+		t.Fatalf("List(empty) = %#v, want non-nil empty slice", empty)
+	}
+
 	first, err := store.Upsert(context.Background(), tasktools.Task{
 		Title:    " inspect session API ",
 		Status:   tasktools.StatusInProgress,
@@ -154,6 +162,14 @@ func TestStorePersistsAcrossInstances(t *testing.T) {
 	if len(tasks) != 1 || tasks[0].Title != "persist task ledger" || tasks[0].Evidence[0] != "eval" {
 		t.Fatalf("List() = %#v, want durable task from first store", tasks)
 	}
+
+	var version int
+	if err := db.QueryRowContext(context.Background(), `SELECT value FROM memax_task_meta WHERE name = ?`, schemaVersionKey).Scan(&version); err != nil {
+		t.Fatalf("query schema version error = %v", err)
+	}
+	if version != schemaVersion {
+		t.Fatalf("schema version = %d, want %d", version, schemaVersion)
+	}
 }
 
 func TestStoreGeneratedIDsAreAtomic(t *testing.T) {
@@ -222,6 +238,22 @@ func TestStoreHonorsContextCancellation(t *testing.T) {
 	}
 }
 
+func TestStoreAcceptsNilContext(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	task, err := store.Upsert(nil, tasktools.Task{Title: "nil context"})
+	if err != nil {
+		t.Fatalf("Upsert(nil ctx) error = %v", err)
+	}
+	if _, err := store.List(nil); err != nil {
+		t.Fatalf("List(nil ctx) error = %v", err)
+	}
+	if err := store.Delete(nil, task.ID); err != nil {
+		t.Fatalf("Delete(nil ctx) error = %v", err)
+	}
+}
+
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
 
@@ -267,7 +299,7 @@ func equalStrings(left, right []string) bool {
 }
 
 func ExampleNew() {
-	db, err := sql.Open("sqlite", "file:task-ledger?mode=memory&cache=shared")
+	db, err := sql.Open("sqlite", "file:example-task-ledger?mode=memory&cache=shared")
 	if err != nil {
 		panic(err)
 	}

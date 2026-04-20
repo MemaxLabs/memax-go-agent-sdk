@@ -17,9 +17,19 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/tasktools"
 )
 
-const nextTaskNumberKey = "next_task_number"
+const (
+	nextTaskNumberKey = "next_task_number"
+	schemaVersionKey  = "schema_version"
+	schemaVersion     = 1
+)
 
 // Store is a SQLite-backed tasktools.Store.
+//
+// Upsert mirrors tasktools.MemoryStore: creating a task requires a title,
+// missing statuses default to pending, existing tasks are partially updated,
+// and non-empty evidence updates replace prior evidence. Nil contexts are
+// treated as context.Background for host convenience; canceled contexts still
+// return the cancellation error before touching SQLite.
 type Store struct {
 	db *sql.DB
 }
@@ -57,7 +67,7 @@ func (s *Store) List(ctx context.Context) ([]tasktools.Task, error) {
 	}
 	defer rows.Close()
 
-	var out []tasktools.Task
+	out := make([]tasktools.Task, 0)
 	for rows.Next() {
 		task, err := scanTask(rows)
 		if err != nil {
@@ -167,6 +177,12 @@ func (s *Store) init(ctx context.Context) error {
 		VALUES (?, 1)
 	`, nextTaskNumberKey); err != nil {
 		return fmt.Errorf("init sqlite task meta: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		INSERT OR IGNORE INTO memax_task_meta(name, value)
+		VALUES (?, ?)
+	`, schemaVersionKey, schemaVersion); err != nil {
+		return fmt.Errorf("init sqlite task schema version: %w", err)
 	}
 	return nil
 }
