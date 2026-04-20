@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -902,42 +903,74 @@ func PersonalPresetAssistantWeekAheadPlanning() agenteval.Case {
 }
 
 type weekAheadTaskLedgerStore struct {
-	Store   tasktools.Store
-	Reopen  func(context.Context) (tasktools.Store, error)
-	Cleanup func()
-	Err     error
+	Open func(context.Context) (tasktools.Store, func(context.Context) (tasktools.Store, error), func(), error)
 }
 
 func newMemoryWeekAheadTaskLedgerStore() weekAheadTaskLedgerStore {
-	store := tasktools.NewMemoryStore(nil)
 	return weekAheadTaskLedgerStore{
-		Store: store,
-		Reopen: func(ctx context.Context) (tasktools.Store, error) {
+		Open: func(ctx context.Context) (tasktools.Store, func(context.Context) (tasktools.Store, error), func(), error) {
 			if err := ctx.Err(); err != nil {
-				return nil, err
+				return nil, nil, nil, err
 			}
-			return store, nil
+			store := tasktools.NewMemoryStore(nil)
+			reopen := func(ctx context.Context) (tasktools.Store, error) {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+				return store, nil
+			}
+			return store, reopen, nil, nil
 		},
 	}
 }
 
 func newSQLiteWeekAheadTaskLedgerStore() weekAheadTaskLedgerStore {
-	db, err := sql.Open("sqlite", fmt.Sprintf("file:week-ahead-task-ledger-%d?mode=memory&cache=shared", time.Now().UnixNano()))
-	if err != nil {
-		return weekAheadTaskLedgerStore{Err: err}
-	}
-	cleanup := func() { _ = db.Close() }
-	store, err := tasksqlitestore.New(context.Background(), db)
-	if err != nil {
-		cleanup()
-		return weekAheadTaskLedgerStore{Err: err}
-	}
 	return weekAheadTaskLedgerStore{
-		Store: store,
-		Reopen: func(ctx context.Context) (tasktools.Store, error) {
-			return tasksqlitestore.New(ctx, db)
+		Open: func(ctx context.Context) (tasktools.Store, func(context.Context) (tasktools.Store, error), func(), error) {
+			if err := ctx.Err(); err != nil {
+				return nil, nil, nil, err
+			}
+			file, err := os.CreateTemp("", "memax-week-ahead-task-ledger-*.db")
+			if err != nil {
+				return nil, nil, nil, fmt.Errorf("create sqlite task ledger temp file: %w", err)
+			}
+			path := file.Name()
+			_ = file.Close()
+
+			var activeDB *sql.DB
+			cleanup := func() {
+				if activeDB != nil {
+					_ = activeDB.Close()
+				}
+				_ = os.Remove(path)
+			}
+			openStore := func(ctx context.Context) (tasktools.Store, error) {
+				if activeDB != nil {
+					db := activeDB
+					activeDB = nil
+					if err := db.Close(); err != nil {
+						return nil, fmt.Errorf("close sqlite task ledger db: %w", err)
+					}
+				}
+				db, err := sql.Open("sqlite", path)
+				if err != nil {
+					return nil, fmt.Errorf("open sqlite task ledger db: %w", err)
+				}
+				store, err := tasksqlitestore.New(ctx, db)
+				if err != nil {
+					_ = db.Close()
+					return nil, err
+				}
+				activeDB = db
+				return store, nil
+			}
+			store, err := openStore(ctx)
+			if err != nil {
+				cleanup()
+				return nil, nil, nil, err
+			}
+			return store, openStore, cleanup, nil
 		},
-		Cleanup: cleanup,
 	}
 }
 
@@ -1052,16 +1085,7 @@ func personalPresetAssistantWeekAheadTaskLedgerCase(name string, ledger weekAhea
 		Status: tasktools.StatusInProgress,
 		Notes:  "persist owner-visible follow-ups as durable tasks with deterministic IDs",
 	}
-	taskStore := ledger.Store
-	finalTaskStore := taskStore
-	var seedErr error
-	if ledger.Err == nil {
-		if taskStore == nil {
-			seedErr = fmt.Errorf("task ledger store is nil")
-		} else {
-			_, seedErr = taskStore.Upsert(context.Background(), initialTask)
-		}
-	}
+	var finalTaskStore tasktools.Store
 	firstFinal := "Week-ahead task ledger updated: created follow-up tasks for Acme mitigation owner and partner council demo slides."
 	secondFinal := "Resumed week-ahead task ledger: Acme owner follow-up is complete; partner council demo slides remain pending."
 	modelClient := agenteval.NewScriptedModel(
@@ -1191,37 +1215,55 @@ func personalPresetAssistantWeekAheadTaskLedgerCase(name string, ledger weekAhea
 		Reader:       scheduleStore,
 		DefaultLimit: 5,
 	}
-	config.Tasks = taskStore
-	stack, stackErr := personal.New(config)
 	prompts := []string{
 		"Prepare my week-ahead follow-up ledger for 2026-04-20 through 2026-04-26. Search durable context, unread inbox metadata, and calendar metadata first; read only selected details, then persist each owner-visible follow-up as a task with a deterministic ID.",
 		"Resume the pending week-ahead follow-ups from the task ledger. Do not rediscover or duplicate tasks; list pending tasks and update only completed work.",
 	}
+	var cleanup func()
 
 	return agenteval.Case{
-		Name:    name,
-		Prompt:  strings.Join(prompts, " / "),
-		Cleanup: ledger.Cleanup,
+		Name:   name,
+		Prompt: strings.Join(prompts, " / "),
+		Cleanup: func() {
+			if cleanup != nil {
+				cleanup()
+			}
+		},
 		Run: func(ctx context.Context) (<-chan memaxagent.Event, error) {
-			if ledger.Err != nil {
-				return nil, ledger.Err
-			}
-			if seedErr != nil {
-				return nil, seedErr
-			}
 			if configErr != nil {
 				return nil, configErr
 			}
+			if ledger.Open == nil {
+				return nil, fmt.Errorf("task ledger opener is nil")
+			}
+			taskStore, reopen, closeLedger, err := ledger.Open(ctx)
+			if err != nil {
+				return nil, err
+			}
+			cleanup = closeLedger
+			if taskStore == nil {
+				return nil, fmt.Errorf("task ledger store is nil")
+			}
+			if reopen == nil {
+				return nil, fmt.Errorf("task ledger reopen is nil")
+			}
+			if _, err := taskStore.Upsert(ctx, initialTask); err != nil {
+				return nil, err
+			}
+			runConfig := config
+			runConfig.Tasks = taskStore
+			stack, stackErr := personal.New(runConfig)
 			if stackErr != nil {
 				return nil, stackErr
 			}
+			finalTaskStore = taskStore
 			out := make(chan memaxagent.Event)
 			go func() {
 				defer close(out)
 				runStack := stack
 				for i, prompt := range prompts {
 					if i == 1 {
-						resumeStore, err := ledger.Reopen(ctx)
+						resumeStore, err := reopen(ctx)
 						if err != nil {
 							select {
 							case out <- memaxagent.Event{Kind: memaxagent.EventError, Err: err, Time: time.Now().UTC()}:
@@ -1262,7 +1304,7 @@ func personalPresetAssistantWeekAheadTaskLedgerCase(name string, ledger weekAhea
 			return out, nil
 		},
 		Assertions: []agenteval.Assertion{
-			toolConstructionSucceeded(ledger.Err, seedErr, configErr, stackErr),
+			toolConstructionSucceeded(configErr),
 			agenteval.NoToolErrors(),
 			agenteval.ToolUsed(tasktools.UpsertToolName),
 			agenteval.ToolUsed(tasktools.ListToolName),
