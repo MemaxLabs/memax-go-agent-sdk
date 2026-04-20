@@ -158,17 +158,20 @@ func Query(ctx context.Context, prompt string, opts Options) (<-chan Event, erro
 //
 // This is useful in server handlers that need SDK startup work, such as session
 // store access or user-prompt hooks, to run outside the caller goroutine.
+// Startup failures are observed by Query before it returns; the synthesized
+// channel events below are not observed a second time.
 func QueryAsync(ctx context.Context, prompt string, opts Options) <-chan Event {
 	out := make(chan Event)
 	go func() {
 		defer close(out)
 		events, err := Query(ctx, prompt, opts)
 		if err != nil {
+			// Query already observed startup errors through observeStartupError.
+			// These events preserve QueryAsync's channel contract only.
 			if denied, ok := tenantDenied(err); ok {
 				event := newEvent(EventTenantDenied, denied.Request.SessionID, 0)
 				event.ParentSessionID = denied.Request.ParentSessionID
 				event.Tenant = tenantEventFromRequest(denied.Request, denied.Error())
-				observeEvent(ctx, event)
 				select {
 				case <-ctx.Done():
 				case out <- event:
@@ -176,7 +179,6 @@ func QueryAsync(ctx context.Context, prompt string, opts Options) <-chan Event {
 			}
 			event := newEvent(EventError, "", 0)
 			event.Err = err
-			observeEvent(ctx, event)
 			select {
 			case <-ctx.Done():
 			case out <- event:
