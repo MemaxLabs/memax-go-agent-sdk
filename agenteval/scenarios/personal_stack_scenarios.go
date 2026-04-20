@@ -1506,6 +1506,371 @@ func PersonalPresetAssistantScheduledDailyBriefing() agenteval.Case {
 	}
 }
 
+// PersonalPresetAssistantScheduledTaskLedgerMaintenance returns a single-use
+// scenario where a proactive scheduled trigger maintains durable task state by
+// listing persisted pending work before applying deterministic updates.
+func PersonalPresetAssistantScheduledTaskLedgerMaintenance() agenteval.Case {
+	modelClient := &scheduledTaskLedgerMaintenanceModel{}
+	taskDB, taskDBErr := sql.Open("sqlite", "file:scheduled-task-ledger-maintenance-tasks?mode=memory&cache=shared")
+	var (
+		taskStore    tasktools.Store
+		taskStoreErr error
+	)
+	if taskDBErr == nil {
+		taskStore, taskStoreErr = tasksqlitestore.New(context.Background(), taskDB)
+	}
+	if taskStoreErr == nil && taskStore != nil {
+		_, taskStoreErr = taskStore.Upsert(context.Background(), tasktools.Task{
+			ID:       "week-2026-04-20-acme-owner",
+			Title:    "Confirm Acme mitigation owner",
+			Status:   tasktools.StatusPending,
+			Notes:    "Casey needs the mitigation owner before the Monday 14:00 UTC customer checkpoint.",
+			Priority: 1,
+			Evidence: []string{"thread-1", "event-1"},
+		})
+	}
+	if taskStoreErr == nil && taskStore != nil {
+		_, taskStoreErr = taskStore.Upsert(context.Background(), tasktools.Task{
+			ID:       "week-2026-04-20-demo-slides",
+			Title:    "Deliver partner council demo slides",
+			Status:   tasktools.StatusPending,
+			Notes:    "Priya needs final demo slides by Wednesday 17:00 UTC for Thursday partner council.",
+			Priority: 2,
+			Evidence: []string{"thread-2", "event-2"},
+		})
+	}
+
+	runDB, runDBErr := sql.Open("sqlite", "file:scheduled-task-ledger-maintenance-runs?mode=memory&cache=shared")
+	var (
+		runStore    personal.ScheduledRunStore
+		runStoreErr error
+	)
+	if runDBErr == nil {
+		runStore, runStoreErr = personalsqlitestore.New(context.Background(), runDB)
+	}
+
+	config, configErr := personal.PresetPersonalAssistant.Config()
+	if configErr == nil {
+		config.Base.Model = modelClient
+		config.Tasks = taskStore
+	}
+	stack, stackErr := personal.New(config)
+	now := time.Date(2026, 4, 20, 8, 5, 0, 0, time.UTC)
+	trigger := personal.PeriodicTrigger{
+		Name:   "task-ledger-maintenance",
+		Prompt: "Run scheduled task-ledger maintenance for 2026-04-20. List persisted pending tasks first; complete confirmed work, mark blocked work explicitly, and do not create duplicate task IDs.",
+		Every:  24 * time.Hour,
+		Anchor: time.Date(2026, 4, 20, 8, 0, 0, 0, time.UTC),
+	}
+
+	var (
+		finalRun       personal.ScheduledRunRecord
+		duplicateRun   personal.ScheduledRunRecord
+		duplicateStart bool
+		duplicateErr   error
+	)
+
+	return agenteval.Case{
+		Name:   "personal_preset_personal_assistant_scheduled_task_ledger_maintenance",
+		Prompt: "Run the scheduled task-ledger maintenance trigger for the current occurrence.",
+		Run: func(ctx context.Context) (<-chan memaxagent.Event, error) {
+			if configErr != nil {
+				return nil, configErr
+			}
+			if taskDBErr != nil {
+				return nil, taskDBErr
+			}
+			if taskStoreErr != nil {
+				return nil, taskStoreErr
+			}
+			if runDBErr != nil {
+				return nil, runDBErr
+			}
+			if runStoreErr != nil {
+				return nil, runStoreErr
+			}
+			if stackErr != nil {
+				return nil, stackErr
+			}
+			out := make(chan memaxagent.Event, 32)
+			observer := memaxagent.EventObserverFunc(func(_ context.Context, event memaxagent.Event) {
+				select {
+				case out <- event:
+				case <-ctx.Done():
+				}
+			})
+			watchCtx, cancel := context.WithCancel(memaxagent.WithEventObserver(ctx, observer))
+			go func() {
+				defer close(out)
+				watchDone := make(chan error, 1)
+				go func() {
+					watchDone <- stack.WatchScheduledTriggers(watchCtx, runStore, personal.TriggerWatcherOptions{
+						Interval: time.Millisecond,
+						Now: func() time.Time {
+							return now
+						},
+					}, trigger)
+				}()
+				finalRun = waitForScheduledRun(runStore, "task-ledger-maintenance:2026-04-20T08:00:00Z")
+				intent, due := trigger.IntentAt(now)
+				if due {
+					duplicateRun, duplicateStart, duplicateErr = stack.StartScheduledRun(memaxagent.WithEventObserver(ctx, observer), runStore, intent)
+				}
+				cancel()
+				<-watchDone
+			}()
+			return out, nil
+		},
+		Cleanup: func() {
+			if taskDB != nil {
+				_ = taskDB.Close()
+			}
+			if runDB != nil {
+				_ = runDB.Close()
+			}
+		},
+		Assertions: []agenteval.Assertion{
+			toolConstructionSucceeded(configErr, taskDBErr, taskStoreErr, runDBErr, runStoreErr, stackErr),
+			agenteval.NoToolErrors(),
+			agenteval.ToolUsed(tasktools.ListToolName),
+			agenteval.ToolUsed(tasktools.UpsertToolName),
+			agenteval.FinalEquals(scheduledTaskLedgerMaintenanceFinal),
+			requestCountEquals(modelClient, 4),
+			{
+				Name: "scheduled maintenance lists pending tasks before updating",
+				Check: func(result agenteval.Result) error {
+					uses := result.ToolUses()
+					want := []string{tasktools.ListToolName, tasktools.UpsertToolName, tasktools.UpsertToolName}
+					if len(uses) != len(want) {
+						return fmt.Errorf("tool uses = %#v, want %v", uses, want)
+					}
+					for i, name := range want {
+						if uses[i].Name != name {
+							return fmt.Errorf("tool use order = %#v, want %v", uses, want)
+						}
+					}
+					results := result.ToolResults()
+					if len(results) != 3 {
+						return fmt.Errorf("tool results = %#v, want list and two upserts", results)
+					}
+					for _, want := range []string{
+						"[pending] week-2026-04-20-acme-owner",
+						"[pending] week-2026-04-20-demo-slides",
+					} {
+						if !strings.Contains(results[0].Content, want) {
+							return fmt.Errorf("pending list = %q, missing %q", results[0].Content, want)
+						}
+					}
+					if results[1].Metadata[model.MetadataTaskID] != "week-2026-04-20-acme-owner" || results[1].Metadata[model.MetadataTaskStatus] != string(tasktools.StatusCompleted) {
+						return fmt.Errorf("first update metadata = %#v, want completed Acme task", results[1].Metadata)
+					}
+					if results[2].Metadata[model.MetadataTaskID] != "week-2026-04-20-demo-slides" || results[2].Metadata[model.MetadataTaskStatus] != string(tasktools.StatusBlocked) {
+						return fmt.Errorf("second update metadata = %#v, want blocked demo task", results[2].Metadata)
+					}
+					return nil
+				},
+			},
+			{
+				Name: "task ledger context is loaded before the first model request",
+				Check: func(result agenteval.Result) error {
+					requests := modelClient.Requests()
+					if len(requests) != 4 {
+						return fmt.Errorf("requests = %d, want 4", len(requests))
+					}
+					firstPrompt := requests[0].SystemPrompt
+					for _, want := range []string{
+						"[pending] week-2026-04-20-acme-owner",
+						"Confirm Acme mitigation owner",
+						"[pending] week-2026-04-20-demo-slides",
+						"Deliver partner council demo slides",
+					} {
+						if !strings.Contains(firstPrompt, want) {
+							return fmt.Errorf("first model prompt missing %q:\n%s", want, firstPrompt)
+						}
+					}
+					if !scheduledTaskRequestHasToolResult(requests[1], "list-1", "week-2026-04-20-acme-owner", "week-2026-04-20-demo-slides") {
+						return fmt.Errorf("second model request did not include pending list result")
+					}
+					return nil
+				},
+			},
+			{
+				Name: "scheduled sqlite occurrence deduplicates reruns and persists task updates",
+				Check: func(result agenteval.Result) error {
+					if duplicateErr != nil {
+						return duplicateErr
+					}
+					if finalRun.ID != "task-ledger-maintenance:2026-04-20T08:00:00Z" {
+						return fmt.Errorf("final run id = %q, want deterministic maintenance occurrence", finalRun.ID)
+					}
+					if finalRun.Status != personal.ScheduledRunSucceeded || finalRun.Result != scheduledTaskLedgerMaintenanceFinal {
+						return fmt.Errorf("final run = %#v, want succeeded task maintenance", finalRun)
+					}
+					if finalRun.SessionID == "" || finalRun.CompletedAt.IsZero() {
+						return fmt.Errorf("final run = %#v, want session and completion time", finalRun)
+					}
+					if duplicateStart {
+						return fmt.Errorf("duplicate start = true, want no-op for same occurrence")
+					}
+					if duplicateRun.ID != finalRun.ID {
+						return fmt.Errorf("duplicate run = %#v, want existing occurrence record", duplicateRun)
+					}
+					tasks, err := taskStore.List(context.Background())
+					if err != nil {
+						return err
+					}
+					if len(tasks) != 2 {
+						return fmt.Errorf("tasks = %#v, want two persisted maintenance tasks", tasks)
+					}
+					byID := make(map[string]tasktools.Task, len(tasks))
+					for _, task := range tasks {
+						if _, ok := byID[task.ID]; ok {
+							return fmt.Errorf("duplicate task id %q in %#v", task.ID, tasks)
+						}
+						byID[task.ID] = task
+					}
+					if byID["week-2026-04-20-acme-owner"].Status != tasktools.StatusCompleted {
+						return fmt.Errorf("Acme task = %#v, want completed", byID["week-2026-04-20-acme-owner"])
+					}
+					if byID["week-2026-04-20-demo-slides"].Status != tasktools.StatusBlocked {
+						return fmt.Errorf("demo task = %#v, want blocked", byID["week-2026-04-20-demo-slides"])
+					}
+					if !strings.Contains(strings.Join(byID["week-2026-04-20-demo-slides"].Evidence, ","), "slides-missing") {
+						return fmt.Errorf("demo task evidence = %#v, want slides-missing", byID["week-2026-04-20-demo-slides"].Evidence)
+					}
+					return nil
+				},
+			},
+		},
+	}
+}
+
+const scheduledTaskLedgerMaintenanceFinal = "Scheduled task-ledger maintenance complete: Acme mitigation owner is confirmed; partner council demo slides remain blocked."
+
+type scheduledTaskLedgerMaintenanceModel struct {
+	mu       sync.Mutex
+	requests []model.Request
+}
+
+func (m *scheduledTaskLedgerMaintenanceModel) Stream(ctx context.Context, req model.Request) (model.Stream, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	request := req
+	request.Messages = model.CloneMessages(req.Messages)
+	request.Tools = append([]model.ToolSpec(nil), req.Tools...)
+	m.requests = append(m.requests, request)
+	switch len(m.requests) {
+	case 1:
+		return &scheduledTaskLedgerMaintenanceStream{events: []model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "list-1",
+				Name:  tasktools.ListToolName,
+				Input: json.RawMessage(`{"status":"pending"}`),
+			},
+		}}}, nil
+	case 2:
+		if !scheduledTaskRequestHasToolResult(req, "list-1", "week-2026-04-20-acme-owner", "week-2026-04-20-demo-slides") {
+			return &scheduledTaskLedgerMaintenanceStream{events: []model.StreamEvent{{Kind: model.StreamText, Text: "No pending task ledger entries were available to maintain."}}}, nil
+		}
+		return &scheduledTaskLedgerMaintenanceStream{events: []model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "complete-1",
+				Name: tasktools.UpsertToolName,
+				Input: json.RawMessage(`{
+					"id":"week-2026-04-20-acme-owner",
+					"status":"completed",
+					"notes":"Mitigation owner confirmed for the Monday 14:00 UTC customer checkpoint.",
+					"evidence":["thread-1","event-1","owner-confirmed"]
+				}`),
+			},
+		}}}, nil
+	case 3:
+		if !scheduledTaskRequestHasToolResult(req, "complete-1", "upserted week-2026-04-20-acme-owner") {
+			return &scheduledTaskLedgerMaintenanceStream{events: []model.StreamEvent{{Kind: model.StreamText, Text: "Could not verify the Acme task update before continuing maintenance."}}}, nil
+		}
+		return &scheduledTaskLedgerMaintenanceStream{events: []model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "block-1",
+				Name: tasktools.UpsertToolName,
+				Input: json.RawMessage(`{
+					"id":"week-2026-04-20-demo-slides",
+					"status":"blocked",
+					"notes":"Still waiting on final demo slides needed by Wednesday 17:00 UTC.",
+					"evidence":["thread-2","event-2","slides-missing"]
+				}`),
+			},
+		}}}, nil
+	case 4:
+		if !scheduledTaskRequestHasToolResult(req, "block-1", "upserted week-2026-04-20-demo-slides") {
+			return &scheduledTaskLedgerMaintenanceStream{events: []model.StreamEvent{{Kind: model.StreamText, Text: "Could not verify the demo-slide blocker before closing maintenance."}}}, nil
+		}
+		return &scheduledTaskLedgerMaintenanceStream{events: []model.StreamEvent{{Kind: model.StreamText, Text: scheduledTaskLedgerMaintenanceFinal}}}, nil
+	default:
+		return &scheduledTaskLedgerMaintenanceStream{}, nil
+	}
+}
+
+func (m *scheduledTaskLedgerMaintenanceModel) RequestCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.requests)
+}
+
+func (m *scheduledTaskLedgerMaintenanceModel) Requests() []model.Request {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]model.Request, len(m.requests))
+	for i, req := range m.requests {
+		out[i] = req
+		out[i].Messages = model.CloneMessages(req.Messages)
+		out[i].Tools = append([]model.ToolSpec(nil), req.Tools...)
+	}
+	return out
+}
+
+type scheduledTaskLedgerMaintenanceStream struct {
+	events []model.StreamEvent
+	index  int
+}
+
+func (s *scheduledTaskLedgerMaintenanceStream) Recv() (model.StreamEvent, error) {
+	if s.index >= len(s.events) {
+		return model.StreamEvent{}, model.ErrEndOfStream
+	}
+	event := s.events[s.index]
+	s.index++
+	return event, nil
+}
+
+func (s *scheduledTaskLedgerMaintenanceStream) Close() error {
+	return nil
+}
+
+func scheduledTaskRequestHasToolResult(req model.Request, toolUseID string, substrings ...string) bool {
+	for _, msg := range req.Messages {
+		if msg.ToolResult == nil || msg.ToolResult.ToolUseID != toolUseID {
+			continue
+		}
+		foundAll := true
+		for _, substring := range substrings {
+			if !strings.Contains(msg.ToolResult.Content, substring) {
+				foundAll = false
+				break
+			}
+		}
+		if foundAll {
+			return true
+		}
+	}
+	return false
+}
+
 // PersonalPresetAssistantScheduledInboxTriage returns a single-use scenario
 // where the personal_assistant preset runs one hourly unread-inbox triage
 // trigger, classifies the urgent thread from metadata first, reads the full

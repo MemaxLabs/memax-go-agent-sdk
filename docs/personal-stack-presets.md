@@ -119,4 +119,7 @@ Common sources of confusion:
   model calls `list_tasks`. Use `toolkit/tasktools/sqlitestore` when that
   ledger needs to survive process restarts; the week-ahead task-ledger eval
   covers both in-memory continuity and a SQLite-backed resume with a fresh
-  store instance.
+  store instance. The scheduled task-ledger maintenance eval also covers a
+  proactive trigger that lists persisted pending work before completing or
+  blocking tasks, with the scheduled occurrence deduplicated by durable run
+  state.
