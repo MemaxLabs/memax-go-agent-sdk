@@ -143,18 +143,25 @@ hosts coordinate remote claiming separately while worker-side execution still
 flows through the existing tenant seam. An initial host-owned helper now also
 exists through `stack/cloudmanaged/remote`, which keeps claim discovery and
 reference HTTP polling outside the core stack while routing actual execution
-through `ExecuteRun`.
+through `ExecuteRun`. Cloudmanaged observability now has the same event-plus-
+metrics split as the rest of the SDK: run lifecycle transitions and tenant
+denials remain structured events for audit/debug ordering, while
+`Config.Base.Meter` records aggregate managed-runtime metrics for run states
+and durations, quota-store allow-on-error fallbacks, worker claims,
+heartbeats, heartbeat errors, and stale-worker failures.
 Each preset now has deterministic end-to-end eval coverage for its normal
 workflow and its defining recovery or delegation path, so preset behavior is
 part of the public contract rather than informal guidance. The navigable preset
 contracts live in [coding-stack-presets.md](coding-stack-presets.md) and
 [personal-stack-presets.md](personal-stack-presets.md), including default
 policy posture, examples, and the specific eval scenario names that enforce the
-surface. `stack/cloudmanaged` is earlier in maturity: the initial quota-denial
-coverage locks the tenant-admission contract, and the first audit subscriber
-locks a host-owned persistence path for managed event streams. Richer
-managed-host presets, distributed quota validators, and remote-execution
-backends remain follow-on work.
+surface. `stack/cloudmanaged` is earlier in maturity than the coding stack but
+now has a foundation-complete managed-runtime surface: quota-denial coverage
+locks the tenant-admission contract, audit subscribers persist managed event
+streams, remote workers have eval-backed success/revocation/stale-failure
+paths, and provider-neutral metrics expose the operational signals needed to
+run it. Richer managed-host presets, additional durable backends, and deeper
+remote-execution backends remain follow-on work.
 
 ## Package Shape
 

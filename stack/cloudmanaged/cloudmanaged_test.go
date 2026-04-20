@@ -384,6 +384,129 @@ func TestQuotaValidatorAllowOnErrorCoversSessionStart(t *testing.T) {
 	}
 }
 
+func TestMetricsObserverRecordsTenantDenialsAndRunEvents(t *testing.T) {
+	t.Parallel()
+
+	meter := &recordingMeter{}
+	observer := NewMetricsObserver(meter)
+	observer.ObserveEvent(context.Background(), memaxagent.Event{
+		Kind: memaxagent.EventTenantDenied,
+		Tenant: &memaxagent.TenantEvent{
+			Boundary: "model_request",
+			TenantID: "tenant-1",
+			Reason:   "revoked",
+		},
+	})
+	observer.ObserveEvent(context.Background(), memaxagent.Event{
+		Kind: memaxagent.EventRunStateChanged,
+		Run: &memaxagent.RunEvent{
+			RunID:    "run-1",
+			Status:   string(RunStatusFailed),
+			WorkerID: "worker-1",
+			Error:    staleRunFailureReason,
+		},
+	})
+
+	tenantMetric := meter.add(metricCloudManagedTenantDenials)
+	if tenantMetric == nil {
+		t.Fatalf("meter adds = %#v, want tenant denial metric", meter.adds)
+	}
+	assertMetricAttr(t, tenantMetric.attrs, "tenant_boundary", "model_request")
+	assertMetricAttrAbsent(t, tenantMetric.attrs, "tenant_id")
+
+	runMetric := meter.add(metricCloudManagedRunLifecycleEvents)
+	if runMetric == nil {
+		t.Fatalf("meter adds = %#v, want run lifecycle metric", meter.adds)
+	}
+	assertMetricAttr(t, runMetric.attrs, "run_status", string(RunStatusFailed))
+	assertMetricAttr(t, runMetric.attrs, "run_terminal", true)
+	assertMetricAttrAbsent(t, runMetric.attrs, "worker_id")
+	assertMetricAttr(t, runMetric.attrs, "failure_kind", "heartbeat_timeout")
+}
+
+func TestStackRecordsRunLifecycleWorkerAndDurationMetrics(t *testing.T) {
+	t.Parallel()
+
+	meter := &recordingMeter{}
+	modelClient := &quotaTestModel{
+		turns: [][]model.StreamEvent{{{Kind: model.StreamText, Text: "managed run complete"}}},
+	}
+	stack, err := New(Config{
+		Base: memaxagent.Options{
+			Model: modelClient,
+			Meter: meter,
+		},
+		RunStore: NewMemoryRunStore(),
+		Policies: Policies{
+			RequireTenantScope: true,
+			Quota: Quota{
+				MaxModelRequests: 4,
+				MaxToolUses:      4,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	record, err := stack.EnqueueRun(context.Background(), "Finish the managed run.", tenant.Scope{ID: "tenant-1", SubjectID: "user-1"})
+	if err != nil {
+		t.Fatalf("EnqueueRun() error = %v", err)
+	}
+	final, err := stack.ExecuteRun(context.Background(), record.ID, WorkerOptions{ID: "worker-1"})
+	if err != nil {
+		t.Fatalf("ExecuteRun() error = %v", err)
+	}
+	if final.Status != RunStatusSucceeded {
+		t.Fatalf("ExecuteRun() = %#v, want succeeded", final)
+	}
+
+	for _, status := range []RunStatus{RunStatusQueued, RunStatusRunning, RunStatusSucceeded} {
+		add := meter.addWithAttr(metricCloudManagedRunLifecycleEvents, "run_status", string(status))
+		if add == nil {
+			t.Fatalf("meter adds = %#v, want lifecycle status %s", meter.adds, status)
+		}
+		assertMetricAttr(t, add.attrs, "run_terminal", runStatusTerminal(string(status)))
+	}
+	claim := meter.add(metricCloudManagedWorkerClaims)
+	if claim == nil {
+		t.Fatalf("meter adds = %#v, want worker claim metric", meter.adds)
+	}
+	assertMetricAttrAbsent(t, claim.attrs, "worker_id")
+	if record := meter.record(metricCloudManagedRunQueueLatencyMS); record == nil {
+		t.Fatalf("meter records = %#v, want queue latency metric", meter.records)
+	}
+	if record := meter.record(metricCloudManagedRunDurationMS); record == nil {
+		t.Fatalf("meter records = %#v, want run duration metric", meter.records)
+	}
+	if record := meter.record(metricCloudManagedRunTotalDurationMS); record == nil {
+		t.Fatalf("meter records = %#v, want total duration metric", meter.records)
+	}
+}
+
+func TestStackRecordsTenantDenialMetrics(t *testing.T) {
+	t.Parallel()
+
+	meter := &recordingMeter{}
+	stack, err := New(Config{
+		Base: memaxagent.Options{
+			Model: &quotaTestModel{},
+			Meter: meter,
+		},
+		Policies: Policies{RequireTenantScope: true},
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	for range stack.QueryAsync(context.Background(), "start without tenant", tenant.Scope{}) {
+	}
+	add := meter.add(metricCloudManagedTenantDenials)
+	if add == nil {
+		t.Fatalf("meter adds = %#v, want cloudmanaged tenant denial metric", meter.adds)
+	}
+	assertMetricAttr(t, add.attrs, "tenant_boundary", string(tenant.BoundarySessionStart))
+}
+
 func TestQuotaValidatorDelegatedChildGetsFreshSessionEnvelope(t *testing.T) {
 	t.Parallel()
 
@@ -1430,6 +1553,70 @@ func TestStackExecuteRunPreservesExternalStaleFailure(t *testing.T) {
 	}
 }
 
+func TestStackRecordsHeartbeatAndStaleFailureMetrics(t *testing.T) {
+	t.Parallel()
+
+	meter := &recordingMeter{}
+	runStore := NewMemoryRunStore()
+	stack, err := New(Config{
+		Base: memaxagent.Options{
+			Meter: meter,
+		},
+		RunStore: runStore,
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	record, err := runStore.CreateRun(context.Background(), CreateRunRequest{Prompt: "heartbeat"})
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	claimed, err := runStore.ClaimRun(context.Background(), record.ID, "worker-1")
+	if err != nil {
+		t.Fatalf("ClaimRun() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	stopHeartbeat := startRunHeartbeat(ctx, runStore, claimed.ID, WorkerOptions{
+		ID:                "worker-1",
+		HeartbeatInterval: time.Millisecond,
+	}, meter)
+	if stopHeartbeat == nil {
+		t.Fatal("startRunHeartbeat() = nil, want heartbeat worker")
+	}
+	waitForMetricAdd(t, meter, metricCloudManagedWorkerHeartbeats)
+	stopHeartbeat()
+	cancel()
+
+	staleAt := time.Now().UTC().Add(-time.Minute)
+	if _, err := runStore.UpdateRun(context.Background(), RunUpdate{
+		ID:          claimed.ID,
+		HeartbeatAt: &staleAt,
+	}); err != nil {
+		t.Fatalf("UpdateRun() error = %v", err)
+	}
+	count, err := stack.FailStaleRuns(context.Background(), time.Now().UTC().Add(-time.Second), staleRunFailureReason)
+	if err != nil {
+		t.Fatalf("FailStaleRuns() error = %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("FailStaleRuns() = %d, want 1", count)
+	}
+	staleMetric := meter.add(metricCloudManagedWorkerStaleFailed)
+	if staleMetric == nil {
+		t.Fatalf("meter adds = %#v, want stale failure metric", meter.adds)
+	}
+	if staleMetric.value != 1 {
+		t.Fatalf("stale metric value = %d, want 1", staleMetric.value)
+	}
+	assertMetricAttr(t, staleMetric.attrs, "failure_kind", "heartbeat_timeout")
+	failedLifecycle := meter.addWithAttr(metricCloudManagedRunLifecycleEvents, "run_status", string(RunStatusFailed))
+	if failedLifecycle == nil {
+		t.Fatalf("meter adds = %#v, want failed lifecycle metric", meter.adds)
+	}
+	assertMetricAttr(t, failedLifecycle.attrs, "failure_kind", "heartbeat_timeout")
+}
+
 func TestStackStartRunEmitsLifecycleEvents(t *testing.T) {
 	t.Parallel()
 
@@ -1627,8 +1814,16 @@ type recordedAdd struct {
 	attrs []telemetry.Attribute
 }
 
+type recordedMetricRecord struct {
+	name  string
+	value float64
+	attrs []telemetry.Attribute
+}
+
 type recordingMeter struct {
-	adds []recordedAdd
+	mu      sync.Mutex
+	adds    []recordedAdd
+	records []recordedMetricRecord
 }
 
 func (m *recordingMeter) Add(_ context.Context, name string, value int64, attrs ...telemetry.Attribute) {
@@ -1637,10 +1832,104 @@ func (m *recordingMeter) Add(_ context.Context, name string, value int64, attrs 
 	}
 	copied := make([]telemetry.Attribute, len(attrs))
 	copy(copied, attrs)
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.adds = append(m.adds, recordedAdd{name: name, value: value, attrs: copied})
 }
 
-func (m *recordingMeter) Record(context.Context, string, float64, ...telemetry.Attribute) {}
+func (m *recordingMeter) Record(_ context.Context, name string, value float64, attrs ...telemetry.Attribute) {
+	if m == nil {
+		return
+	}
+	copied := make([]telemetry.Attribute, len(attrs))
+	copy(copied, attrs)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.records = append(m.records, recordedMetricRecord{name: name, value: value, attrs: copied})
+}
+
+func (m *recordingMeter) add(name string) *recordedAdd {
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := range m.adds {
+		if m.adds[i].name == name {
+			add := m.adds[i]
+			return &add
+		}
+	}
+	return nil
+}
+
+func (m *recordingMeter) addWithAttr(name, key string, value any) *recordedAdd {
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := range m.adds {
+		if m.adds[i].name == name && metricAttrsContain(m.adds[i].attrs, key, value) {
+			add := m.adds[i]
+			return &add
+		}
+	}
+	return nil
+}
+
+func (m *recordingMeter) record(name string) *recordedMetricRecord {
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := range m.records {
+		if m.records[i].name == name {
+			record := m.records[i]
+			return &record
+		}
+	}
+	return nil
+}
+
+func waitForMetricAdd(t *testing.T, meter *recordingMeter, name string) recordedAdd {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if add := meter.add(name); add != nil {
+			return *add
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("meter adds = %#v, missing %s", meter.adds, name)
+	return recordedAdd{}
+}
+
+func assertMetricAttr(t *testing.T, attrs []telemetry.Attribute, key string, want any) {
+	t.Helper()
+	if !metricAttrsContain(attrs, key, want) {
+		t.Fatalf("metric attrs = %#v, missing %s=%v", attrs, key, want)
+	}
+}
+
+func assertMetricAttrAbsent(t *testing.T, attrs []telemetry.Attribute, key string) {
+	t.Helper()
+	for _, attr := range attrs {
+		if attr.Key == key {
+			t.Fatalf("metric attrs = %#v, want no %s attribute", attrs, key)
+		}
+	}
+}
+
+func metricAttrsContain(attrs []telemetry.Attribute, key string, want any) bool {
+	for _, attr := range attrs {
+		if attr.Key == key && attr.Value == want {
+			return true
+		}
+	}
+	return false
+}
 
 type quotaSpyStore struct {
 	ensureCalls  int

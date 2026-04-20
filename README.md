@@ -99,6 +99,8 @@ Coding-oriented adapters and toolkits:
   background run tracking
 - runnable cloudmanaged remote-worker example over `ClaimHandler`,
   `remote.Watch`, and a shared SQLite run store
+- provider-neutral cloudmanaged metrics for run lifecycle, tenant denials,
+  quota-store fallback, worker claims, heartbeats, and stale failures
 - initial SQLite-backed scheduling adapter for durable local calendar backends
 - skill discovery tools
 
@@ -167,6 +169,12 @@ contract. `examples/cloudmanaged_remote_stack` now shows both ends of that
 wire: the default mode runs an in-process demo, while `-mode=server` serves
 `ClaimHandler` and `-mode=worker` runs `remote.Watch` against the same SQLite
 run database.
+The managed stack now also records provider-neutral operational metrics through
+`Config.Base.Meter`: run lifecycle counters and duration measurements, tenant
+denial counters, quota store fallback counters, worker claim and heartbeat
+counters, heartbeat error counters, and stale-worker failure counters.
+`stack/cloudmanaged.NewMetricsObserver` exposes the event-derived subset for
+hosts that need to mirror the same signals from a custom event stream.
 
 `stack/personal` now exposes named presets so hosts can start from a
 personal-intelligence workflow profile and then attach only the host-owned

@@ -281,6 +281,7 @@ type RunEvent struct {
 	RunID        string
 	Status       string
 	Prompt       string
+	WorkerID     string
 	TriggerName  string
 	OccurrenceAt time.Time
 	Result       string

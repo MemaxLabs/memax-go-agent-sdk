@@ -103,6 +103,7 @@ type Stack struct {
 	audit   AuditConfig
 	runs    RunStore
 	active  *activeRuns
+	meter   telemetry.Meter
 }
 
 // New assembles a cloud-managed stack from the configured host-owned
@@ -125,6 +126,7 @@ func New(config Config) (Stack, error) {
 		audit:   config.Audit,
 		runs:    config.RunStore,
 		active:  newActiveRuns(),
+		meter:   normalizeMeter(opts.Meter),
 	}, nil
 }
 
@@ -169,6 +171,7 @@ func (s Stack) optionsForTenant(scope tenant.Scope) memaxagent.Options {
 func (s Stack) Query(ctx context.Context, prompt string, scope tenant.Scope) (<-chan memaxagent.Event, error) {
 	opts := s.optionsForTenant(scope)
 	ctx = memaxagent.WithEventObserver(ctx, s.audit)
+	ctx = memaxagent.WithEventObserver(ctx, NewMetricsObserver(s.meter))
 	return memaxagent.Query(ctx, prompt, opts)
 }
 
@@ -177,7 +180,15 @@ func (s Stack) Query(ctx context.Context, prompt string, scope tenant.Scope) (<-
 // audit sink receives every emitted event in order. The tenant scope is
 // explicit per run so managed hosts can reuse one stack across tenants.
 func (s Stack) QueryAsync(ctx context.Context, prompt string, scope tenant.Scope) <-chan memaxagent.Event {
-	return memaxagent.QueryAsync(memaxagent.WithEventObserver(ctx, s.audit), prompt, s.optionsForTenant(scope))
+	return s.queryAsync(ctx, prompt, scope, true)
+}
+
+func (s Stack) queryAsync(ctx context.Context, prompt string, scope tenant.Scope, attachAudit bool) <-chan memaxagent.Event {
+	if attachAudit {
+		ctx = memaxagent.WithEventObserver(ctx, s.audit)
+	}
+	ctx = memaxagent.WithEventObserver(ctx, NewMetricsObserver(s.meter))
+	return memaxagent.QueryAsync(ctx, prompt, s.optionsForTenant(scope))
 }
 
 // QuotaValidator enforces tenant-aware per-session model/tool quotas through
@@ -433,12 +444,15 @@ func withQuotaMeter(meter telemetry.Meter) QuotaValidatorOption {
 		if v == nil {
 			return
 		}
-		if meter == nil {
-			v.meter = telemetry.NoopMeter{}
-			return
-		}
-		v.meter = meter
+		v.meter = normalizeMeter(meter)
 	}
+}
+
+func normalizeMeter(meter telemetry.Meter) telemetry.Meter {
+	if meter == nil {
+		return telemetry.NoopMeter{}
+	}
+	return meter
 }
 
 func combineValidators(validators ...tenant.Validator) tenant.Validator {

@@ -193,6 +193,16 @@ Important metric names include:
   `memax.personal.notification.outbox.leased`,
   `memax.personal.notification.outbox.delivery_attempts`,
   `memax.personal.notification.outbox.oldest_undelivered_age_ms`
+- `memax.cloudmanaged.run.lifecycle.events`,
+  `memax.cloudmanaged.run.queue_latency_ms`,
+  `memax.cloudmanaged.run.duration_ms`,
+  `memax.cloudmanaged.run.total_duration_ms`
+- `memax.cloudmanaged.tenant.denials`,
+  `memax.cloudmanaged.quota.store_errors_allowed`
+- `memax.cloudmanaged.worker.claims`,
+  `memax.cloudmanaged.worker.heartbeats`,
+  `memax.cloudmanaged.worker.heartbeat_errors`,
+  `memax.cloudmanaged.worker.stale_failures`
 
 Telemetry complements events; it should not be the only source of application
 state. Use events for ordered behavior and spans/metrics for aggregate
@@ -238,6 +248,19 @@ Durable managed runs now emit explicit `run_state_changed` observer events as
 they move through queued, running, succeeded, failed, or canceled lifecycle,
 so audit sinks and dashboards can follow transitions without polling-only
 state reconstruction.
+`stack/cloudmanaged` also records provider-neutral managed-runtime metrics
+through `Config.Base.Meter`: run lifecycle events, queue/run/total duration
+measurements, tenant denials, quota store degrade-to-allow fallbacks, worker
+claims, worker heartbeats, heartbeat errors, and stale-worker failures.
+`NewMetricsObserver` exposes the event-derived subset for hosts that want to
+mirror the same counters from an arbitrary event stream. Worker claim,
+heartbeat, and stale-failure metrics are recorded directly by stack methods
+because those host-owned coordination paths may not produce transcript-visible
+events. Cloudmanaged metrics intentionally avoid high-cardinality tenant ID,
+run ID, and worker ID labels by default. Those identifiers stay in lifecycle,
+tenant-denial, audit, and run-store records; hosts that need per-tenant or
+per-worker metric slicing should add their own observer or configure backend
+views with an explicit cardinality budget.
 
 Personal proactive scheduled runs use the same `run_state_changed` observer
 event when a deterministic occurrence moves through queued, running,

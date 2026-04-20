@@ -441,7 +441,10 @@ now have eval coverage for scheduled-run idempotency, lifecycle events, stale
 reconciliation, and terminal notification outbox mirroring, plus unit coverage
 for SQLite notification lookback, claim/ack delivery state, notification
 delivery lifecycle observer events, notification delivery metrics, and the
-reference signed webhook notification handler.
+reference signed webhook notification handler. Cloudmanaged now has
+provider-neutral metrics for managed-run lifecycle, queue/run durations,
+tenant denials, quota fallback, worker claims, heartbeats, heartbeat errors,
+and stale-worker failures.
 
 **Gap:** Most evals still test feature plumbing; composed long-horizon
 intelligence coverage is only starting to land.

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
+	"github.com/MemaxLabs/memax-go-agent-sdk/telemetry"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tenant"
 )
 
@@ -344,7 +345,7 @@ func (s Stack) EnqueueRun(ctx context.Context, prompt string, scope tenant.Scope
 	if err != nil {
 		return RunRecord{}, fmt.Errorf("create managed run: %w", err)
 	}
-	observeRunState(ctx, record)
+	s.observeRunState(ctx, record)
 	return record, nil
 }
 
@@ -419,9 +420,10 @@ func (s Stack) ExecuteRun(ctx context.Context, runID string, options WorkerOptio
 	if err != nil {
 		return RunRecord{}, fmt.Errorf("claim managed run %s: %w", runID, err)
 	}
-	observeRunState(ctx, record)
+	recordWorkerClaimMetrics(ctx, s.meter)
+	s.observeRunState(ctx, record)
 
-	stopHeartbeat := startRunHeartbeat(ctx, s.runs, record.ID, options)
+	stopHeartbeat := startRunHeartbeat(ctx, s.runs, record.ID, options, s.meter)
 	if stopHeartbeat != nil {
 		defer stopHeartbeat()
 	}
@@ -447,9 +449,11 @@ func (s Stack) FailStaleRuns(ctx context.Context, staleBefore time.Time, reason 
 		return 0, fmt.Errorf("fail stale managed runs: %w", err)
 	}
 	for _, record := range failed {
-		observeRunState(ctx, record)
+		s.observeRunState(ctx, record)
 	}
-	return int64(len(failed)), nil
+	count := int64(len(failed))
+	recordWorkerStaleFailureMetrics(ctx, s.meter, count, reason)
+	return count, nil
 }
 
 // WatchStaleRuns continuously fails worker-owned runs whose heartbeats age
@@ -491,7 +495,7 @@ func (s Stack) executeRun(ctx context.Context, record RunRecord) (RunRecord, err
 		sawResult   bool
 		runErr      error
 	)
-	for event := range s.QueryAsync(ctx, record.Prompt, record.Tenant) {
+	for event := range s.queryAsync(ctx, record.Prompt, record.Tenant, false) {
 		switch event.Kind {
 		case memaxagent.EventSessionStarted:
 			record, _ = s.runs.UpdateRun(ctx, RunUpdate{
@@ -545,7 +549,7 @@ func (s Stack) executeRun(ctx context.Context, record RunRecord) (RunRecord, err
 		update.Error = &errText
 	}
 	record, _ = s.runs.UpdateRun(ctx, update)
-	observeRunState(ctx, record)
+	s.observeRunState(ctx, record)
 	switch record.Status {
 	case RunStatusSucceeded, RunStatusCanceled:
 		return record, nil
@@ -610,7 +614,7 @@ func (a *activeRuns) delete(id string) {
 	delete(a.cancels, id)
 }
 
-func startRunHeartbeat(ctx context.Context, store RunStore, runID string, options WorkerOptions) func() {
+func startRunHeartbeat(ctx context.Context, store RunStore, runID string, options WorkerOptions, meter telemetry.Meter) func() {
 	if options.ID == "" {
 		return nil
 	}
@@ -631,11 +635,20 @@ func startRunHeartbeat(ctx context.Context, store RunStore, runID string, option
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				_, _ = heartbeats.HeartbeatRun(context.Background(), runID, options.ID)
+				if _, err := heartbeats.HeartbeatRun(context.Background(), runID, options.ID); err != nil {
+					recordWorkerHeartbeatErrorMetrics(ctx, meter, err)
+					continue
+				}
+				recordWorkerHeartbeatMetrics(ctx, meter)
 			}
 		}
 	}()
 	return cancel
+}
+
+func (s Stack) observeRunState(ctx context.Context, record RunRecord) {
+	observeRunState(ctx, record)
+	RecordRunStateMetrics(ctx, s.meter, record)
 }
 
 func observeRunState(ctx context.Context, record RunRecord) {
@@ -653,10 +666,11 @@ func observeRunState(ctx context.Context, record RunRecord) {
 		ParentSessionID: record.ParentSessionID,
 		Time:            record.UpdatedAt,
 		Run: &memaxagent.RunEvent{
-			RunID:  record.ID,
-			Status: string(record.Status),
-			Prompt: record.Prompt,
-			Error:  errText,
+			RunID:    record.ID,
+			Status:   string(record.Status),
+			Prompt:   record.Prompt,
+			WorkerID: record.WorkerID,
+			Error:    errText,
 		},
 	}
 	memaxagent.ObserveEvent(ctx, event)
