@@ -198,12 +198,16 @@ metadata-first contract as the in-memory thread store: search returns
 thread-level metadata only, and full message bodies appear only after an
 explicit thread read. The personal stack now also exposes host-owned proactive
 scheduled runs through `ScheduledRunStore`, `PeriodicTrigger`,
-`StartScheduledRun`, and `WatchScheduledTriggers`, with eval-backed
-idempotency for deterministic occurrences plus an embedded SQLite backend in
-`stack/personal/sqlitestore`. Week-ahead planning also has eval-backed durable
-task continuity: follow-ups can be written through `upsert_task`, reloaded in a
-later run through planner context, and updated without duplicating the task
-ledger.
+`StartScheduledRun`, `FireScheduledTriggers`, `WatchScheduledTriggers`, and
+named `FireScheduledWorkflows`, with eval-backed lifecycle/idempotency for
+deterministic occurrences plus an embedded SQLite backend in
+`stack/personal/sqlitestore`. Scheduled runs emit `run_state_changed` observer
+events so hosts can monitor proactive workflow lifecycle without polling the
+scheduled-run store alone; those events are emitted after the scheduled-run
+store accepts each durable transition. Week-ahead planning also has
+eval-backed durable task continuity: follow-ups can be written through
+`upsert_task`, reloaded in a later run through planner context, and updated
+without duplicating the task ledger.
 
 ## Try It
 

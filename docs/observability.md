@@ -200,6 +200,15 @@ they move through queued, running, succeeded, failed, or canceled lifecycle,
 so audit sinks and dashboards can follow transitions without polling-only
 state reconstruction.
 
+Personal proactive scheduled runs use the same `run_state_changed` observer
+event when a deterministic occurrence moves through queued, running,
+succeeded, or failed lifecycle. The event includes the scheduled run ID,
+trigger name, occurrence timestamp, prompt, status, and terminal error when
+one exists, so hosts can build proactive-workflow audit trails without
+polling the scheduled-run store as their only source of truth. These events are
+emitted after the scheduled-run store accepts the corresponding durable
+transition; if a store write fails, that transition is not synthesized.
+
 ## Regression Coverage
 
 The public event contract is protected by golden tests:

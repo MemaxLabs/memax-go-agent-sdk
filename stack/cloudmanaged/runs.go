@@ -642,6 +642,11 @@ func observeRunState(ctx context.Context, record RunRecord) {
 	if record.ID == "" || record.Status == "" {
 		return
 	}
+	var errText string
+	switch record.Status {
+	case RunStatusFailed, RunStatusCanceled:
+		errText = record.Error
+	}
 	event := memaxagent.Event{
 		Kind:            memaxagent.EventRunStateChanged,
 		SessionID:       record.SessionID,
@@ -651,6 +656,7 @@ func observeRunState(ctx context.Context, record RunRecord) {
 			RunID:  record.ID,
 			Status: string(record.Status),
 			Prompt: record.Prompt,
+			Error:  errText,
 		},
 	}
 	memaxagent.ObserveEvent(ctx, event)

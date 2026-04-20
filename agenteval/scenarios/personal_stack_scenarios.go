@@ -1446,23 +1446,46 @@ func PersonalPresetAssistantScheduledDailyBriefing() agenteval.Case {
 			if stackErr != nil {
 				return nil, stackErr
 			}
-			out := make(chan memaxagent.Event, 32)
-			observer := memaxagent.EventObserverFunc(func(_ context.Context, event memaxagent.Event) {
-				select {
-				case out <- event:
-				case <-ctx.Done():
-				}
-			})
+			out, observer, closeOut := observedEventStream(ctx, 32)
 			go func() {
-				defer close(out)
+				defer closeOut()
 				finalRun, duplicateRun, duplicateStart, fireErr = fireScheduledTriggerOnce(memaxagent.WithEventObserver(ctx, observer), stack, store, now, trigger)
 			}()
 			return out, nil
 		},
 		Assertions: []agenteval.Assertion{
 			toolConstructionSucceeded(configErr, stackErr),
+			agenteval.EventKindEmitted(memaxagent.EventRunStateChanged),
 			agenteval.FinalEquals("Morning briefing ready for 2026-04-19."),
 			requestCountEquals(modelClient, 1),
+			{
+				Name: "scheduled run emits queued running succeeded lifecycle events",
+				Check: func(result agenteval.Result) error {
+					var got []memaxagent.RunEvent
+					for _, event := range result.Events {
+						if event.Kind == memaxagent.EventRunStateChanged && event.Run != nil {
+							got = append(got, *event.Run)
+						}
+					}
+					want := []string{
+						string(personal.ScheduledRunQueued),
+						string(personal.ScheduledRunRunning),
+						string(personal.ScheduledRunSucceeded),
+					}
+					if len(got) != len(want) {
+						return fmt.Errorf("scheduled run events = %#v, want statuses %v", got, want)
+					}
+					for i, status := range want {
+						if got[i].Status != status {
+							return fmt.Errorf("scheduled run event statuses = %#v, want %v", got, want)
+						}
+						if got[i].RunID != "daily-brief:2026-04-19T07:00:00Z" || got[i].TriggerName != "daily-brief" {
+							return fmt.Errorf("scheduled run event %d = %#v, want daily brief identity", i, got[i])
+						}
+					}
+					return nil
+				},
+			},
 			{
 				Name: "scheduled run persists deterministic occurrence and deduplicates reruns",
 				Check: func(result agenteval.Result) error {
@@ -1586,15 +1609,9 @@ func PersonalPresetAssistantScheduledTaskLedgerMaintenance() agenteval.Case {
 			if registryErr != nil {
 				return nil, registryErr
 			}
-			out := make(chan memaxagent.Event, 32)
-			observer := memaxagent.EventObserverFunc(func(_ context.Context, event memaxagent.Event) {
-				select {
-				case out <- event:
-				case <-ctx.Done():
-				}
-			})
+			out, observer, closeOut := observedEventStream(ctx, 32)
 			go func() {
-				defer close(out)
+				defer closeOut()
 				finalRun, duplicateRun, duplicateStart, duplicateErr = fireScheduledWorkflowOnce(memaxagent.WithEventObserver(ctx, observer), stack, runStore, registry, now, "task-ledger-maintenance")
 			}()
 			return out, nil
@@ -1990,15 +2007,9 @@ func PersonalPresetAssistantScheduledInboxTriage() agenteval.Case {
 			if storeErr != nil {
 				return nil, storeErr
 			}
-			out := make(chan memaxagent.Event, 32)
-			observer := memaxagent.EventObserverFunc(func(_ context.Context, event memaxagent.Event) {
-				select {
-				case out <- event:
-				case <-ctx.Done():
-				}
-			})
+			out, observer, closeOut := observedEventStream(ctx, 32)
 			go func() {
-				defer close(out)
+				defer closeOut()
 				finalRun, duplicateRun, duplicateStart, fireErr = fireScheduledTriggerOnce(memaxagent.WithEventObserver(ctx, observer), stack, store, now, trigger)
 			}()
 			return out, nil
@@ -2304,15 +2315,9 @@ func PersonalPresetAssistantScheduledInboxTriageJMAP() agenteval.Case {
 			if sqlErr != nil {
 				return nil, sqlErr
 			}
-			out := make(chan memaxagent.Event, 32)
-			observer := memaxagent.EventObserverFunc(func(_ context.Context, event memaxagent.Event) {
-				select {
-				case out <- event:
-				case <-ctx.Done():
-				}
-			})
+			out, observer, closeOut := observedEventStream(ctx, 32)
 			go func() {
-				defer close(out)
+				defer closeOut()
 				finalRun, duplicateRun, duplicateStart, fireErr = fireScheduledTriggerOnce(memaxagent.WithEventObserver(ctx, observer), stack, store, now, trigger)
 			}()
 			return out, nil
@@ -4434,6 +4439,63 @@ func fireScheduledWorkflowOnce(ctx context.Context, stack personal.Stack, store 
 		return finalRun, personal.ScheduledRunRecord{}, false, fmt.Errorf("duplicate scheduled workflow fire = %#v, want existing run for %q", duplicateResults, name)
 	}
 	return finalRun, duplicateResults[0].Fire.Record, duplicateResults[0].Fire.Created, nil
+}
+
+func observedEventStream(ctx context.Context, buffer int) (<-chan memaxagent.Event, memaxagent.EventObserver, func()) {
+	out := make(chan memaxagent.Event, buffer)
+	in := make(chan memaxagent.Event, buffer)
+	done := make(chan struct{})
+	var closeOnce sync.Once
+	go func() {
+		defer close(out)
+		send := func(event memaxagent.Event) bool {
+			select {
+			case out <- event:
+				return true
+			case <-ctx.Done():
+				return false
+			}
+		}
+		drain := func() {
+			for {
+				select {
+				case event := <-in:
+					if !send(event) {
+						return
+					}
+				default:
+					return
+				}
+			}
+		}
+		for {
+			select {
+			case event := <-in:
+				if !send(event) {
+					return
+				}
+			case <-done:
+				drain()
+				return
+			case <-ctx.Done():
+				drain()
+				return
+			}
+		}
+	}()
+	observer := memaxagent.EventObserverFunc(func(_ context.Context, event memaxagent.Event) {
+		select {
+		case in <- event:
+		case <-done:
+		case <-ctx.Done():
+		}
+	})
+	closeOut := func() {
+		closeOnce.Do(func() {
+			close(done)
+		})
+	}
+	return out, observer, closeOut
 }
 
 func waitForScheduledRun(store personal.ScheduledRunStore, id string) personal.ScheduledRunRecord {

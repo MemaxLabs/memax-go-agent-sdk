@@ -94,9 +94,10 @@ const (
 	// EventCommandResized is emitted when resize_command_terminal changes a PTY
 	// session's terminal geometry.
 	EventCommandResized EventKind = "command_resized"
-	// EventRunStateChanged is emitted when a host-owned durable background run
-	// changes lifecycle state, such as queued, running, succeeded, failed, or
-	// canceled.
+	// EventRunStateChanged is emitted when a host-owned durable background or
+	// proactive run changes lifecycle state, such as queued, running,
+	// succeeded, failed, or canceled. Run events with TriggerName set identify
+	// personal proactive scheduled-run occurrences.
 	EventRunStateChanged EventKind = "run_state_changed"
 	EventError           EventKind = "error"
 	EventResult          EventKind = "result"
@@ -253,13 +254,17 @@ type CommandEvent struct {
 	DroppedBytes    int
 }
 
-// RunEvent describes one durable host-owned managed-run lifecycle transition.
+// RunEvent describes one durable host-owned run lifecycle transition.
 // Status is one of the stack-defined lifecycle states such as queued, running,
-// succeeded, failed, or canceled.
+// succeeded, failed, or canceled. TriggerName and OccurrenceAt are set for
+// personal proactive scheduled runs.
 type RunEvent struct {
-	RunID  string
-	Status string
-	Prompt string
+	RunID        string
+	Status       string
+	Prompt       string
+	TriggerName  string
+	OccurrenceAt time.Time
+	Error        string
 }
 
 func newEvent(kind EventKind, sessionID string, turn int) Event {

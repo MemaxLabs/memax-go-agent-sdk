@@ -210,10 +210,12 @@ system prompt.
   host-owned proactive scheduling now also exists through
   `stack/personal` `ScheduledRunStore`, `PeriodicTrigger`, `StartScheduledRun`,
   `FireScheduledTriggers`, `WatchScheduledTriggers`, and named
-  `ScheduledWorkflowRegistry` firing, with eval-backed idempotency for daily
-  briefing, inbox triage, and task-ledger maintenance occurrences. Next steps
-  are broader host adapters for external personal systems plus more adversarial
-  preset suites for privacy-sensitive and long-horizon personal workflows.
+  `ScheduledWorkflowRegistry` firing. Scheduled runs now emit
+  `run_state_changed` observer events, with eval-backed lifecycle and
+  idempotency coverage for daily briefing plus idempotency coverage for inbox
+  triage and task-ledger maintenance occurrences. Next steps are broader host
+  adapters for external personal systems plus more adversarial preset suites
+  for privacy-sensitive and long-horizon personal workflows.
 - Add `stack/cloudmanaged` for multi-tenant, server-embedded, remote-execution
   products with durable jobs, tenancy-aware policy, quotas, audit hooks, and
   managed-agent DX.

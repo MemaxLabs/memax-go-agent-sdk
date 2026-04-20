@@ -81,6 +81,10 @@ func runExample(ctx context.Context, w io.Writer) error {
 
 	for _, event := range captured {
 		switch event.Kind {
+		case memaxagent.EventRunStateChanged:
+			if event.Run != nil {
+				fmt.Fprintf(w, "scheduled lifecycle: %s %s\n", event.Run.RunID, event.Run.Status)
+			}
 		case memaxagent.EventToolUse:
 			fmt.Fprintf(w, "tool use: %s\n", event.ToolUse.Name)
 		case memaxagent.EventToolResult:

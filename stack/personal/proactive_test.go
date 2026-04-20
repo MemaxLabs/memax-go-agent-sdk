@@ -3,6 +3,8 @@ package personal
 import (
 	"context"
 	"errors"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -125,6 +127,221 @@ func TestStackStartScheduledRunPersistsAndDeduplicates(t *testing.T) {
 	}
 	if len(modelClient.requests) != 1 {
 		t.Fatalf("model requests = %d, want 1", len(modelClient.requests))
+	}
+}
+
+func TestStackStartScheduledRunEmitsLifecycleEventsAndSuppressesDuplicateQueued(t *testing.T) {
+	t.Parallel()
+
+	modelClient := &scheduledRunModel{
+		turns: [][]model.StreamEvent{
+			{{Kind: model.StreamText, Text: "Morning briefing ready."}},
+		},
+	}
+	stack, err := New(Config{
+		Base: memaxagent.Options{
+			Model: modelClient,
+		},
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	store := NewMemoryScheduledRunStore()
+	intent := ScheduledIntent{
+		ID:           "daily-brief:2026-04-19T07:00:00Z",
+		TriggerName:  "daily-brief",
+		OccurrenceAt: time.Date(2026, 4, 19, 7, 0, 0, 0, time.UTC),
+		Prompt:       "Prepare the morning briefing.",
+	}
+	var (
+		mu     sync.Mutex
+		events []memaxagent.RunEvent
+	)
+	observer := memaxagent.EventObserverFunc(func(_ context.Context, event memaxagent.Event) {
+		if event.Kind != memaxagent.EventRunStateChanged || event.Run == nil {
+			return
+		}
+		mu.Lock()
+		events = append(events, *event.Run)
+		mu.Unlock()
+	})
+
+	ctx := memaxagent.WithEventObserver(context.Background(), observer)
+	record, created, err := stack.StartScheduledRun(ctx, store, intent)
+	if err != nil {
+		t.Fatalf("StartScheduledRun() error = %v", err)
+	}
+	if !created {
+		t.Fatal("StartScheduledRun() created = false, want true")
+	}
+	final := waitForScheduledRun(t, store, record.ID, func(r ScheduledRunRecord) bool { return r.Terminal() })
+	if final.Status != ScheduledRunSucceeded {
+		t.Fatalf("final run = %#v, want succeeded", final)
+	}
+	got := waitForObservedRunEvents(t, func() []memaxagent.RunEvent {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]memaxagent.RunEvent(nil), events...)
+	}, 3)
+	if len(got) != 3 {
+		t.Fatalf("run lifecycle events = %#v, want queued running succeeded", got)
+	}
+	wantStatuses := []string{
+		string(ScheduledRunQueued),
+		string(ScheduledRunRunning),
+		string(ScheduledRunSucceeded),
+	}
+	for i, want := range wantStatuses {
+		if got[i].Status != want {
+			t.Fatalf("event statuses = %#v, want %v", got, wantStatuses)
+		}
+		if got[i].RunID != intent.ID || got[i].TriggerName != intent.TriggerName || got[i].OccurrenceAt != intent.OccurrenceAt {
+			t.Fatalf("event %d = %#v, want scheduled run identity", i, got[i])
+		}
+		if got[i].Prompt != intent.Prompt {
+			t.Fatalf("event %d prompt = %q, want %q", i, got[i].Prompt, intent.Prompt)
+		}
+	}
+
+	duplicate, created, err := stack.StartScheduledRun(ctx, store, intent)
+	if err != nil {
+		t.Fatalf("StartScheduledRun(duplicate) error = %v", err)
+	}
+	if created || duplicate.ID != final.ID {
+		t.Fatalf("StartScheduledRun(duplicate) = (%#v, %t), want existing record", duplicate, created)
+	}
+	mu.Lock()
+	afterDuplicate := len(events)
+	mu.Unlock()
+	if afterDuplicate != len(got) {
+		t.Fatalf("events after duplicate = %d, want %d", afterDuplicate, len(got))
+	}
+}
+
+func TestStackStartScheduledRunEmitsFailedLifecycleEvent(t *testing.T) {
+	t.Parallel()
+
+	stack, err := New(Config{
+		Base: memaxagent.Options{
+			Model: failingScheduledRunModel{err: errors.New("provider unavailable")},
+		},
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	store := NewMemoryScheduledRunStore()
+	intent := ScheduledIntent{
+		ID:           "daily-brief:2026-04-19T07:00:00Z",
+		TriggerName:  "daily-brief",
+		OccurrenceAt: time.Date(2026, 4, 19, 7, 0, 0, 0, time.UTC),
+		Prompt:       "Prepare the morning briefing.",
+	}
+	var (
+		mu     sync.Mutex
+		events []memaxagent.RunEvent
+	)
+	observer := memaxagent.EventObserverFunc(func(_ context.Context, event memaxagent.Event) {
+		if event.Kind != memaxagent.EventRunStateChanged || event.Run == nil {
+			return
+		}
+		mu.Lock()
+		events = append(events, *event.Run)
+		mu.Unlock()
+	})
+
+	record, created, err := stack.StartScheduledRun(memaxagent.WithEventObserver(context.Background(), observer), store, intent)
+	if err != nil {
+		t.Fatalf("StartScheduledRun() error = %v", err)
+	}
+	if !created {
+		t.Fatal("StartScheduledRun() created = false, want true")
+	}
+	final := waitForScheduledRun(t, store, record.ID, func(r ScheduledRunRecord) bool { return r.Terminal() })
+	if final.Status != ScheduledRunFailed || !strings.Contains(final.Error, "provider unavailable") {
+		t.Fatalf("final run = %#v, want failed provider error", final)
+	}
+	got := waitForObservedRunEvents(t, func() []memaxagent.RunEvent {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]memaxagent.RunEvent(nil), events...)
+	}, 3)
+	if len(got) != 3 {
+		t.Fatalf("run lifecycle events = %#v, want queued running failed", got)
+	}
+	if got[2].Status != string(ScheduledRunFailed) || !strings.Contains(got[2].Error, "provider unavailable") {
+		t.Fatalf("terminal event = %#v, want failed event with provider error", got[2])
+	}
+}
+
+func TestStackStartScheduledRunStopsWhenRunningTransitionFails(t *testing.T) {
+	t.Parallel()
+
+	modelClient := &scheduledRunModel{
+		turns: [][]model.StreamEvent{
+			{{Kind: model.StreamText, Text: "Morning briefing ready."}},
+		},
+	}
+	stack, err := New(Config{
+		Base: memaxagent.Options{
+			Model: modelClient,
+		},
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	baseStore := NewMemoryScheduledRunStore()
+	store := &failingScheduledRunUpdateStore{
+		ScheduledRunStore: baseStore,
+		failStatus:        ScheduledRunRunning,
+		err:               errors.New("persist running"),
+		called:            make(chan struct{}),
+	}
+	intent := ScheduledIntent{
+		ID:           "daily-brief:2026-04-19T07:00:00Z",
+		TriggerName:  "daily-brief",
+		OccurrenceAt: time.Date(2026, 4, 19, 7, 0, 0, 0, time.UTC),
+		Prompt:       "Prepare the morning briefing.",
+	}
+	var (
+		mu     sync.Mutex
+		events []memaxagent.RunEvent
+	)
+	observer := memaxagent.EventObserverFunc(func(_ context.Context, event memaxagent.Event) {
+		if event.Kind != memaxagent.EventRunStateChanged || event.Run == nil {
+			return
+		}
+		mu.Lock()
+		events = append(events, *event.Run)
+		mu.Unlock()
+	})
+
+	record, created, err := stack.StartScheduledRun(memaxagent.WithEventObserver(context.Background(), observer), store, intent)
+	if err != nil {
+		t.Fatalf("StartScheduledRun() error = %v", err)
+	}
+	if !created {
+		t.Fatal("StartScheduledRun() created = false, want true")
+	}
+	select {
+	case <-store.called:
+	case <-time.After(5 * time.Second):
+		t.Fatal("scheduled run did not attempt running transition")
+	}
+	final, err := baseStore.GetScheduledRun(context.Background(), record.ID)
+	if err != nil {
+		t.Fatalf("GetScheduledRun() error = %v", err)
+	}
+	if final.Status != ScheduledRunQueued {
+		t.Fatalf("final run = %#v, want still queued after failed running transition", final)
+	}
+	if len(modelClient.requests) != 0 {
+		t.Fatalf("model requests = %d, want none after failed running transition", len(modelClient.requests))
+	}
+	mu.Lock()
+	got := append([]memaxagent.RunEvent(nil), events...)
+	mu.Unlock()
+	if len(got) != 1 || got[0].Status != string(ScheduledRunQueued) {
+		t.Fatalf("run lifecycle events = %#v, want only queued event", got)
 	}
 }
 
@@ -491,8 +708,36 @@ type staticScheduledTrigger struct {
 	intent ScheduledIntent
 }
 
+type failingScheduledRunModel struct {
+	err error
+}
+
+type failingScheduledRunUpdateStore struct {
+	ScheduledRunStore
+	failStatus ScheduledRunStatus
+	err        error
+	called     chan struct{}
+	once       sync.Once
+}
+
 func (t staticScheduledTrigger) IntentAt(time.Time) (ScheduledIntent, bool) {
 	return t.intent, true
+}
+
+func (s *failingScheduledRunUpdateStore) UpdateScheduledRun(ctx context.Context, update ScheduledRunUpdate) (ScheduledRunRecord, error) {
+	if update.Status == s.failStatus {
+		s.once.Do(func() {
+			if s.called != nil {
+				close(s.called)
+			}
+		})
+		return ScheduledRunRecord{}, s.err
+	}
+	return s.ScheduledRunStore.UpdateScheduledRun(ctx, update)
+}
+
+func (m failingScheduledRunModel) Stream(context.Context, model.Request) (model.Stream, error) {
+	return nil, m.err
 }
 
 func (m *scheduledRunModel) Stream(_ context.Context, req model.Request) (model.Stream, error) {
@@ -537,4 +782,19 @@ func waitForScheduledRun(t *testing.T, store ScheduledRunStore, id string, done 
 	}
 	t.Fatalf("scheduled run %q did not reach expected state: %#v", id, record)
 	return ScheduledRunRecord{}
+}
+
+func waitForObservedRunEvents(t *testing.T, snapshot func() []memaxagent.RunEvent, count int) []memaxagent.RunEvent {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		events := snapshot()
+		if len(events) >= count {
+			return events
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	events := snapshot()
+	t.Fatalf("observed run events = %#v, want at least %d", events, count)
+	return nil
 }

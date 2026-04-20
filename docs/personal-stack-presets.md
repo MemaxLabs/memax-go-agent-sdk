@@ -118,6 +118,12 @@ Common sources of confusion:
   `FireScheduledWorkflows`; the registry is discoverable workflow
   configuration, while the scheduled-run store remains the durable idempotency
   boundary
+- proactive scheduled runs emit `run_state_changed` observer events for
+  queued, running, succeeded, and failed transitions, so hosts can audit or
+  monitor personal workflow lifecycle without polling the scheduled-run store
+  alone. Events are emitted only after the scheduled-run store accepts the
+  corresponding durable transition. Hosts should sweep or retry stale queued
+  records if their store can fail while moving a run from queued to running.
 - attaching `Tasks` gives personal workflows a durable task ledger. The
   planner reloads task state before every model request, so follow-ups created
   in one run through `upsert_task` can be visible to a later run before the

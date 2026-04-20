@@ -325,6 +325,7 @@ func (s Stack) StartScheduledRun(ctx context.Context, store ScheduledRunStore, i
 	if err != nil || !created {
 		return record, created, err
 	}
+	observeScheduledRunState(ctx, record)
 	runCtx := context.WithoutCancel(ctx)
 	go s.executeScheduledRun(runCtx, store, record)
 	return record, true, nil
@@ -437,10 +438,15 @@ func (s Stack) WatchScheduledTriggers(ctx context.Context, store ScheduledRunSto
 }
 
 func (s Stack) executeScheduledRun(ctx context.Context, store ScheduledRunStore, record ScheduledRunRecord) {
-	record, _ = store.UpdateScheduledRun(ctx, ScheduledRunUpdate{
+	record, err := store.UpdateScheduledRun(ctx, ScheduledRunUpdate{
 		ID:     record.ID,
 		Status: ScheduledRunRunning,
 	})
+	if err != nil {
+		return
+	}
+	observeScheduledRunState(ctx, record)
+
 	events := memaxagent.QueryAsync(ctx, record.Prompt, s.options)
 	var (
 		finalResult string
@@ -472,11 +478,38 @@ func (s Stack) executeScheduledRun(ctx context.Context, store ScheduledRunStore,
 		update.Status = ScheduledRunSucceeded
 		update.Result = &finalResult
 	}
-	_, _ = store.UpdateScheduledRun(ctx, update)
+	record, err = store.UpdateScheduledRun(ctx, update)
+	if err == nil {
+		observeScheduledRunState(ctx, record)
+	}
 }
 
 func cloneScheduledRunRecord(record ScheduledRunRecord) ScheduledRunRecord {
 	return record
+}
+
+func observeScheduledRunState(ctx context.Context, record ScheduledRunRecord) {
+	if record.ID == "" || record.Status == "" {
+		return
+	}
+	var errText string
+	if record.Status == ScheduledRunFailed {
+		errText = record.Error
+	}
+	event := memaxagent.Event{
+		Kind:      memaxagent.EventRunStateChanged,
+		SessionID: record.SessionID,
+		Time:      record.UpdatedAt,
+		Run: &memaxagent.RunEvent{
+			RunID:        record.ID,
+			Status:       string(record.Status),
+			Prompt:       record.Prompt,
+			TriggerName:  record.TriggerName,
+			OccurrenceAt: record.OccurrenceAt,
+			Error:        errText,
+		},
+	}
+	memaxagent.ObserveEvent(ctx, event)
 }
 
 func normalizeScheduledWorkflows(workflows []ScheduledWorkflow) ([]ScheduledWorkflow, error) {
