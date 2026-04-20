@@ -137,9 +137,12 @@ Common sources of confusion:
   Stores that implement `ScheduledRunNotificationDeliveryStore` add an
   at-least-once delivery contract: workers claim pending notifications with a
   lease, mark successful attempts delivered, and mark transient failures with a
-  retry time. `DrainScheduledRunNotifications` is the reference worker helper:
-  it claims a bounded batch, invokes a host-owned delivery handler, records
-  successes, and reschedules handler failures with configurable backoff. Host
+  retry time. `DrainScheduledRunNotifications` is the reference one-pass worker
+  helper: it claims a bounded batch, invokes a host-owned delivery handler,
+  records successes, and reschedules handler failures with configurable backoff.
+  `WatchScheduledRunNotifications` runs the same drain helper immediately and on
+  a ticker for long-running host delivery workers, and the drain result observer
+  option lets hosts emit delivery metrics for successful drain passes. Host
   channel failures become retryable outbox state; store claim/ack errors return
   to the worker because the durable state is uncertain.
   Notification records carry the scheduled prompt plus terminal result or error

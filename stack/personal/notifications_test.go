@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -399,6 +400,164 @@ func TestDrainScheduledRunNotificationsRejectsInvalidConfiguration(t *testing.T)
 	}
 }
 
+func TestWatchScheduledRunNotificationsDrainsImmediatelyAndStopsOnCancel(t *testing.T) {
+	t.Parallel()
+
+	store := NewMemoryScheduledRunNotificationStore()
+	first := scheduledRunNotificationRequestForTest("daily-brief:2026-04-19T07:00:00Z", ScheduledRunSucceeded, 0)
+	second := scheduledRunNotificationRequestForTest("weekly-plan:2026-04-20T07:00:00Z", ScheduledRunSucceeded, time.Minute)
+	for _, req := range []CreateScheduledRunNotificationRequest{first, second} {
+		if _, _, err := store.CreateScheduledRunNotification(context.Background(), req); err != nil {
+			t.Fatalf("CreateScheduledRunNotification(%q) error = %v", req.ID, err)
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	delivered := make(chan string, 2)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- WatchScheduledRunNotifications(
+			ctx,
+			store,
+			"worker-1",
+			ScheduledRunNotificationDeliveryHandlerFunc(func(_ context.Context, record ScheduledRunNotificationRecord) error {
+				delivered <- record.ID
+				return nil
+			}),
+			10*time.Millisecond,
+			WithScheduledRunNotificationDrainLimit(1),
+			WithScheduledRunNotificationDrainLeaseDuration(time.Minute),
+		)
+	}()
+
+	gotIDs := make(map[string]bool)
+	for len(gotIDs) < 2 {
+		select {
+		case id := <-delivered:
+			gotIDs[id] = true
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for watcher delivery; got %v", gotIDs)
+		}
+	}
+	cancel()
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("WatchScheduledRunNotifications() error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for watcher shutdown")
+	}
+	if !gotIDs[first.ID] || !gotIDs[second.ID] {
+		t.Fatalf("delivered ids = %v, want %s and %s", gotIDs, first.ID, second.ID)
+	}
+	records, err := store.ListScheduledRunNotifications(context.Background(), ScheduledRunNotificationFilter{
+		DeliveryStatus: ScheduledRunNotificationDeliveryDelivered,
+	})
+	if err != nil {
+		t.Fatalf("ListScheduledRunNotifications(delivered) error = %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("delivered records = %#v, want both notifications delivered", records)
+	}
+}
+
+func TestWatchScheduledRunNotificationsContinuesAfterRetryableHandlerFailure(t *testing.T) {
+	t.Parallel()
+
+	store := NewMemoryScheduledRunNotificationStore()
+	req := scheduledRunNotificationRequestForTest("daily-brief:2026-04-19T07:00:00Z", ScheduledRunSucceeded, 0)
+	if _, _, err := store.CreateScheduledRunNotification(context.Background(), req); err != nil {
+		t.Fatalf("CreateScheduledRunNotification() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pushErr := errors.New("push gateway unavailable")
+	var attempts atomic.Int64
+	delivered := make(chan struct{}, 1)
+	var observedMu sync.Mutex
+	var observed []ScheduledRunNotificationDrainResult
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- WatchScheduledRunNotifications(
+			ctx,
+			store,
+			"worker-1",
+			ScheduledRunNotificationDeliveryHandlerFunc(func(_ context.Context, _ ScheduledRunNotificationRecord) error {
+				if attempts.Add(1) == 1 {
+					return pushErr
+				}
+				delivered <- struct{}{}
+				return nil
+			}),
+			10*time.Millisecond,
+			WithScheduledRunNotificationRetryBackoff(func(ScheduledRunNotificationRecord, error, time.Time) time.Time {
+				return time.Time{}
+			}),
+			WithScheduledRunNotificationDrainResultObserver(func(_ context.Context, result ScheduledRunNotificationDrainResult) {
+				observedMu.Lock()
+				observed = append(observed, result)
+				observedMu.Unlock()
+			}),
+		)
+	}()
+
+	select {
+	case <-delivered:
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for retry delivery; attempts=%d", attempts.Load())
+	}
+	waitForDeliveredNotifications(t, store, 1)
+	cancel()
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("WatchScheduledRunNotifications() error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for watcher shutdown")
+	}
+	if attempts.Load() != 2 {
+		t.Fatalf("attempts = %d, want first failure then retry success", attempts.Load())
+	}
+	var sawRetryableFailure, sawDelivery bool
+	observedMu.Lock()
+	observedResults := append([]ScheduledRunNotificationDrainResult(nil), observed...)
+	observedMu.Unlock()
+	for _, result := range observedResults {
+		if len(result.Failed) == 1 && errors.Is(result.Failed[0].Err, pushErr) {
+			sawRetryableFailure = true
+		}
+		if len(result.Delivered) == 1 {
+			sawDelivery = true
+		}
+	}
+	if !sawRetryableFailure || !sawDelivery {
+		t.Fatalf("observed retryable failure=%t delivery=%t, want both", sawRetryableFailure, sawDelivery)
+	}
+	records := waitForDeliveredNotifications(t, store, 1)
+	if len(records) != 1 || records[0].DeliveryAttempts != 2 {
+		t.Fatalf("delivered records = %#v, want notification delivered on second attempt", records)
+	}
+}
+
+func TestWatchScheduledRunNotificationsRejectsInvalidConfiguration(t *testing.T) {
+	t.Parallel()
+
+	store := NewMemoryScheduledRunNotificationStore()
+	handler := ScheduledRunNotificationDeliveryHandlerFunc(func(context.Context, ScheduledRunNotificationRecord) error {
+		return nil
+	})
+	if err := WatchScheduledRunNotifications(context.Background(), store, "worker-1", handler, 0); !errors.Is(err, ErrScheduledRunNotificationWatchIntervalRequired) {
+		t.Fatalf("WatchScheduledRunNotifications(zero interval) error = %v, want ErrScheduledRunNotificationWatchIntervalRequired", err)
+	}
+	if err := WatchScheduledRunNotifications(context.Background(), nil, "worker-1", handler, time.Millisecond); !errors.Is(err, ErrScheduledRunNotificationDeliveryStoreRequired) {
+		t.Fatalf("WatchScheduledRunNotifications(nil store) error = %v, want ErrScheduledRunNotificationDeliveryStoreRequired", err)
+	}
+}
+
 func TestDefaultScheduledRunNotificationRetryBackoff(t *testing.T) {
 	t.Parallel()
 
@@ -590,5 +749,25 @@ func scheduledRunNotificationRequestForTest(runID string, status ScheduledRunSta
 		Prompt:       "Prepare the morning briefing.",
 		Result:       "Morning briefing ready.",
 		CreatedAt:    createdAt,
+	}
+}
+
+func waitForDeliveredNotifications(t *testing.T, store ScheduledRunNotificationStore, count int) []ScheduledRunNotificationRecord {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for {
+		records, err := store.ListScheduledRunNotifications(context.Background(), ScheduledRunNotificationFilter{
+			DeliveryStatus: ScheduledRunNotificationDeliveryDelivered,
+		})
+		if err != nil {
+			t.Fatalf("ListScheduledRunNotifications(delivered) error = %v", err)
+		}
+		if len(records) >= count {
+			return records
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %d delivered notifications; got %#v", count, records)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }

@@ -40,6 +40,10 @@ var ErrScheduledRunNotificationDeliveryHandlerRequired = errors.New("personal st
 // notification delivery draining needs an explicit worker identity.
 var ErrScheduledRunNotificationDeliveryWorkerIDRequired = errors.New("personal stack: scheduled run notification delivery worker id is required")
 
+// ErrScheduledRunNotificationWatchIntervalRequired reports that scheduled-run
+// notification delivery watching needs a positive interval.
+var ErrScheduledRunNotificationWatchIntervalRequired = errors.New("personal stack: scheduled run notification watch interval must be positive")
+
 // DefaultScheduledRunNotificationLeaseDuration is the default delivery lease
 // duration used when a claim request does not specify one.
 const DefaultScheduledRunNotificationLeaseDuration = 5 * time.Minute
@@ -233,6 +237,7 @@ type scheduledRunNotificationDrainConfig struct {
 	leaseDuration time.Duration
 	now           time.Time
 	retryBackoff  ScheduledRunNotificationRetryBackoff
+	onResult      func(context.Context, ScheduledRunNotificationDrainResult)
 }
 
 // ScheduledRunNotificationDrainOption configures one notification delivery
@@ -271,6 +276,17 @@ func WithScheduledRunNotificationDrainNow(now time.Time) ScheduledRunNotificatio
 func WithScheduledRunNotificationRetryBackoff(backoff ScheduledRunNotificationRetryBackoff) ScheduledRunNotificationDrainOption {
 	return func(config *scheduledRunNotificationDrainConfig) {
 		config.retryBackoff = backoff
+	}
+}
+
+// WithScheduledRunNotificationDrainResultObserver observes each successful
+// drain pass. Store and context errors are returned to the caller instead of
+// being reported through this observer. The observer runs synchronously after
+// claim/handler/ack work completes and receives a defensive copy of the result.
+// Keep observers fast or offload slow telemetry to host-owned queues.
+func WithScheduledRunNotificationDrainResultObserver(observer func(context.Context, ScheduledRunNotificationDrainResult)) ScheduledRunNotificationDrainOption {
+	return func(config *scheduledRunNotificationDrainConfig) {
+		config.onResult = observer
 	}
 }
 
@@ -382,7 +398,47 @@ func DrainScheduledRunNotifications(ctx context.Context, store ScheduledRunNotif
 		}
 		result.Delivered = append(result.Delivered, delivered)
 	}
+	observeScheduledRunNotificationDrainResult(ctx, config.onResult, result)
 	return result, nil
+}
+
+// WatchScheduledRunNotifications continuously drains due scheduled-run
+// notifications until ctx is canceled. It runs one drain pass immediately, then
+// repeats on interval. Handler failures are recorded as retryable outbox state by
+// DrainScheduledRunNotifications and do not stop the watcher; claim/ack/store
+// errors are returned because the worker can no longer make reliable progress.
+// interval must be positive. Invalid store, handler, or workerID configuration is
+// surfaced by the first drain pass.
+func WatchScheduledRunNotifications(ctx context.Context, store ScheduledRunNotificationDeliveryStore, workerID string, handler ScheduledRunNotificationDeliveryHandler, interval time.Duration, options ...ScheduledRunNotificationDrainOption) error {
+	if interval <= 0 {
+		return ErrScheduledRunNotificationWatchIntervalRequired
+	}
+	drain := func() error {
+		_, err := DrainScheduledRunNotifications(ctx, store, workerID, handler, options...)
+		return err
+	}
+	if err := drain(); err != nil {
+		return err
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			if err := drain(); err != nil {
+				return err
+			}
+		}
+	}
+}
+
+func observeScheduledRunNotificationDrainResult(ctx context.Context, observer func(context.Context, ScheduledRunNotificationDrainResult), result ScheduledRunNotificationDrainResult) {
+	if observer == nil {
+		return
+	}
+	observer(ctx, cloneScheduledRunNotificationDrainResult(result))
 }
 
 // MemoryScheduledRunNotificationStore is the reference in-memory notification
@@ -882,4 +938,13 @@ func cloneScheduledRunNotification(record ScheduledRunNotificationRecord) Schedu
 	// All fields are value types today; keep this helper as the defensive-copy
 	// boundary if the record later grows slices, maps, or pointer fields.
 	return record
+}
+
+func cloneScheduledRunNotificationDrainResult(result ScheduledRunNotificationDrainResult) ScheduledRunNotificationDrainResult {
+	cloned := ScheduledRunNotificationDrainResult{
+		Claimed:   append([]ScheduledRunNotificationRecord(nil), result.Claimed...),
+		Delivered: append([]ScheduledRunNotificationRecord(nil), result.Delivered...),
+		Failed:    append([]ScheduledRunNotificationDrainFailure(nil), result.Failed...),
+	}
+	return cloned
 }
