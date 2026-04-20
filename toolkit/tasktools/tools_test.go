@@ -58,6 +58,14 @@ func TestTaskToolsCreateListUpdateDelete(t *testing.T) {
 	if !ok || len(evidence) != 1 || evidence[0] != "README.md" {
 		t.Fatalf("update metadata = %#v, want preserved evidence", update.Metadata)
 	}
+	standardEvidence, ok := update.Metadata[model.MetadataTaskEvidence].([]string)
+	if !ok || len(standardEvidence) != 1 || standardEvidence[0] != "README.md" {
+		t.Fatalf("update metadata = %#v, want standard task evidence", update.Metadata)
+	}
+	evidence[0] = "mutated"
+	if standardEvidence[0] != "README.md" {
+		t.Fatalf("standard evidence aliased human-readable evidence: %#v", update.Metadata)
+	}
 
 	filtered := mustRunTool(t, NewListTool(store), model.ToolUse{
 		ID:    "list-2",

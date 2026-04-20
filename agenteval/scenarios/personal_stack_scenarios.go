@@ -1135,13 +1135,22 @@ func PersonalPresetAssistantWeekAheadTaskLedger() agenteval.Case {
 		Name:   "personal_preset_personal_assistant_week_ahead_task_ledger",
 		Prompt: strings.Join(prompts, " / "),
 		Run: func(ctx context.Context) (<-chan memaxagent.Event, error) {
+			if configErr != nil {
+				return nil, configErr
+			}
+			if stackErr != nil {
+				return nil, stackErr
+			}
 			out := make(chan memaxagent.Event)
 			go func() {
 				defer close(out)
 				for _, prompt := range prompts {
 					events, err := memaxagent.Query(ctx, prompt, stack.WithModel(modelClient))
 					if err != nil {
-						out <- memaxagent.Event{Kind: memaxagent.EventError, Err: err, Time: time.Now().UTC()}
+						select {
+						case out <- memaxagent.Event{Kind: memaxagent.EventError, Err: err, Time: time.Now().UTC()}:
+						case <-ctx.Done():
+						}
 						return
 					}
 					for event := range events {
@@ -1169,14 +1178,21 @@ func PersonalPresetAssistantWeekAheadTaskLedger() agenteval.Case {
 					if len(results) != 11 {
 						return fmt.Errorf("tool results = %#v, want 11 results", results)
 					}
-					if results[7].Metadata[model.MetadataTaskID] != "week-2026-04-20-acme-owner" || results[7].Metadata[model.MetadataTaskStatus] != string(tasktools.StatusPending) {
-						return fmt.Errorf("first task metadata = %#v, want pending Acme follow-up", results[7].Metadata)
+					byID := make(map[string]model.ToolResult, len(results))
+					for _, toolResult := range results {
+						byID[toolResult.ToolUseID] = toolResult
 					}
-					if results[8].Metadata[model.MetadataTaskID] != "week-2026-04-20-demo-slides" || results[8].Metadata[model.MetadataTaskStatus] != string(tasktools.StatusPending) {
-						return fmt.Errorf("second task metadata = %#v, want pending demo follow-up", results[8].Metadata)
+					firstTask := byID["upsert-task-1"]
+					if firstTask.Metadata[model.MetadataTaskID] != "week-2026-04-20-acme-owner" || firstTask.Metadata[model.MetadataTaskStatus] != string(tasktools.StatusPending) {
+						return fmt.Errorf("first task metadata = %#v, want pending Acme follow-up", firstTask.Metadata)
 					}
-					if results[10].Metadata[model.MetadataTaskID] != "week-2026-04-20-acme-owner" || results[10].Metadata[model.MetadataTaskStatus] != string(tasktools.StatusCompleted) {
-						return fmt.Errorf("completed task metadata = %#v, want completed Acme follow-up", results[10].Metadata)
+					secondTask := byID["upsert-task-2"]
+					if secondTask.Metadata[model.MetadataTaskID] != "week-2026-04-20-demo-slides" || secondTask.Metadata[model.MetadataTaskStatus] != string(tasktools.StatusPending) {
+						return fmt.Errorf("second task metadata = %#v, want pending demo follow-up", secondTask.Metadata)
+					}
+					completedTask := byID["complete-task-1"]
+					if completedTask.Metadata[model.MetadataTaskID] != "week-2026-04-20-acme-owner" || completedTask.Metadata[model.MetadataTaskStatus] != string(tasktools.StatusCompleted) {
+						return fmt.Errorf("completed task metadata = %#v, want completed Acme follow-up", completedTask.Metadata)
 					}
 					return nil
 				},
