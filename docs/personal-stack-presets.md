@@ -149,7 +149,14 @@ Common sources of confusion:
   requeue inspected failed or dead-lettered records after remediation while
   preserving attempt history. Host channel failures become retryable or terminal
   outbox state; store claim/ack errors return to the worker because the durable
-  state is uncertain.
+  state is uncertain. `stack/personal/webhook` provides a reference HTTP
+  delivery handler for hosts that want signed webhook POSTs with idempotency
+  headers and typed status errors; hosts still own endpoint authorization,
+  receiver-side idempotency storage, and payload redaction. The webhook handler
+  sends `Idempotency-Key` and `webhook-id` as the notification ID, plus
+  `X-Memax-Notification-ID` and `X-Memax-Run-ID` for host routing. When signing
+  is enabled, it sends `webhook-timestamp` and `webhook-signature` using the
+  Standard Webhooks `v1,<base64>` HMAC over `id.timestamp.body`.
   Notification records carry the scheduled prompt plus terminal result or error
   text; host-owned delivery backends should apply their own redaction policy
   before sending them to external channels. The

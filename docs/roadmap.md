@@ -224,8 +224,10 @@ system prompt.
   with retry times and expired-lease reclaim, and to the dead-letter extension
   for max-attempt terminal state when poison notifications need manual
   recovery; stores can also expose the recovery extension to requeue inspected
-  failed or dead-lettered notifications without resetting attempt history. Next
-  steps are host delivery adapters for external personal systems plus more
+  failed or dead-lettered notifications without resetting attempt history.
+  `stack/personal/webhook` now ships the first host delivery adapter: a signed
+  HTTP handler with idempotency headers and typed status errors. Next steps are
+  additional delivery adapters for external personal systems plus more
   adversarial preset suites for privacy-sensitive and long-horizon personal
   workflows.
 - Add `stack/cloudmanaged` for multi-tenant, server-embedded, remote-execution

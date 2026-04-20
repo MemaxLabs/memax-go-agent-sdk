@@ -226,7 +226,9 @@ dead-lettered record, repair the channel or payload, and call
 `RequeueScheduledRunNotification` to move it back to pending delivery while
 preserving attempt history. Host delivery errors are recorded as retryable or
 terminal outbox state, while store errors are returned to the worker. Email,
-push, chat, and webhook delivery remain host-owned.
+push, chat, and webhook delivery remain host-owned; `stack/personal/webhook`
+is the reference webhook handler for hosts that want a signed HTTP delivery
+channel with idempotency headers and typed response errors.
 Week-ahead planning also has eval-backed durable task
 continuity:
 follow-ups can be written through
