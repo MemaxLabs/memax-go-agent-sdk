@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -52,43 +51,28 @@ func runExample(ctx context.Context, w io.Writer) error {
 		mu.Unlock()
 	})
 
-	watchCtx, cancel := context.WithCancel(memaxagent.WithEventObserver(ctx, observer))
-	defer cancel()
-
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- stack.WatchScheduledTriggers(watchCtx, store, personal.TriggerWatcherOptions{
-			Interval: time.Millisecond,
-			Now: func() time.Time {
-				return now
-			},
-		}, trigger)
-	}()
-
-	runID := "daily-brief:2026-04-19T07:00:00Z"
+	runCtx := memaxagent.WithEventObserver(ctx, observer)
+	results, err := stack.FireScheduledTriggers(runCtx, store, now, trigger)
+	if err != nil {
+		return err
+	}
+	if len(results) != 1 || !results[0].Created {
+		return fmt.Errorf("scheduled trigger fire = %#v, want one created daily brief run", results)
+	}
+	runID := results[0].Record.ID
 	finalRun, err := waitForScheduledRun(store, runID, func(record personal.ScheduledRunRecord) bool { return record.Terminal() })
 	if err != nil {
-		cancel()
-		<-errCh
 		return err
 	}
-	intent, due := trigger.IntentAt(now)
-	if !due {
-		cancel()
-		<-errCh
-		return fmt.Errorf("periodic trigger did not fire for %s", now.Format(time.RFC3339))
-	}
-	duplicateRun, created, err := stack.StartScheduledRun(memaxagent.WithEventObserver(ctx, observer), store, intent)
+	duplicateResults, err := stack.FireScheduledTriggers(runCtx, store, now, trigger)
 	if err != nil {
-		cancel()
-		<-errCh
 		return err
 	}
-
-	cancel()
-	if err := <-errCh; err != nil && !errors.Is(err, context.Canceled) {
-		return err
+	if len(duplicateResults) != 1 {
+		return fmt.Errorf("duplicate trigger fire = %#v, want existing daily brief run", duplicateResults)
 	}
+	duplicateRun := duplicateResults[0].Record
+	created := duplicateResults[0].Created
 
 	mu.Lock()
 	captured := append([]memaxagent.Event(nil), events...)

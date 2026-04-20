@@ -1436,6 +1436,7 @@ func PersonalPresetAssistantScheduledDailyBriefing() agenteval.Case {
 		finalRun       personal.ScheduledRunRecord
 		duplicateRun   personal.ScheduledRunRecord
 		duplicateStart bool
+		fireErr        error
 	)
 
 	return agenteval.Case{
@@ -1452,28 +1453,9 @@ func PersonalPresetAssistantScheduledDailyBriefing() agenteval.Case {
 				case <-ctx.Done():
 				}
 			})
-			watchCtx, cancel := context.WithCancel(memaxagent.WithEventObserver(ctx, observer))
 			go func() {
 				defer close(out)
-				watchDone := make(chan error, 1)
-				go func() {
-					watchDone <- stack.WatchScheduledTriggers(watchCtx, store, personal.TriggerWatcherOptions{
-						Interval: time.Millisecond,
-						Now: func() time.Time {
-							return now
-						},
-					}, trigger)
-				}()
-				finalRun = waitForScheduledRun(store, "daily-brief:2026-04-19T07:00:00Z")
-				intent, due := trigger.IntentAt(now)
-				if !due {
-					cancel()
-					<-watchDone
-					return
-				}
-				duplicateRun, duplicateStart, _ = stack.StartScheduledRun(memaxagent.WithEventObserver(ctx, observer), store, intent)
-				cancel()
-				<-watchDone
+				finalRun, duplicateRun, duplicateStart, fireErr = fireScheduledTriggerOnce(memaxagent.WithEventObserver(ctx, observer), stack, store, now, trigger)
 			}()
 			return out, nil
 		},
@@ -1484,6 +1466,9 @@ func PersonalPresetAssistantScheduledDailyBriefing() agenteval.Case {
 			{
 				Name: "scheduled run persists deterministic occurrence and deduplicates reruns",
 				Check: func(result agenteval.Result) error {
+					if fireErr != nil {
+						return fireErr
+					}
 					if finalRun.ID != "daily-brief:2026-04-19T07:00:00Z" {
 						return fmt.Errorf("final run id = %q, want deterministic occurrence id", finalRun.ID)
 					}
@@ -1599,25 +1584,9 @@ func PersonalPresetAssistantScheduledTaskLedgerMaintenance() agenteval.Case {
 				case <-ctx.Done():
 				}
 			})
-			watchCtx, cancel := context.WithCancel(memaxagent.WithEventObserver(ctx, observer))
 			go func() {
 				defer close(out)
-				watchDone := make(chan error, 1)
-				go func() {
-					watchDone <- stack.WatchScheduledTriggers(watchCtx, runStore, personal.TriggerWatcherOptions{
-						Interval: time.Millisecond,
-						Now: func() time.Time {
-							return now
-						},
-					}, trigger)
-				}()
-				finalRun = waitForScheduledRun(runStore, "task-ledger-maintenance:2026-04-20T08:00:00Z")
-				intent, due := trigger.IntentAt(now)
-				if due {
-					duplicateRun, duplicateStart, duplicateErr = stack.StartScheduledRun(memaxagent.WithEventObserver(ctx, observer), runStore, intent)
-				}
-				cancel()
-				<-watchDone
+				finalRun, duplicateRun, duplicateStart, duplicateErr = fireScheduledTriggerOnce(memaxagent.WithEventObserver(ctx, observer), stack, runStore, now, trigger)
 			}()
 			return out, nil
 		},
@@ -1996,6 +1965,7 @@ func PersonalPresetAssistantScheduledInboxTriage() agenteval.Case {
 		finalRun       personal.ScheduledRunRecord
 		duplicateRun   personal.ScheduledRunRecord
 		duplicateStart bool
+		fireErr        error
 	)
 
 	return agenteval.Case{
@@ -2018,28 +1988,9 @@ func PersonalPresetAssistantScheduledInboxTriage() agenteval.Case {
 				case <-ctx.Done():
 				}
 			})
-			watchCtx, cancel := context.WithCancel(memaxagent.WithEventObserver(ctx, observer))
 			go func() {
 				defer close(out)
-				watchDone := make(chan error, 1)
-				go func() {
-					watchDone <- stack.WatchScheduledTriggers(watchCtx, store, personal.TriggerWatcherOptions{
-						Interval: time.Millisecond,
-						Now: func() time.Time {
-							return now
-						},
-					}, trigger)
-				}()
-				finalRun = waitForScheduledRun(store, "inbox-triage:2026-04-19T09:00:00Z")
-				intent, due := trigger.IntentAt(now)
-				if !due {
-					cancel()
-					<-watchDone
-					return
-				}
-				duplicateRun, duplicateStart, _ = stack.StartScheduledRun(memaxagent.WithEventObserver(ctx, observer), store, intent)
-				cancel()
-				<-watchDone
+				finalRun, duplicateRun, duplicateStart, fireErr = fireScheduledTriggerOnce(memaxagent.WithEventObserver(ctx, observer), stack, store, now, trigger)
 			}()
 			return out, nil
 		},
@@ -2102,6 +2053,9 @@ func PersonalPresetAssistantScheduledInboxTriage() agenteval.Case {
 			{
 				Name: "scheduled sqlite occurrence deduplicates reruns and persists output",
 				Check: func(result agenteval.Result) error {
+					if fireErr != nil {
+						return fireErr
+					}
 					toolResults := result.ToolResults()
 					if toolResults[2].IsError || toolResults[2].Metadata[approvaltools.MetadataApprovalApproved] != true {
 						return fmt.Errorf("approval result = %#v, want granted approval", toolResults[2])
@@ -2319,6 +2273,7 @@ func PersonalPresetAssistantScheduledInboxTriageJMAP() agenteval.Case {
 		finalRun       personal.ScheduledRunRecord
 		duplicateRun   personal.ScheduledRunRecord
 		duplicateStart bool
+		fireErr        error
 	)
 
 	return agenteval.Case{
@@ -2347,28 +2302,9 @@ func PersonalPresetAssistantScheduledInboxTriageJMAP() agenteval.Case {
 				case <-ctx.Done():
 				}
 			})
-			watchCtx, cancel := context.WithCancel(memaxagent.WithEventObserver(ctx, observer))
 			go func() {
 				defer close(out)
-				watchDone := make(chan error, 1)
-				go func() {
-					watchDone <- stack.WatchScheduledTriggers(watchCtx, store, personal.TriggerWatcherOptions{
-						Interval: time.Millisecond,
-						Now: func() time.Time {
-							return now
-						},
-					}, trigger)
-				}()
-				finalRun = waitForScheduledRun(store, "inbox-triage:2026-04-19T09:00:00Z")
-				intent, due := trigger.IntentAt(now)
-				if !due {
-					cancel()
-					<-watchDone
-					return
-				}
-				duplicateRun, duplicateStart, _ = stack.StartScheduledRun(memaxagent.WithEventObserver(ctx, observer), store, intent)
-				cancel()
-				<-watchDone
+				finalRun, duplicateRun, duplicateStart, fireErr = fireScheduledTriggerOnce(memaxagent.WithEventObserver(ctx, observer), stack, store, now, trigger)
 			}()
 			return out, nil
 		},
@@ -2432,6 +2368,9 @@ func PersonalPresetAssistantScheduledInboxTriageJMAP() agenteval.Case {
 			{
 				Name: "scheduled JMAP triage preserves durable idempotency and adapter sequence",
 				Check: func(result agenteval.Result) error {
+					if fireErr != nil {
+						return fireErr
+					}
 					toolResults := result.ToolResults()
 					if toolResults[2].IsError || toolResults[2].Metadata[approvaltools.MetadataApprovalApproved] != true {
 						return fmt.Errorf("approval result = %#v, want granted approval", toolResults[2])
@@ -4448,6 +4387,25 @@ func PersonalPresetResearchPartner() agenteval.Case {
 			},
 		},
 	}
+}
+
+func fireScheduledTriggerOnce(ctx context.Context, stack personal.Stack, store personal.ScheduledRunStore, now time.Time, trigger personal.ScheduledTrigger) (personal.ScheduledRunRecord, personal.ScheduledRunRecord, bool, error) {
+	results, err := stack.FireScheduledTriggers(ctx, store, now, trigger)
+	if err != nil {
+		return personal.ScheduledRunRecord{}, personal.ScheduledRunRecord{}, false, err
+	}
+	if len(results) != 1 || !results[0].Created {
+		return personal.ScheduledRunRecord{}, personal.ScheduledRunRecord{}, false, fmt.Errorf("scheduled trigger fire = %#v, want one created run", results)
+	}
+	finalRun := waitForScheduledRun(store, results[0].Record.ID)
+	duplicateResults, err := stack.FireScheduledTriggers(ctx, store, now, trigger)
+	if err != nil {
+		return finalRun, personal.ScheduledRunRecord{}, false, err
+	}
+	if len(duplicateResults) != 1 {
+		return finalRun, personal.ScheduledRunRecord{}, false, fmt.Errorf("duplicate scheduled trigger fire = %#v, want existing run", duplicateResults)
+	}
+	return finalRun, duplicateResults[0].Record, duplicateResults[0].Created, nil
 }
 
 func waitForScheduledRun(store personal.ScheduledRunStore, id string) personal.ScheduledRunRecord {
