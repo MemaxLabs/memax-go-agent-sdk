@@ -408,6 +408,12 @@ forced termination of only the top-level process immediately.
 evals. The `commandtools/sessiontest` package defines the shared conformance
 contract that OS, scripted, sandbox, and future remote session adapters can run
 without depending on one another's implementation details.
+For hosts that need command-session output to outlive a live manager,
+`CommandTranscriptStore` persists command-session snapshots and ordered output
+chunks separately from `session.Store`. This mirrors the SDK boundary between
+conversation persistence and tool-owned state: a resumed agent can inspect
+durable command output through explicit tools or host UI, but the kernel still
+does not hide background shell state inside the conversation store.
 The `sandbox` package complements these local adapters by adapting host-owned
 sandbox-backed command/session backends into the same commandtool interfaces
 plus hook cleanup, making remote or container-backed execution an adapter

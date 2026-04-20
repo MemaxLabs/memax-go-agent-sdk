@@ -290,8 +290,12 @@ patches, snapshots, restore, reviewable mutations, and sandbox boundaries.
   support exists, including a reference OS-backed managed-session adapter with
   rooted cwd resolution, bounded buffered output, explicit PTY terminal
   geometry, live resize, Unix process-group cleanup for descendants, and
-  session cleanup hooks. A reusable `commandtools/sessiontest` conformance
-  harness now verifies the public lifecycle contract across session adapters.
+  session cleanup hooks. Command transcript persistence now has an initial
+  host-owned `CommandTranscriptStore` seam with a reference in-memory store, so
+  command-session snapshots and ordered output chunks can become durable without
+  coupling tool state to the kernel conversation store. A reusable
+  `commandtools/sessiontest` conformance harness now verifies the public
+  lifecycle contract across session adapters.
 - More isolated execution can stay outside the core loop through adapter seams
   that let hosts wire related sandbox-backed workspace, one-shot command, and
   managed command-session toolkits together.

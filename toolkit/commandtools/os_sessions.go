@@ -666,35 +666,9 @@ func (s *osSessionState) snapshot() CommandSession {
 }
 
 func (s *osSessionState) read(afterSeq, maxChunks, maxBytes int) ReadResult {
-	if maxChunks <= 0 {
-		maxChunks = defaultReadChunks
-	}
-	if maxBytes <= 0 {
-		maxBytes = defaultReadBytes
-	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	session := cloneSession(s.session)
-	var chunks []OutputChunk
-	bytes := 0
-	for _, chunk := range s.output {
-		if chunk.Seq <= afterSeq {
-			continue
-		}
-		if len(chunks) >= maxChunks {
-			break
-		}
-		if bytes > 0 && bytes+len(chunk.Text) > maxBytes {
-			break
-		}
-		chunks = append(chunks, cloneOutputChunk(chunk))
-		bytes += len(chunk.Text)
-	}
-	return ReadResult{
-		Session: session,
-		Chunks:  chunks,
-		NextSeq: session.NextSeq,
-	}
+	return paginateOutputChunks(s.session, s.output, afterSeq, maxChunks, maxBytes)
 }
 
 func (s *osSessionState) writeInput(ctx context.Context, req WriteRequest) (WriteResult, error) {
