@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
@@ -33,7 +34,7 @@ func main() {
 // runExample walks through two personal-assistant invocations over one durable
 // SQLite task ledger. The first run creates deterministic follow-up tasks from
 // recalled context, inbox threads, and schedule events. The second run reopens
-// the SQLite ledger with a fresh database handle, resumes the pending tasks
+// the SQLite ledger with a fresh database handle, lists persisted pending tasks
 // before rediscovery, and updates only the completed follow-up.
 func runExample(ctx context.Context, w io.Writer) error {
 	file, err := os.CreateTemp("", "memax-personal-task-ledger-*.db")
@@ -50,15 +51,6 @@ func runExample(ctx context.Context, w io.Writer) error {
 	modelClient := &taskLedgerModel{}
 	db, taskStore, err := openTaskStore(ctx, dbPath)
 	if err != nil {
-		return err
-	}
-	if _, err := taskStore.Upsert(ctx, tasktools.Task{
-		ID:     "task-1",
-		Title:  "Assemble the week-ahead follow-up ledger",
-		Status: tasktools.StatusInProgress,
-		Notes:  "persist owner-visible follow-ups as durable tasks with deterministic IDs",
-	}); err != nil {
-		_ = db.Close()
 		return err
 	}
 
@@ -239,7 +231,7 @@ type taskLedgerModel struct {
 	turn int
 }
 
-func (m *taskLedgerModel) Stream(_ context.Context, _ model.Request) (model.Stream, error) {
+func (m *taskLedgerModel) Stream(_ context.Context, req model.Request) (model.Stream, error) {
 	m.turn++
 	switch m.turn {
 	case 1:
@@ -307,6 +299,12 @@ func (m *taskLedgerModel) Stream(_ context.Context, _ model.Request) (model.Stre
 			"status": "pending",
 		})), nil
 	case 12:
+		if !requestHasTaskResult(req, "week-2026-04-20-acme-owner", tasktools.StatusPending) {
+			return newStream(model.StreamEvent{
+				Kind: model.StreamText,
+				Text: "No persisted Acme owner follow-up was pending, so the resumed run did not update task state.",
+			}), nil
+		}
 		return newStream(toolUse("complete-task-1", tasktools.UpsertToolName, map[string]any{
 			"id":       "week-2026-04-20-acme-owner",
 			"status":   "completed",
@@ -319,6 +317,19 @@ func (m *taskLedgerModel) Stream(_ context.Context, _ model.Request) (model.Stre
 			Text: "Resumed week-ahead task ledger: Acme owner follow-up is complete; partner council demo slides remain pending.",
 		}), nil
 	}
+}
+
+func requestHasTaskResult(req model.Request, taskID string, status tasktools.Status) bool {
+	needle := "- [" + string(status) + "] " + taskID
+	for _, msg := range req.Messages {
+		if msg.ToolResult == nil || msg.ToolResult.Name != tasktools.ListToolName {
+			continue
+		}
+		if strings.Contains(msg.ToolResult.Content, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func toolUse(id string, name string, input map[string]any) model.StreamEvent {

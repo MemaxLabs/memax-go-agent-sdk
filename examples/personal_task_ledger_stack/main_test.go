@@ -28,12 +28,20 @@ func TestRunExampleShowsDurableTaskLedgerResume(t *testing.T) {
 		"== second run ==",
 		"tool use: list_tasks",
 		"result: Resumed week-ahead task ledger: Acme owner follow-up is complete; partner council demo slides remain pending.",
-		"task: task-1 in_progress Assemble the week-ahead follow-up ledger",
 		"task: week-2026-04-20-acme-owner completed Confirm Acme mitigation owner",
 		"task: week-2026-04-20-demo-slides pending Deliver partner council demo slides",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("example output missing %q:\n%s", want, got)
 		}
+	}
+	firstRun := strings.Index(got, "== first run ==")
+	reopened := strings.Index(got, "reopened sqlite task ledger")
+	secondRun := strings.Index(got, "== second run ==")
+	if firstRun < 0 || reopened < 0 || secondRun < 0 || !(firstRun < reopened && reopened < secondRun) {
+		t.Fatalf("example output has wrong run ordering:\n%s", got)
+	}
+	if count := strings.Count(got, "tool use: upsert_task"); count != 3 {
+		t.Fatalf("upsert_task count = %d, want 3:\n%s", count, got)
 	}
 }
