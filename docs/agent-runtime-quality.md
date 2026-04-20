@@ -384,7 +384,9 @@ verify, ask the user, or stop.
 - Multi-step task updates plan after each tool result.
 - Personal week-ahead planning writes follow-ups into durable task state, a
   later run reloads those tasks through planner context, and completed work is
-  updated without duplicating the ledger.
+  updated without duplicating the ledger. A sibling scenario reopens the
+  SQLite-backed task store before the resume turn so durable task continuity is
+  covered across fresh store instances, not only in-memory stores.
 - Blocked plan asks for user input rather than hallucinating.
 - Delegation happens only for scoped subtasks, and child results can return
   structured task progress.
