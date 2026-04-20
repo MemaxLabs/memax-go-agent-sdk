@@ -261,6 +261,10 @@ run ID, and worker ID labels by default. Those identifiers stay in lifecycle,
 tenant-denial, audit, and run-store records; hosts that need per-tenant or
 per-worker metric slicing should add their own observer or configure backend
 views with an explicit cardinality budget.
+`examples/cloudmanaged_observability_stack` shows this split in a runnable
+fixture: audit records carry ordered tenant-denial and run-state details, while
+metrics expose aggregate counters and duration measurements suitable for
+dashboards.
 
 Personal proactive scheduled runs use the same `run_state_changed` observer
 event when a deterministic occurrence moves through queued, running,

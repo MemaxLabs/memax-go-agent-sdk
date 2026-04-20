@@ -169,10 +169,12 @@ system prompt.
   the default in-process path plus split server/worker modes over a shared
   SQLite run database. Provider-neutral cloudmanaged metrics now cover managed
   run lifecycle, queue/run durations, tenant denials, quota fallback,
-  worker claims, heartbeats, heartbeat errors, and stale failures. Next steps
-  are richer cloudmanaged presets, additional distributed quota backends,
-  richer durable run backends, and fuller remote-execution backends built on
-  top of the same tenant seam.
+  worker claims, heartbeats, heartbeat errors, and stale failures. A runnable
+  `examples/cloudmanaged_observability_stack` fixture now demonstrates audit
+  records and low-cardinality metrics across tenant denial plus the remote
+  worker path. Next steps are richer cloudmanaged presets, additional
+  distributed quota backends, richer durable run backends, and fuller
+  remote-execution backends built on top of the same tenant seam.
 
 ## Phase 7: Opinionated Stacks
 
