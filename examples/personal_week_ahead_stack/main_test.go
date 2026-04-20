@@ -29,10 +29,11 @@ func TestRunExampleShowsWeekAheadPlanningWorkflow(t *testing.T) {
 		"Acme renewal meeting",
 		"Internal launch risk review",
 		"Partner council demo",
-		"result: Week-ahead plan: Conflict first: Monday 14:00 UTC Acme renewal overlaps the internal launch risk review",
+		"result: Week-ahead plan: Conflict first: Monday 13:30-14:30 UTC Acme renewal meeting overlaps the 14:00-14:30 UTC internal launch risk review",
 		"Commitments: send Casey the 14:00 UTC blocker checkpoint",
 		"Wednesday 17:00 UTC",
 		"Thursday 16:00 UTC partner council",
+		"Follow-ups: confirm the mitigation owner with Casey",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("example output missing %q:\n%s", want, got)

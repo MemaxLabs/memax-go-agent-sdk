@@ -659,7 +659,7 @@ func PersonalPresetAssistantWeekAheadPlanning() agenteval.Case {
 		"end":"2026-04-27T00:00:00Z",
 		"limit":5
 	}`
-	finalText := "Week-ahead plan: Conflict first: Monday 14:00 UTC Acme renewal overlaps the internal launch risk review, so protect the customer checkpoint and move or shorten the internal review. Commitments: send Casey the 14:00 UTC blocker checkpoint and deliver Priya's partner council demo slides by Wednesday 17:00 UTC. Prep: use the Q2 launch brief, checkout mitigation owner, pricing review packet, and Acme mitigation summary before Thursday 16:00 UTC partner council."
+	finalText := "Week-ahead plan: Conflict first: Monday 13:30-14:30 UTC Acme renewal meeting overlaps the 14:00-14:30 UTC internal launch risk review, so protect the customer checkpoint and move or shorten the internal review. Commitments: send Casey the 14:00 UTC blocker checkpoint and deliver Priya's partner council demo slides by Wednesday 17:00 UTC. Prep: use the Q2 launch brief, checkout mitigation owner, pricing review packet, and Acme mitigation summary before Thursday 16:00 UTC partner council. Follow-ups: confirm the mitigation owner with Casey and give Priya the final demo-slide package."
 	modelClient := agenteval.NewScriptedModel(
 		[]model.StreamEvent{{
 			Kind: model.StreamToolUse,
@@ -882,11 +882,12 @@ func PersonalPresetAssistantWeekAheadPlanning() agenteval.Case {
 				Check: func(result agenteval.Result) error {
 					final := result.Final
 					for _, want := range []string{
-						"Monday 14:00 UTC Acme renewal overlaps",
+						"Monday 13:30-14:30 UTC Acme renewal meeting overlaps",
 						"send Casey the 14:00 UTC blocker checkpoint",
 						"Wednesday 17:00 UTC",
 						"Thursday 16:00 UTC partner council",
 						"pricing review packet",
+						"Follow-ups: confirm the mitigation owner with Casey",
 					} {
 						if !strings.Contains(final, want) {
 							return fmt.Errorf("final = %q, missing %q", final, want)
