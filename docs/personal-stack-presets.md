@@ -142,9 +142,11 @@ Common sources of confusion:
   records successes, and reschedules handler failures with configurable backoff.
   `WatchScheduledRunNotifications` runs the same drain helper immediately and on
   a ticker for long-running host delivery workers, and the drain result observer
-  option lets hosts emit delivery metrics for successful drain passes. Host
-  channel failures become retryable outbox state; store claim/ack errors return
-  to the worker because the durable state is uncertain.
+  option lets hosts emit delivery metrics for successful drain passes. Hosts
+  can opt into `WithScheduledRunNotificationMaxAttempts` to stop retrying
+  poison notifications and mark them `dead_lettered` for manual recovery. Host
+  channel failures become retryable or terminal outbox state; store claim/ack
+  errors return to the worker because the durable state is uncertain.
   Notification records carry the scheduled prompt plus terminal result or error
   text; host-owned delivery backends should apply their own redaction policy
   before sending them to external channels. The

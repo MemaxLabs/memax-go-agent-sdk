@@ -231,11 +231,18 @@ channel implementation in host code. Hosts can attach
 `WithScheduledRunNotificationDrainResultObserver` when they need per-pass
 delivery metrics for successful drain passes without reimplementing the drain
 loop; store and context errors are surfaced through the drain return value.
+Hosts that set `WithScheduledRunNotificationMaxAttempts` get a DLQ-style
+terminal path: after the failed attempt reaches the configured limit, the drain
+helper marks the record `dead_lettered` through
+`ScheduledRunNotificationDeadLetterStore` instead of scheduling another retry.
+Delivery claims are at-least-once, so a worker crash after claim still consumes
+an attempt before the lease expires; strict handlers should choose a max attempt
+count that leaves room for crash recovery.
 `WatchScheduledRunNotifications` runs the same drain pass immediately and then on
 a ticker until its context is canceled, which gives long-running services a
 reusable delivery worker loop. Handler errors are recorded as retryable delivery
-failures; store claim/ack errors return to the worker and any unacked claimed
-records remain leased until expiry.
+failures or dead-lettered terminal state; store claim/ack errors return to the
+worker and any unacked claimed records remain leased until expiry.
 Expired leases become claimable again, giving hosts an at-least-once delivery
 primitive without hard-coding email, Slack, mobile push, or webhook clients into
 the SDK. Use `stack/personal/sqlitestore` when those outbox records and delivery

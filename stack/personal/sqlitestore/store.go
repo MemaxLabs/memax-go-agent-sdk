@@ -34,6 +34,7 @@ var (
 	_ personal.ScheduledRunStoreWithStaleReconciliation = (*Store)(nil)
 	_ personal.ScheduledRunNotificationStore            = (*Store)(nil)
 	_ personal.ScheduledRunNotificationDeliveryStore    = (*Store)(nil)
+	_ personal.ScheduledRunNotificationDeadLetterStore  = (*Store)(nil)
 )
 
 // New initializes and returns a SQLite-backed scheduled-run store.
@@ -561,6 +562,54 @@ func (s *Store) MarkScheduledRunNotificationFailed(ctx context.Context, req pers
 	return record, nil
 }
 
+// MarkScheduledRunNotificationDeadLettered implements
+// personal.ScheduledRunNotificationDeadLetterStore.
+func (s *Store) MarkScheduledRunNotificationDeadLettered(ctx context.Context, req personal.MarkScheduledRunNotificationDeadLetteredRequest) (personal.ScheduledRunNotificationRecord, error) {
+	if err := contextError(ctx); err != nil {
+		return personal.ScheduledRunNotificationRecord{}, err
+	}
+	if s == nil {
+		return personal.ScheduledRunNotificationRecord{}, fmt.Errorf("sqlite scheduled run notification store is nil")
+	}
+	update, err := normalizeNotificationDeadLettered(req)
+	if err != nil {
+		return personal.ScheduledRunNotificationRecord{}, err
+	}
+	var record personal.ScheduledRunNotificationRecord
+	err = s.withImmediateTx(ctx, func(conn *sql.Conn) error {
+		current, err := s.getScheduledRunNotificationConn(ctx, conn, update.id)
+		if err != nil {
+			return err
+		}
+		if err := ensureNotificationDeliveryWorker(current, update.workerID); err != nil {
+			return err
+		}
+		if _, err := conn.ExecContext(ctx, `
+			UPDATE memax_personal_scheduled_run_notifications
+			SET delivery_status = ?,
+				delivery_worker_id = '',
+				delivery_error = ?,
+				deliver_after_unix_ms = ?,
+				delivery_updated_at_unix_ms = ?
+			WHERE id = ?
+			`,
+			string(personal.ScheduledRunNotificationDeliveryDeadLettered),
+			update.errorText,
+			unixMillis(update.deadLetteredAt),
+			unixMillis(update.deadLetteredAt),
+			update.id,
+		); err != nil {
+			return fmt.Errorf("mark sqlite scheduled run notification dead-lettered %s: %w", update.id, err)
+		}
+		record, err = s.getScheduledRunNotificationConn(ctx, conn, update.id)
+		return err
+	})
+	if err != nil {
+		return personal.ScheduledRunNotificationRecord{}, err
+	}
+	return record, nil
+}
+
 func (s *Store) init(ctx context.Context) error {
 	if err := contextError(ctx); err != nil {
 		return err
@@ -935,6 +984,35 @@ func normalizeNotificationFailed(req personal.MarkScheduledRunNotificationFailed
 	}
 	if update.failedAt.IsZero() {
 		update.failedAt = time.Now().UTC()
+	}
+	return update, nil
+}
+
+type normalizedNotificationDeadLettered struct {
+	id             string
+	workerID       string
+	errorText      string
+	deadLetteredAt time.Time
+}
+
+func normalizeNotificationDeadLettered(req personal.MarkScheduledRunNotificationDeadLetteredRequest) (normalizedNotificationDeadLettered, error) {
+	update := normalizedNotificationDeadLettered{
+		id:             strings.TrimSpace(req.ID),
+		workerID:       strings.TrimSpace(req.WorkerID),
+		errorText:      strings.TrimSpace(req.Error),
+		deadLetteredAt: req.DeadLetteredAt.UTC(),
+	}
+	if update.id == "" {
+		return normalizedNotificationDeadLettered{}, fmt.Errorf("scheduled run notification id is required")
+	}
+	if update.workerID == "" {
+		return normalizedNotificationDeadLettered{}, fmt.Errorf("scheduled run notification delivery worker id is required")
+	}
+	if update.errorText == "" {
+		return normalizedNotificationDeadLettered{}, fmt.Errorf("scheduled run notification delivery error is required")
+	}
+	if update.deadLetteredAt.IsZero() {
+		update.deadLetteredAt = time.Now().UTC()
 	}
 	return update, nil
 }

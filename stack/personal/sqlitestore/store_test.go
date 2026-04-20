@@ -508,6 +508,71 @@ func TestStoreScheduledRunNotificationDeliveryLifecycle(t *testing.T) {
 	}
 }
 
+func TestStoreScheduledRunNotificationDeadLetterLifecycle(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	now := time.Date(2026, 4, 19, 7, 10, 0, 0, time.UTC)
+	req := scheduledRunNotificationRequest("daily-brief:2026-04-19T07:00:00Z", personal.ScheduledRunSucceeded, 0)
+	if _, _, err := store.CreateScheduledRunNotification(context.Background(), req); err != nil {
+		t.Fatalf("CreateScheduledRunNotification() error = %v", err)
+	}
+	claimed, err := store.ClaimScheduledRunNotifications(context.Background(), personal.ClaimScheduledRunNotificationsRequest{
+		WorkerID:      "worker-1",
+		Limit:         1,
+		Now:           now,
+		LeaseDuration: time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("ClaimScheduledRunNotifications() error = %v", err)
+	}
+	if len(claimed) != 1 {
+		t.Fatalf("claimed = %#v, want one notification", claimed)
+	}
+	if _, err := store.MarkScheduledRunNotificationDeadLettered(context.Background(), personal.MarkScheduledRunNotificationDeadLetteredRequest{
+		ID:             claimed[0].ID,
+		WorkerID:       "other-worker",
+		Error:          "push gateway unavailable",
+		DeadLetteredAt: now.Add(10 * time.Second),
+	}); !errors.Is(err, personal.ErrScheduledRunNotificationWorkerMismatch) {
+		t.Fatalf("MarkScheduledRunNotificationDeadLettered(wrong worker) error = %v, want worker mismatch", err)
+	}
+	deadLetteredAt := now.Add(30 * time.Second)
+	deadLettered, err := store.MarkScheduledRunNotificationDeadLettered(context.Background(), personal.MarkScheduledRunNotificationDeadLetteredRequest{
+		ID:             claimed[0].ID,
+		WorkerID:       "worker-1",
+		Error:          "push gateway unavailable",
+		DeadLetteredAt: deadLetteredAt,
+	})
+	if err != nil {
+		t.Fatalf("MarkScheduledRunNotificationDeadLettered() error = %v", err)
+	}
+	if deadLettered.DeliveryStatus != personal.ScheduledRunNotificationDeliveryDeadLettered || deadLettered.DeliveryError != "push gateway unavailable" || !deadLettered.DeliveryUpdatedAt.Equal(deadLetteredAt) || !deadLettered.DeliverAfter.Equal(deadLetteredAt) {
+		t.Fatalf("deadLettered = %#v, want terminal dead-letter state", deadLettered)
+	}
+
+	reclaimed, err := store.ClaimScheduledRunNotifications(context.Background(), personal.ClaimScheduledRunNotificationsRequest{
+		WorkerID: "worker-2",
+		Limit:    10,
+		Now:      deadLetteredAt.Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("ClaimScheduledRunNotifications(dead-lettered) error = %v", err)
+	}
+	if len(reclaimed) != 0 {
+		t.Fatalf("reclaimed = %#v, want dead-lettered notification hidden from claims", reclaimed)
+	}
+	list, err := store.ListScheduledRunNotifications(context.Background(), personal.ScheduledRunNotificationFilter{
+		DeliveryStatus: personal.ScheduledRunNotificationDeliveryDeadLettered,
+	})
+	if err != nil {
+		t.Fatalf("ListScheduledRunNotifications(dead-lettered) error = %v", err)
+	}
+	if len(list) != 1 || list[0].ID != claimed[0].ID {
+		t.Fatalf("dead-letter list = %#v, want terminal notification", list)
+	}
+}
+
 func TestStoreClaimScheduledRunNotificationIsAtomic(t *testing.T) {
 	t.Parallel()
 

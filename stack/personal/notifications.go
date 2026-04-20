@@ -44,6 +44,10 @@ var ErrScheduledRunNotificationDeliveryWorkerIDRequired = errors.New("personal s
 // notification delivery watching needs a positive interval.
 var ErrScheduledRunNotificationWatchIntervalRequired = errors.New("personal stack: scheduled run notification watch interval must be positive")
 
+// ErrScheduledRunNotificationDeadLetterStoreRequired reports that max-attempt
+// delivery draining needs a store that supports dead-letter acknowledgements.
+var ErrScheduledRunNotificationDeadLetterStoreRequired = errors.New("personal stack: scheduled run notification store must implement ScheduledRunNotificationDeadLetterStore")
+
 // DefaultScheduledRunNotificationLeaseDuration is the default delivery lease
 // duration used when a claim request does not specify one.
 const DefaultScheduledRunNotificationLeaseDuration = 5 * time.Minute
@@ -126,6 +130,9 @@ const (
 	// ScheduledRunNotificationDeliveryFailed means the last delivery attempt
 	// failed and the notification is eligible for retry at DeliverAfter.
 	ScheduledRunNotificationDeliveryFailed ScheduledRunNotificationDeliveryStatus = "failed"
+	// ScheduledRunNotificationDeliveryDeadLettered means the notification
+	// exhausted its configured delivery attempts and requires host intervention.
+	ScheduledRunNotificationDeliveryDeadLettered ScheduledRunNotificationDeliveryStatus = "dead_lettered"
 )
 
 // ClaimScheduledRunNotificationsRequest claims deliverable notification outbox
@@ -162,6 +169,17 @@ type MarkScheduledRunNotificationFailedRequest struct {
 	FailedAt time.Time
 }
 
+// MarkScheduledRunNotificationDeadLetteredRequest marks a claimed notification
+// as permanently failed after exhausting the host-configured retry policy.
+// DeadLetteredAt records when the delivery attempt became terminal and defaults
+// to the current time.
+type MarkScheduledRunNotificationDeadLetteredRequest struct {
+	ID             string
+	WorkerID       string
+	Error          string
+	DeadLetteredAt time.Time
+}
+
 // ScheduledRunNotificationStore persists host-owned scheduled-run notification
 // outbox records. Implementations should treat CreateScheduledRunNotification
 // as idempotent by ID, returning created=false with the existing record when a
@@ -183,6 +201,15 @@ type ScheduledRunNotificationDeliveryStore interface {
 	ClaimScheduledRunNotifications(context.Context, ClaimScheduledRunNotificationsRequest) ([]ScheduledRunNotificationRecord, error)
 	MarkScheduledRunNotificationDelivered(context.Context, MarkScheduledRunNotificationDeliveredRequest) (ScheduledRunNotificationRecord, error)
 	MarkScheduledRunNotificationFailed(context.Context, MarkScheduledRunNotificationFailedRequest) (ScheduledRunNotificationRecord, error)
+}
+
+// ScheduledRunNotificationDeadLetterStore is the optional delivery extension
+// for hosts that want the SDK drain loop to stop retrying poison
+// notifications after a configured attempt limit. It is separate from
+// ScheduledRunNotificationDeliveryStore so existing retry-only stores remain
+// source-compatible.
+type ScheduledRunNotificationDeadLetterStore interface {
+	MarkScheduledRunNotificationDeadLettered(context.Context, MarkScheduledRunNotificationDeadLetteredRequest) (ScheduledRunNotificationRecord, error)
 }
 
 // ScheduledRunNotificationDeliveryHandler delivers one claimed scheduled-run
@@ -227,9 +254,10 @@ type ScheduledRunNotificationDrainFailure struct {
 // when the store successfully records the retry state. The returned error is
 // reserved for claim/ack/store failures or invalid configuration.
 type ScheduledRunNotificationDrainResult struct {
-	Claimed   []ScheduledRunNotificationRecord
-	Delivered []ScheduledRunNotificationRecord
-	Failed    []ScheduledRunNotificationDrainFailure
+	Claimed      []ScheduledRunNotificationRecord
+	Delivered    []ScheduledRunNotificationRecord
+	Failed       []ScheduledRunNotificationDrainFailure
+	DeadLettered []ScheduledRunNotificationDrainFailure
 }
 
 type scheduledRunNotificationDrainConfig struct {
@@ -238,6 +266,7 @@ type scheduledRunNotificationDrainConfig struct {
 	now           time.Time
 	retryBackoff  ScheduledRunNotificationRetryBackoff
 	onResult      func(context.Context, ScheduledRunNotificationDrainResult)
+	maxAttempts   int
 }
 
 // ScheduledRunNotificationDrainOption configures one notification delivery
@@ -276,6 +305,21 @@ func WithScheduledRunNotificationDrainNow(now time.Time) ScheduledRunNotificatio
 func WithScheduledRunNotificationRetryBackoff(backoff ScheduledRunNotificationRetryBackoff) ScheduledRunNotificationDrainOption {
 	return func(config *scheduledRunNotificationDrainConfig) {
 		config.retryBackoff = backoff
+	}
+}
+
+// WithScheduledRunNotificationMaxAttempts sets a terminal delivery-attempt
+// limit. Values <= 0 preserve the default unlimited retry behavior.
+// DeliveryAttempts includes the currently claimed attempt, so maxAttempts=1
+// dead-letters a notification on the first failed handler call. Claiming work
+// is at-least-once, so a crash after claim still consumes an attempt before the
+// lease expires. When the current failed attempt reaches maxAttempts,
+// DrainScheduledRunNotifications marks the record dead_lettered instead of
+// scheduling another retry. The store must also implement
+// ScheduledRunNotificationDeadLetterStore.
+func WithScheduledRunNotificationMaxAttempts(maxAttempts int) ScheduledRunNotificationDrainOption {
+	return func(config *scheduledRunNotificationDrainConfig) {
+		config.maxAttempts = maxAttempts
 	}
 }
 
@@ -348,6 +392,14 @@ func DrainScheduledRunNotifications(ctx context.Context, store ScheduledRunNotif
 	if config.retryBackoff == nil {
 		config.retryBackoff = DefaultScheduledRunNotificationRetryBackoff
 	}
+	var deadLetterStore ScheduledRunNotificationDeadLetterStore
+	if config.maxAttempts > 0 {
+		var ok bool
+		deadLetterStore, ok = store.(ScheduledRunNotificationDeadLetterStore)
+		if !ok {
+			return ScheduledRunNotificationDrainResult{}, ErrScheduledRunNotificationDeadLetterStoreRequired
+		}
+	}
 
 	claimNow := scheduledRunNotificationDrainNow(config)
 	claimed, err := store.ClaimScheduledRunNotifications(ctx, ClaimScheduledRunNotificationsRequest{
@@ -368,6 +420,22 @@ func DrainScheduledRunNotifications(ctx context.Context, store ScheduledRunNotif
 		}
 		if err := handler.DeliverScheduledRunNotification(ctx, record); err != nil {
 			failedAt := scheduledRunNotificationDrainNow(config)
+			if config.maxAttempts > 0 && record.DeliveryAttempts >= config.maxAttempts {
+				deadLettered, markErr := deadLetterStore.MarkScheduledRunNotificationDeadLettered(ctx, MarkScheduledRunNotificationDeadLetteredRequest{
+					ID:             record.ID,
+					WorkerID:       workerID,
+					Error:          scheduledRunNotificationDeliveryErrorText(err),
+					DeadLetteredAt: failedAt,
+				})
+				if markErr != nil {
+					return result, fmt.Errorf("mark scheduled run notification %s dead-lettered: %w", record.ID, markErr)
+				}
+				result.DeadLettered = append(result.DeadLettered, ScheduledRunNotificationDrainFailure{
+					Record: deadLettered,
+					Err:    err,
+				})
+				continue
+			}
 			retryAt := config.retryBackoff(record, err, failedAt)
 			if retryAt.IsZero() {
 				retryAt = failedAt
@@ -450,6 +518,7 @@ type MemoryScheduledRunNotificationStore struct {
 }
 
 var _ ScheduledRunNotificationDeliveryStore = (*MemoryScheduledRunNotificationStore)(nil)
+var _ ScheduledRunNotificationDeadLetterStore = (*MemoryScheduledRunNotificationStore)(nil)
 
 // NewMemoryScheduledRunNotificationStore constructs a reference in-memory
 // scheduled-run notification outbox.
@@ -626,6 +695,37 @@ func (s *MemoryScheduledRunNotificationStore) MarkScheduledRunNotificationFailed
 	record.DeliveryError = update.errorText
 	record.DeliverAfter = update.retryAt
 	record.DeliveryUpdatedAt = update.failedAt
+	s.byID[record.ID] = record
+	return cloneScheduledRunNotification(record), nil
+}
+
+// MarkScheduledRunNotificationDeadLettered implements
+// ScheduledRunNotificationDeadLetterStore.
+func (s *MemoryScheduledRunNotificationStore) MarkScheduledRunNotificationDeadLettered(ctx context.Context, req MarkScheduledRunNotificationDeadLetteredRequest) (ScheduledRunNotificationRecord, error) {
+	if s == nil {
+		return ScheduledRunNotificationRecord{}, fmt.Errorf("memory scheduled run notification store is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return ScheduledRunNotificationRecord{}, err
+	}
+	update, err := req.normalize()
+	if err != nil {
+		return ScheduledRunNotificationRecord{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record, ok := s.byID[update.id]
+	if !ok {
+		return ScheduledRunNotificationRecord{}, ErrScheduledRunNotificationNotFound
+	}
+	if err := record.ensureDeliveryWorker(update.workerID); err != nil {
+		return ScheduledRunNotificationRecord{}, err
+	}
+	record.DeliveryStatus = ScheduledRunNotificationDeliveryDeadLettered
+	record.DeliveryWorkerID = ""
+	record.DeliveryError = update.errorText
+	record.DeliverAfter = update.deadLetteredAt
+	record.DeliveryUpdatedAt = update.deadLetteredAt
 	s.byID[record.ID] = record
 	return cloneScheduledRunNotification(record), nil
 }
@@ -874,6 +974,35 @@ func (req MarkScheduledRunNotificationFailedRequest) normalize() (normalizedSche
 	return update, nil
 }
 
+type normalizedScheduledRunNotificationDeadLettered struct {
+	id             string
+	workerID       string
+	errorText      string
+	deadLetteredAt time.Time
+}
+
+func (req MarkScheduledRunNotificationDeadLetteredRequest) normalize() (normalizedScheduledRunNotificationDeadLettered, error) {
+	update := normalizedScheduledRunNotificationDeadLettered{
+		id:             strings.TrimSpace(req.ID),
+		workerID:       strings.TrimSpace(req.WorkerID),
+		errorText:      strings.TrimSpace(req.Error),
+		deadLetteredAt: req.DeadLetteredAt.UTC(),
+	}
+	if update.id == "" {
+		return normalizedScheduledRunNotificationDeadLettered{}, fmt.Errorf("scheduled run notification id is required")
+	}
+	if update.workerID == "" {
+		return normalizedScheduledRunNotificationDeadLettered{}, fmt.Errorf("scheduled run notification delivery worker id is required")
+	}
+	if update.errorText == "" {
+		return normalizedScheduledRunNotificationDeadLettered{}, fmt.Errorf("scheduled run notification delivery error is required")
+	}
+	if update.deadLetteredAt.IsZero() {
+		update.deadLetteredAt = time.Now().UTC()
+	}
+	return update, nil
+}
+
 func scheduledRunNotificationDrainNow(config scheduledRunNotificationDrainConfig) time.Time {
 	if !config.now.IsZero() {
 		return config.now
@@ -903,7 +1032,8 @@ func scheduledRunNotificationDeliveryStatusKnown(status ScheduledRunNotification
 	case ScheduledRunNotificationDeliveryPending,
 		ScheduledRunNotificationDeliveryDelivering,
 		ScheduledRunNotificationDeliveryDelivered,
-		ScheduledRunNotificationDeliveryFailed:
+		ScheduledRunNotificationDeliveryFailed,
+		ScheduledRunNotificationDeliveryDeadLettered:
 		return true
 	default:
 		return false
@@ -915,6 +1045,9 @@ func (record ScheduledRunNotificationRecord) deliveryClaimableAt(now time.Time) 
 		return false
 	}
 	if record.DeliveryStatus == ScheduledRunNotificationDeliveryDelivered {
+		return false
+	}
+	if record.DeliveryStatus == ScheduledRunNotificationDeliveryDeadLettered {
 		return false
 	}
 	return record.DeliverAfter.IsZero() || !record.DeliverAfter.After(now)
@@ -942,9 +1075,10 @@ func cloneScheduledRunNotification(record ScheduledRunNotificationRecord) Schedu
 
 func cloneScheduledRunNotificationDrainResult(result ScheduledRunNotificationDrainResult) ScheduledRunNotificationDrainResult {
 	cloned := ScheduledRunNotificationDrainResult{
-		Claimed:   append([]ScheduledRunNotificationRecord(nil), result.Claimed...),
-		Delivered: append([]ScheduledRunNotificationRecord(nil), result.Delivered...),
-		Failed:    append([]ScheduledRunNotificationDrainFailure(nil), result.Failed...),
+		Claimed:      append([]ScheduledRunNotificationRecord(nil), result.Claimed...),
+		Delivered:    append([]ScheduledRunNotificationRecord(nil), result.Delivered...),
+		Failed:       append([]ScheduledRunNotificationDrainFailure(nil), result.Failed...),
+		DeadLettered: append([]ScheduledRunNotificationDrainFailure(nil), result.DeadLettered...),
 	}
 	return cloned
 }

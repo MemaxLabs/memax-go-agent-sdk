@@ -342,6 +342,99 @@ func TestDrainScheduledRunNotificationsRecordsRetryableHandlerFailure(t *testing
 	}
 }
 
+func TestDrainScheduledRunNotificationsDeadLettersAfterMaxAttempts(t *testing.T) {
+	t.Parallel()
+
+	store := NewMemoryScheduledRunNotificationStore()
+	req := scheduledRunNotificationRequestForTest("daily-brief:2026-04-19T07:00:00Z", ScheduledRunSucceeded, 0)
+	if _, _, err := store.CreateScheduledRunNotification(context.Background(), req); err != nil {
+		t.Fatalf("CreateScheduledRunNotification() error = %v", err)
+	}
+	now := time.Date(2026, 4, 19, 7, 10, 0, 0, time.UTC)
+	pushErr := errors.New("push gateway unavailable")
+	var observed ScheduledRunNotificationDrainResult
+	result, err := DrainScheduledRunNotifications(
+		context.Background(),
+		store,
+		"worker-1",
+		ScheduledRunNotificationDeliveryHandlerFunc(func(context.Context, ScheduledRunNotificationRecord) error {
+			return pushErr
+		}),
+		WithScheduledRunNotificationDrainNow(now),
+		WithScheduledRunNotificationMaxAttempts(1),
+		WithScheduledRunNotificationDrainResultObserver(func(_ context.Context, result ScheduledRunNotificationDrainResult) {
+			observed = result
+		}),
+	)
+	if err != nil {
+		t.Fatalf("DrainScheduledRunNotifications() error = %v", err)
+	}
+	if len(result.Claimed) != 1 || len(result.Delivered) != 0 || len(result.Failed) != 0 || len(result.DeadLettered) != 1 {
+		t.Fatalf("DrainScheduledRunNotifications() = %#v, want one dead-lettered failure", result)
+	}
+	if !errors.Is(result.DeadLettered[0].Err, pushErr) {
+		t.Fatalf("dead-letter error = %v, want push error", result.DeadLettered[0].Err)
+	}
+	if len(observed.DeadLettered) != 1 || !errors.Is(observed.DeadLettered[0].Err, pushErr) {
+		t.Fatalf("observed dead-lettered result = %#v, want dead-lettered failure", observed)
+	}
+	deadLettered := result.DeadLettered[0].Record
+	if deadLettered.DeliveryStatus != ScheduledRunNotificationDeliveryDeadLettered || deadLettered.DeliveryError != pushErr.Error() || deadLettered.DeliveryAttempts != 1 || !deadLettered.DeliveryUpdatedAt.Equal(now) {
+		t.Fatalf("deadLettered = %#v, want terminal dead-letter state", deadLettered)
+	}
+
+	later, err := DrainScheduledRunNotifications(
+		context.Background(),
+		store,
+		"worker-2",
+		ScheduledRunNotificationDeliveryHandlerFunc(func(context.Context, ScheduledRunNotificationRecord) error {
+			t.Fatalf("handler should not run for dead-lettered notification")
+			return nil
+		}),
+		WithScheduledRunNotificationDrainNow(now.Add(time.Hour)),
+		WithScheduledRunNotificationMaxAttempts(1),
+	)
+	if err != nil {
+		t.Fatalf("DrainScheduledRunNotifications(later) error = %v", err)
+	}
+	if len(later.Claimed) != 0 || len(later.Delivered) != 0 || len(later.Failed) != 0 || len(later.DeadLettered) != 0 {
+		t.Fatalf("later drain = %#v, want dead-lettered notification hidden from claims", later)
+	}
+}
+
+func TestDrainScheduledRunNotificationsMaxAttemptsRequiresDeadLetterStore(t *testing.T) {
+	t.Parallel()
+
+	memory := NewMemoryScheduledRunNotificationStore()
+	req := scheduledRunNotificationRequestForTest("daily-brief:2026-04-19T07:00:00Z", ScheduledRunSucceeded, 0)
+	if _, _, err := memory.CreateScheduledRunNotification(context.Background(), req); err != nil {
+		t.Fatalf("CreateScheduledRunNotification() error = %v", err)
+	}
+	store := retryOnlyScheduledRunNotificationStore{store: memory}
+	_, err := DrainScheduledRunNotifications(
+		context.Background(),
+		store,
+		"worker-1",
+		ScheduledRunNotificationDeliveryHandlerFunc(func(context.Context, ScheduledRunNotificationRecord) error {
+			return errors.New("push gateway unavailable")
+		}),
+		WithScheduledRunNotificationMaxAttempts(1),
+	)
+	if !errors.Is(err, ErrScheduledRunNotificationDeadLetterStoreRequired) {
+		t.Fatalf("DrainScheduledRunNotifications(max attempts without dead-letter store) error = %v, want ErrScheduledRunNotificationDeadLetterStoreRequired", err)
+	}
+	records, err := memory.ListScheduledRunNotifications(context.Background(), ScheduledRunNotificationFilter{})
+	if err != nil {
+		t.Fatalf("ListScheduledRunNotifications() error = %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("stored notifications = %d, want 1", len(records))
+	}
+	if records[0].DeliveryStatus != ScheduledRunNotificationDeliveryPending || records[0].DeliveryAttempts != 0 {
+		t.Fatalf("stored notification after config error = %#v, want unclaimed pending record", records[0])
+	}
+}
+
 func TestDrainScheduledRunNotificationsHandlesMixedBatch(t *testing.T) {
 	t.Parallel()
 
@@ -716,6 +809,22 @@ func (s failingScheduledRunNotificationStore) CreateScheduledRunNotification(con
 
 func (s failingScheduledRunNotificationStore) ListScheduledRunNotifications(context.Context, ScheduledRunNotificationFilter) ([]ScheduledRunNotificationRecord, error) {
 	return nil, s.err
+}
+
+type retryOnlyScheduledRunNotificationStore struct {
+	store *MemoryScheduledRunNotificationStore
+}
+
+func (s retryOnlyScheduledRunNotificationStore) ClaimScheduledRunNotifications(ctx context.Context, req ClaimScheduledRunNotificationsRequest) ([]ScheduledRunNotificationRecord, error) {
+	return s.store.ClaimScheduledRunNotifications(ctx, req)
+}
+
+func (s retryOnlyScheduledRunNotificationStore) MarkScheduledRunNotificationDelivered(ctx context.Context, req MarkScheduledRunNotificationDeliveredRequest) (ScheduledRunNotificationRecord, error) {
+	return s.store.MarkScheduledRunNotificationDelivered(ctx, req)
+}
+
+func (s retryOnlyScheduledRunNotificationStore) MarkScheduledRunNotificationFailed(ctx context.Context, req MarkScheduledRunNotificationFailedRequest) (ScheduledRunNotificationRecord, error) {
+	return s.store.MarkScheduledRunNotificationFailed(ctx, req)
 }
 
 func scheduledRunEvent(status ScheduledRunStatus, result string) memaxagent.Event {

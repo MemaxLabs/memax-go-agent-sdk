@@ -221,9 +221,11 @@ system prompt.
   personal SQLite store now persists both scheduled runs and notification
   records for restart-safe lookback. Notification stores can opt in to
   `ScheduledRunNotificationDeliveryStore` for at-least-once claim/ack delivery
-  with retry times and expired-lease reclaim. Next steps are host delivery
-  adapters for external personal systems plus more adversarial preset suites
-  for privacy-sensitive and long-horizon personal workflows.
+  with retry times and expired-lease reclaim, and to the dead-letter extension
+  for max-attempt terminal state when poison notifications need manual
+  recovery. Next steps are host delivery adapters for external personal systems
+  plus more adversarial preset suites for privacy-sensitive and long-horizon
+  personal workflows.
 - Add `stack/cloudmanaged` for multi-tenant, server-embedded, remote-execution
   products with durable jobs, tenancy-aware policy, quotas, audit hooks, and
   managed-agent DX.
