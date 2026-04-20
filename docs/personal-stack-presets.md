@@ -116,4 +116,5 @@ Common sources of confusion:
 - attaching `Tasks` gives personal workflows a durable task ledger. The
   planner reloads task state before every model request, so follow-ups created
   in one run through `upsert_task` can be visible to a later run before the
-  model calls `list_tasks`.
+  model calls `list_tasks`. Use `toolkit/tasktools/sqlitestore` when that
+  ledger needs to survive process restarts.

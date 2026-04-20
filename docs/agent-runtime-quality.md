@@ -361,7 +361,8 @@ retrieval, usage, and review infrastructure.
 **Current state:** planner policies, task-derived plans, plan-visible
 verification hints, scoped subagent plan handoff, opt-in progress updates from
 verification or subagent results, standard task-result metadata, and
-eval-backed personal task-ledger continuity across two runs exist. Initial
+durable SQLite-backed task storage exist. Eval-backed personal task-ledger
+continuity across two runs exists. Initial
 hook-based agent policy presets exist for checkpoint-before-patch recovery and
 rollback guidance after failed verification, a verify-before-final gate for
 workspace mutations, and explicit host approval tools/policies for sensitive

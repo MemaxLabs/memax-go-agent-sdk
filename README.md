@@ -820,6 +820,11 @@ events, err := memaxagent.Query(ctx, "Continue the review.", memaxagent.Options{
 })
 ```
 
+Use `toolkit/tasktools/sqlitestore` when the same task ledger should survive
+process restarts or be shared by multiple runs. It preserves the in-memory
+store's partial-update and generated-ID semantics while serializing writes
+through SQLite transactions.
+
 Verification can also feed task progress when the host opts in. Wrap a
 `verifytools.Verifier` with `tasktools.NewVerificationProgressVerifier` and ask
 the model to include `metadata.task_id` in the verification request. Passing
