@@ -28,6 +28,12 @@ func TestRunExampleShowsNotificationDeliveryRetry(t *testing.T) {
 		"delivery sent to host channel: delivery-check -> Scheduled delivery check complete: the owner update is ready for notification.",
 		"delivered: delivery-check:2026-04-20T09:00:00Z:succeeded status=delivered attempts=2",
 		"final delivered notifications: 1",
+		"metric counter: memax.personal.notification.delivery.events=1 delivery_status=delivered event_kind=scheduled_run_notification_delivered scheduled_run_status=succeeded trigger_name=delivery-check",
+		"metric counter: memax.personal.notification.delivery.events=1 delivery_status=failed event_kind=scheduled_run_notification_failed scheduled_run_status=succeeded trigger_name=delivery-check",
+		"metric record: memax.personal.notification.delivery.attempts=2 delivery_status=delivered event_kind=scheduled_run_notification_delivered scheduled_run_status=succeeded trigger_name=delivery-check",
+		"metric record: memax.personal.notification.outbox.delivery_attempts=2 example=notification_delivery",
+		"metric record: memax.personal.notification.outbox.oldest_undelivered_age_ms=0 example=notification_delivery",
+		"metric record: memax.personal.notification.outbox.total=1 example=notification_delivery",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("example output missing %q:\n%s", want, got)
@@ -42,6 +48,7 @@ func TestRunExampleShowsNotificationDeliveryRetry(t *testing.T) {
 		"claim 2:",
 		"delivery sent to host channel:",
 		"delivered:",
+		"metric counter:",
 	)
 }
 

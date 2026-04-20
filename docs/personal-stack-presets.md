@@ -174,7 +174,8 @@ Common sources of confusion:
   text; host-owned delivery backends should apply their own redaction policy
   before sending them to external channels. The
   `personal_notification_delivery_stack` example demonstrates this durable
-  outbox with a transient channel failure, delayed retry, and successful ack.
+  outbox with a transient channel failure, delayed retry, successful ack, and
+  provider-neutral notification metrics.
   The `personal_webhook_notification_stack` example demonstrates the signed
   webhook variant with an inline HTTP receiver, idempotency headers, signature
   verification, and a delivered outbox ack.

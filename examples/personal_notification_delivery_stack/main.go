@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"sort"
 	"sync"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/stack/personal"
 	personalsqlitestore "github.com/MemaxLabs/memax-go-agent-sdk/stack/personal/sqlitestore"
+	"github.com/MemaxLabs/memax-go-agent-sdk/telemetry"
 	_ "modernc.org/sqlite"
 )
 
@@ -49,8 +51,12 @@ func runExample(ctx context.Context, w io.Writer) error {
 		events = append(events, event)
 		mu.Unlock()
 	})
+	meter := &exampleMetricMeter{}
+	metrics := personal.NewScheduledRunNotificationMetrics(meter)
 
-	runCtx := memaxagent.WithEventObserver(memaxagent.WithEventObserver(ctx, capture), notifier)
+	runCtx := memaxagent.WithEventObserver(ctx, capture)
+	runCtx = memaxagent.WithEventObserver(runCtx, notifier)
+	runCtx = memaxagent.WithEventObserver(runCtx, metrics)
 	results, err := stack.FireScheduledTriggers(runCtx, store, now, trigger)
 	if err != nil {
 		return err
@@ -87,12 +93,13 @@ func runExample(ctx context.Context, w io.Writer) error {
 	fmt.Fprintf(w, "notification recorded: %s run=%s delivery=%s result=%q\n", notification.ID, notification.RunID, notification.DeliveryStatus, notification.Result)
 
 	channel := &flakyNotificationChannel{}
+	deliveryCtx := memaxagent.WithEventObserver(ctx, metrics)
 	// Scheduled occurrences use deterministic timestamps; delivery uses the
 	// outbox record's own durable clock because notifications are created from
 	// accepted lifecycle transitions.
 	deliveryNow := notification.DeliverAfter
 	firstResult, err := personal.DrainScheduledRunNotifications(
-		ctx,
+		deliveryCtx,
 		store,
 		notificationWorkerID,
 		personal.ScheduledRunNotificationDeliveryHandlerFunc(func(_ context.Context, record personal.ScheduledRunNotificationRecord) error {
@@ -115,6 +122,8 @@ func runExample(ctx context.Context, w io.Writer) error {
 	fmt.Fprintf(w, "claim 1: %s attempts=%d status=%s\n", firstClaim.ID, firstClaim.DeliveryAttempts, firstClaim.DeliveryStatus)
 	fmt.Fprintf(w, "delivery failed: %s retry_after=2m status=%s\n", firstFailure.DeliveryError, firstFailure.DeliveryStatus)
 
+	// This direct empty-claim probe intentionally skips deliveryCtx because no
+	// notification delivery transition should be emitted.
 	notYet, err := store.ClaimScheduledRunNotifications(ctx, personal.ClaimScheduledRunNotificationsRequest{
 		WorkerID:      notificationWorkerID,
 		Limit:         1,
@@ -127,7 +136,7 @@ func runExample(ctx context.Context, w io.Writer) error {
 	fmt.Fprintf(w, "claim before retry: %d\n", len(notYet))
 
 	secondResult, err := personal.DrainScheduledRunNotifications(
-		ctx,
+		deliveryCtx,
 		store,
 		notificationWorkerID,
 		personal.ScheduledRunNotificationDeliveryHandlerFunc(func(_ context.Context, record personal.ScheduledRunNotificationRecord) error {
@@ -155,6 +164,14 @@ func runExample(ctx context.Context, w io.Writer) error {
 		return err
 	}
 	fmt.Fprintf(w, "final delivered notifications: %d\n", len(deliveredNotifications))
+	stats, err := personal.GetScheduledRunNotificationStats(ctx, store, deliveryNow.Add(2*time.Minute))
+	if err != nil {
+		return err
+	}
+	personal.RecordScheduledRunNotificationStats(ctx, meter, stats, telemetry.String("example", "notification_delivery"))
+	for _, line := range meter.Lines() {
+		fmt.Fprintf(w, "%s\n", line)
+	}
 	return nil
 }
 
@@ -285,6 +302,90 @@ func (c *flakyNotificationChannel) Last() string {
 		return ""
 	}
 	return c.sent[len(c.sent)-1]
+}
+
+type exampleMetric struct {
+	kind  string
+	name  string
+	value string
+	attrs []telemetry.Attribute
+	seq   int
+}
+
+// exampleMetricMeter records raw metric deltas and measurements so the example
+// can print exactly what a host-owned telemetry adapter receives.
+type exampleMetricMeter struct {
+	mu      sync.Mutex
+	metrics []exampleMetric
+}
+
+func (m *exampleMetricMeter) Add(_ context.Context, name string, value int64, attrs ...telemetry.Attribute) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.metrics = append(m.metrics, exampleMetric{
+		kind:  "counter",
+		name:  name,
+		value: fmt.Sprintf("%d", value),
+		attrs: append([]telemetry.Attribute(nil), attrs...),
+		seq:   len(m.metrics),
+	})
+}
+
+func (m *exampleMetricMeter) Record(_ context.Context, name string, value float64, attrs ...telemetry.Attribute) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.metrics = append(m.metrics, exampleMetric{
+		kind:  "record",
+		name:  name,
+		value: formatMetricValue(value),
+		attrs: append([]telemetry.Attribute(nil), attrs...),
+		seq:   len(m.metrics),
+	})
+}
+
+func (m *exampleMetricMeter) Lines() []string {
+	m.mu.Lock()
+	metrics := append([]exampleMetric(nil), m.metrics...)
+	m.mu.Unlock()
+
+	sort.SliceStable(metrics, func(i, j int) bool {
+		if metrics[i].name != metrics[j].name {
+			return metrics[i].name < metrics[j].name
+		}
+		iAttrs := formatMetricAttrs(metrics[i].attrs)
+		jAttrs := formatMetricAttrs(metrics[j].attrs)
+		if iAttrs != jAttrs {
+			return iAttrs < jAttrs
+		}
+		return metrics[i].seq < metrics[j].seq
+	})
+	lines := make([]string, 0, len(metrics))
+	for _, metric := range metrics {
+		lines = append(lines, fmt.Sprintf("metric %s: %s=%s%s", metric.kind, metric.name, metric.value, formatMetricAttrs(metric.attrs)))
+	}
+	return lines
+}
+
+func formatMetricValue(value float64) string {
+	if value == float64(int64(value)) {
+		return fmt.Sprintf("%.0f", value)
+	}
+	return fmt.Sprintf("%.3f", value)
+}
+
+func formatMetricAttrs(attrs []telemetry.Attribute) string {
+	if len(attrs) == 0 {
+		return ""
+	}
+	copied := append([]telemetry.Attribute(nil), attrs...)
+	sort.Slice(copied, func(i, j int) bool {
+		return copied[i].Key < copied[j].Key
+	})
+	out := ""
+	for _, attr := range copied {
+		out += fmt.Sprintf(" %s=%v", attr.Key, attr.Value)
+	}
+	return out
 }
 
 type stream struct {
