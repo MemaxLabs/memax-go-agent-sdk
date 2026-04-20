@@ -17,6 +17,7 @@ import (
 const (
 	defaultSessionMaxTimeout        = 24 * time.Hour
 	defaultSessionStopGrace         = 2 * time.Second
+	defaultSessionDrainTimeout      = 2 * time.Second
 	defaultSessionMaxBufferedBytes  = 256 * 1024
 	defaultSessionMaxBufferedChunks = 256
 	defaultSessionReadChunkBytes    = 4 * 1024
@@ -127,6 +128,7 @@ type OSSessionManager struct {
 	maxBufferedBytes  int
 	maxBufferedChunks int
 	stopGrace         time.Duration
+	drainTimeout      time.Duration
 	nextID            int
 	sessions          map[string]*osSessionState
 }
@@ -185,6 +187,15 @@ func WithOSSessionManagerStopGrace(grace time.Duration) OSSessionManagerOption {
 	return func(m *OSSessionManager) { m.stopGrace = grace }
 }
 
+// WithOSSessionManagerDrainTimeout sets how long a completed non-PTY command
+// may spend draining output after the top-level process exits. If descendants
+// inherit stdout or stderr and keep those descriptors open, the manager closes
+// its read ends after this timeout so the session can finalize. Negative values
+// disable the forced-drain timeout. A zero timeout selects the package default.
+func WithOSSessionManagerDrainTimeout(timeout time.Duration) OSSessionManagerOption {
+	return func(m *OSSessionManager) { m.drainTimeout = timeout }
+}
+
 // NewOSSessionManager returns a local managed-session adapter rooted at root.
 // If root is empty, cwd values are resolved relative to the current process
 // directory.
@@ -196,6 +207,7 @@ func NewOSSessionManager(root string, opts ...OSSessionManagerOption) (*OSSessio
 		maxBufferedBytes:  defaultSessionMaxBufferedBytes,
 		maxBufferedChunks: defaultSessionMaxBufferedChunks,
 		stopGrace:         defaultSessionStopGrace,
+		drainTimeout:      defaultSessionDrainTimeout,
 		sessions:          map[string]*osSessionState{},
 	}
 	if root != "" {
@@ -227,6 +239,9 @@ func NewOSSessionManager(root string, opts ...OSSessionManagerOption) (*OSSessio
 	}
 	if m.stopGrace <= 0 {
 		m.stopGrace = defaultSessionStopGrace
+	}
+	if m.drainTimeout == 0 {
+		m.drainTimeout = defaultSessionDrainTimeout
 	}
 	return m, nil
 }
@@ -345,7 +360,7 @@ func (m *OSSessionManager) StartCommand(ctx context.Context, req StartRequest) (
 		doneChans[i] = make(chan struct{})
 		go state.captureStream(reader.stream, reader.reader, reader.closer, doneChans[i])
 	}
-	go state.waitAndFinish(doneChans)
+	go state.waitAndFinish(runtime.readers, doneChans)
 
 	return state.snapshot(), nil
 }
@@ -867,7 +882,7 @@ func (s *osSessionState) timeout() {
 	_ = process.Kill()
 }
 
-func (s *osSessionState) waitAndFinish(doneChans []chan struct{}) {
+func (s *osSessionState) waitAndFinish(readers []osSessionReader, doneChans []chan struct{}) {
 	waitResult := sessionWaitResult{exitCode: -1, err: os.ErrProcessDone}
 	if s.process != nil {
 		waitResult = s.process.Wait()
@@ -878,10 +893,52 @@ func (s *osSessionState) waitAndFinish(doneChans []chan struct{}) {
 	if err := s.closeTerminalForDrain(); err != nil {
 		s.appendOutput(commandToolsErrorStream, fmt.Sprintf("[commandtools] close terminal for drain error: %v\n", err))
 	}
-	for _, done := range doneChans {
-		<-done
-	}
+	s.waitForReaderDrain(readers, doneChans)
 	s.finish(waitResult)
+}
+
+func (s *osSessionState) waitForReaderDrain(readers []osSessionReader, doneChans []chan struct{}) {
+	if len(doneChans) == 0 {
+		return
+	}
+	allDone := make(chan struct{})
+	go func() {
+		for _, done := range doneChans {
+			<-done
+		}
+		close(allDone)
+	}()
+	drainTimeout := defaultSessionDrainTimeout
+	if s.manager != nil {
+		drainTimeout = s.manager.drainTimeout
+	}
+	if drainTimeout < 0 {
+		<-allDone
+		return
+	}
+	timer := time.NewTimer(drainTimeout)
+	defer timer.Stop()
+	select {
+	case <-allDone:
+		return
+	case <-timer.C:
+	}
+	s.forceCloseReaders(readers, drainTimeout)
+	<-allDone
+}
+
+func (s *osSessionState) forceCloseReaders(readers []osSessionReader, timeout time.Duration) {
+	s.mu.Lock()
+	s.draining = true
+	s.mu.Unlock()
+	s.appendOutput(commandToolsErrorStream, fmt.Sprintf("[commandtools] output drain timed out after %s; closing stream readers\n", timeout))
+	for _, reader := range readers {
+		if reader.closer != nil {
+			// captureStream also closes this handle on exit; the second close is
+			// expected and ignored for file and pipe readers.
+			_ = reader.closer.Close()
+		}
+	}
 }
 
 func (s *osSessionState) closeTerminalForDrain() error {
@@ -914,6 +971,9 @@ func (s *osSessionState) captureStream(stream string, reader io.Reader, closer i
 		}
 		if err != nil {
 			if errors.Is(err, io.EOF) || (stream == "pty" && isPTYEOFError(err)) {
+				return
+			}
+			if s.isDraining() {
 				return
 			}
 			s.appendOutput(commandToolsErrorStream, fmt.Sprintf("[commandtools] read %s error: %v\n", stream, err))

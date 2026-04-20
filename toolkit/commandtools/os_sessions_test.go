@@ -347,7 +347,7 @@ func TestOSSessionStateWaitAndFinishClosesDrainableTerminal(t *testing.T) {
 	go state.captureStream("pty", terminal, nil, readerDone)
 	<-terminal.readStarted
 
-	go state.waitAndFinish([]chan struct{}{readerDone})
+	go state.waitAndFinish([]osSessionReader{{stream: "pty", reader: terminal}}, []chan struct{}{readerDone})
 
 	select {
 	case <-state.done:
@@ -366,6 +366,50 @@ func TestOSSessionStateWaitAndFinishClosesDrainableTerminal(t *testing.T) {
 	}
 	if session.ExitCode == nil || *session.ExitCode != 0 {
 		t.Fatalf("session = %#v, want zero exit code", session)
+	}
+}
+
+func TestOSSessionStateWaitAndFinishForcesReaderDrainAfterTimeout(t *testing.T) {
+	reader, writer := io.Pipe()
+	defer writer.Close()
+	state := &osSessionState{
+		manager: &OSSessionManager{
+			drainTimeout:      10 * time.Millisecond,
+			maxBufferedBytes:  defaultSessionMaxBufferedBytes,
+			maxBufferedChunks: defaultSessionMaxBufferedChunks,
+		},
+		process: &stubCommandProcess{wait: sessionWaitResult{exitCode: 0}},
+		session: CommandSession{
+			ID:        "cmd-1",
+			Status:    SessionRunning,
+			NextSeq:   1,
+			StartedAt: time.Now().UTC(),
+		},
+		done:    make(chan struct{}),
+		updates: make(chan struct{}, 1),
+	}
+	readerDone := make(chan struct{})
+	go state.captureStream("stdout", reader, reader, readerDone)
+
+	go state.waitAndFinish([]osSessionReader{{stream: "stdout", reader: reader, closer: reader}}, []chan struct{}{readerDone})
+
+	select {
+	case <-state.done:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for waitAndFinish to force-close inherited stream reader")
+	}
+	if !state.isDraining() {
+		t.Fatal("draining state was not set after forced reader close")
+	}
+	session := state.snapshot()
+	if session.Status != SessionExited {
+		t.Fatalf("session = %#v, want exited session after forced drain", session)
+	}
+	if session.ExitCode == nil || *session.ExitCode != 0 {
+		t.Fatalf("session = %#v, want zero exit code", session)
+	}
+	if !strings.Contains(joinChunkText(state.read(0, 0, 0).Chunks), "output drain timed out") {
+		t.Fatalf("output = %#v, want drain timeout diagnostic", state.read(0, 0, 0).Chunks)
 	}
 }
 
