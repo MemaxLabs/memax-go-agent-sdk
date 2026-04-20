@@ -48,6 +48,9 @@ func TestTaskToolsCreateListUpdateDelete(t *testing.T) {
 	if update.Metadata["status"] != string(StatusCompleted) {
 		t.Fatalf("update metadata = %#v, want completed", update.Metadata)
 	}
+	if update.Metadata[model.MetadataTaskID] != "task-1" || update.Metadata[model.MetadataTaskStatus] != string(StatusCompleted) {
+		t.Fatalf("update metadata = %#v, want standard task metadata", update.Metadata)
+	}
 	if update.Metadata["title"] != "inspect session API" {
 		t.Fatalf("update metadata = %#v, want preserved title", update.Metadata)
 	}

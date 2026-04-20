@@ -221,12 +221,15 @@ func formatTasks(tasks []Task) string {
 
 func taskMetadata(task Task) map[string]any {
 	return map[string]any{
-		"id":       task.ID,
-		"title":    task.Title,
-		"status":   string(task.Status),
-		"notes":    task.Notes,
-		"priority": task.Priority,
-		"evidence": append([]string(nil), task.Evidence...),
+		"id":                       task.ID,
+		"title":                    task.Title,
+		"status":                   string(task.Status),
+		"notes":                    task.Notes,
+		"priority":                 task.Priority,
+		"evidence":                 append([]string(nil), task.Evidence...),
+		model.MetadataTaskID:       task.ID,
+		model.MetadataTaskStatus:   string(task.Status),
+		model.MetadataTaskEvidence: append([]string(nil), task.Evidence...),
 	}
 }
 

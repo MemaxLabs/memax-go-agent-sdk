@@ -309,7 +309,7 @@ tool ignores context cancellation, although the ignored work may continue in its
 own goroutine until it returns. Tool implementations should still honor
 `context.Context` for cleanup.
 
-The optional `toolkit/tasktools` package provides `list_tasks`, `upsert_task`, and `delete_task` over a `Store` interface plus a concurrency-safe memory store. Task state is deliberately tool-owned state rather than implicit model memory; hosts can persist it in a database, scope it to a workspace, or discard it for short-lived runs.
+The optional `toolkit/tasktools` package provides `list_tasks`, `upsert_task`, and `delete_task` over a `Store` interface plus a concurrency-safe memory store. Task state is deliberately tool-owned state rather than implicit model memory; hosts can persist it in a database, scope it to a workspace, or discard it for short-lived runs. Task mutation results carry both human-readable task fields and the standard `task_id`, `task_status`, and `task_evidence` metadata keys used by verification and subagent progress adapters, so host observers can track durable task changes without parsing result text.
 
 The optional `workspace` package provides a stronger coding-agent workspace
 contract than raw file reads and writes: file listing, guarded atomic patches,
