@@ -103,6 +103,8 @@ Coding-oriented adapters and toolkits:
   quota-store fallback, worker claims, heartbeats, and stale failures
 - runnable cloudmanaged observability example that combines audit records,
   lifecycle events, low-cardinality metrics, and the remote worker path
+- provider-neutral telemetry fanout for sending the same SDK metrics to
+  multiple host-owned sinks without baking exporter policy into the runtime
 - initial SQLite-backed scheduling adapter for durable local calendar backends
 - skill discovery tools
 
@@ -175,6 +177,10 @@ The managed stack now also records provider-neutral operational metrics through
 `Config.Base.Meter`: run lifecycle counters and duration measurements, tenant
 denial counters, quota store fallback counters, worker claim and heartbeat
 counters, heartbeat error counters, and stale-worker failure counters.
+When a host needs more than one metrics consumer, `telemetry.NewFanoutMeter`
+forwards each measurement to multiple provider-neutral meters synchronously,
+keeping exporter policy outside the runtime while allowing local capture and an
+OpenTelemetry adapter to run side by side.
 `stack/cloudmanaged.NewMetricsObserver` exposes the event-derived subset for
 hosts that need to mirror the same signals from a custom event stream.
 `examples/cloudmanaged_observability_stack` demonstrates the managed

@@ -162,6 +162,10 @@ lifecycle, model streams, model usage, budget denials, hooks, memory
 distillation, skill discovery, and skill tool activity. Tool execution records
 its own spans and counters through the executor. All telemetry APIs are
 provider-neutral; the `otel` package adapts them to OpenTelemetry.
+When hosts need multiple metric consumers, `telemetry.NewFanoutMeter` forwards
+the same measurements to more than one provider-neutral meter. Fanout is
+synchronous, so slow downstream exporters should be buffered or isolated by the
+host.
 
 Important metric names include:
 
@@ -264,7 +268,8 @@ views with an explicit cardinality budget.
 `examples/cloudmanaged_observability_stack` shows this split in a runnable
 fixture: audit records carry ordered tenant-denial and run-state details, while
 metrics expose aggregate counters and duration measurements suitable for
-dashboards.
+dashboards. The example also uses `telemetry.NewFanoutMeter` to demonstrate
+local capture plus a second metrics sink without changing stack construction.
 
 Personal proactive scheduled runs use the same `run_state_changed` observer
 event when a deterministic occurrence moves through queued, running,

@@ -26,6 +26,7 @@ func TestRunExampleShowsManagedObservability(t *testing.T) {
 		"run:",
 		"succeeded",
 		"session:",
+		"secondary metric sink captured:",
 		"metric counter: memax.cloudmanaged.run.lifecycle.events=1 run_status=queued run_terminal=false",
 		"metric counter: memax.cloudmanaged.run.lifecycle.events=1 run_status=running run_terminal=false",
 		"metric counter: memax.cloudmanaged.run.lifecycle.events=1 run_status=succeeded run_terminal=true",

@@ -49,10 +49,15 @@ func runExample(ctx context.Context, w io.Writer) error {
 
 	dbPath := filepath.Join(dir, "runs.db")
 	meter := &exampleMetricMeter{}
+	secondaryMeter := &exampleMetricMeter{}
+	// Production deployments commonly send the same measurements to multiple
+	// sinks, such as OpenTelemetry plus a local recorder. The SDK keeps that
+	// fanout provider-neutral.
+	fanoutMeter := telemetry.NewFanoutMeter(meter, secondaryMeter)
 	auditSink := &cloudmanaged.MemorySink{}
 	modelClient := &delayedTextModel{text: "observed remote worker completed", delay: 20 * time.Millisecond}
 
-	serverStack, serverDB, err := buildStack(ctx, dbPath, modelClient, meter, auditSink)
+	serverStack, serverDB, err := buildStack(ctx, dbPath, modelClient, fanoutMeter, auditSink)
 	if err != nil {
 		return err
 	}
@@ -82,7 +87,7 @@ func runExample(ctx context.Context, w io.Writer) error {
 	}))
 	defer server.Close()
 
-	workerStack, workerDB, err := buildStack(ctx, dbPath, modelClient, meter, auditSink)
+	workerStack, workerDB, err := buildStack(ctx, dbPath, modelClient, fanoutMeter, auditSink)
 	if err != nil {
 		return err
 	}
@@ -134,6 +139,7 @@ func runExample(ctx context.Context, w io.Writer) error {
 	fmt.Fprintf(w, "worker: %s\n", final.WorkerID)
 	fmt.Fprintf(w, "run: %s %s\n", final.ID, final.Status)
 	fmt.Fprintf(w, "session: %s\n", final.SessionID)
+	fmt.Fprintf(w, "secondary metric sink captured: %d\n", secondaryMeter.Count())
 	for _, line := range meter.Lines() {
 		if includeExampleMetric(line) {
 			fmt.Fprintf(w, "%s\n", line)
@@ -298,6 +304,12 @@ func (m *exampleMetricMeter) Lines() []string {
 		lines = append(lines, fmt.Sprintf("metric %s: %s=%s%s", metric.kind, metric.name, metric.value, formatMetricAttrs(metric.attrs)))
 	}
 	return lines
+}
+
+func (m *exampleMetricMeter) Count() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.metrics)
 }
 
 func formatMetricValue(value float64) string {

@@ -1,6 +1,9 @@
 package telemetry
 
-import "context"
+import (
+	"context"
+	"reflect"
+)
 
 // Attribute is a key/value attribute used by SDK tracing and metrics.
 type Attribute struct {
@@ -79,3 +82,65 @@ func (NoopMeter) Add(context.Context, string, int64, ...Attribute) {}
 
 // Record drops value measurements.
 func (NoopMeter) Record(context.Context, string, float64, ...Attribute) {}
+
+// FanoutMeter forwards measurements to multiple meters.
+//
+// Calls are synchronous: a slow downstream meter slows the caller, and panics
+// from downstream meters are not recovered. Use this when hosts need the same
+// SDK measurements delivered to more than one provider-neutral sink, such as a
+// local recorder plus an OpenTelemetry exporter. Nil meters are ignored.
+type FanoutMeter struct {
+	meters []Meter
+}
+
+// NewFanoutMeter returns a meter that forwards every measurement to meters.
+// The returned zero-downstream meter is a no-op.
+func NewFanoutMeter(meters ...Meter) FanoutMeter {
+	out := FanoutMeter{}
+	for _, meter := range meters {
+		if !meterIsNil(meter) {
+			out.meters = append(out.meters, meter)
+		}
+	}
+	return out
+}
+
+// Add forwards a counter increment to every downstream meter.
+func (m FanoutMeter) Add(ctx context.Context, name string, value int64, attrs ...Attribute) {
+	for _, meter := range m.meters {
+		// Clone per downstream meter so one meter cannot mutate the attribute
+		// slice seen by the next. Attribute values are shallow-copied; callers
+		// should avoid mutable reference values.
+		meter.Add(ctx, name, value, cloneAttributes(attrs)...)
+	}
+}
+
+// Record forwards a value measurement to every downstream meter.
+func (m FanoutMeter) Record(ctx context.Context, name string, value float64, attrs ...Attribute) {
+	for _, meter := range m.meters {
+		// Clone per downstream meter so one meter cannot mutate the attribute
+		// slice seen by the next. Attribute values are shallow-copied; callers
+		// should avoid mutable reference values.
+		meter.Record(ctx, name, value, cloneAttributes(attrs)...)
+	}
+}
+
+func meterIsNil(meter Meter) bool {
+	if meter == nil {
+		return true
+	}
+	value := reflect.ValueOf(meter)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
+}
+
+func cloneAttributes(attrs []Attribute) []Attribute {
+	if len(attrs) == 0 {
+		return nil
+	}
+	return append([]Attribute(nil), attrs...)
+}
