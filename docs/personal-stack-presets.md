@@ -162,6 +162,9 @@ Common sources of confusion:
   before sending them to external channels. The
   `personal_notification_delivery_stack` example demonstrates this durable
   outbox with a transient channel failure, delayed retry, and successful ack.
+  The `personal_webhook_notification_stack` example demonstrates the signed
+  webhook variant with an inline HTTP receiver, idempotency headers, signature
+  verification, and a delivered outbox ack.
 - attaching `Tasks` gives personal workflows a durable task ledger. The
   planner reloads task state before every model request, so follow-ups created
   in one run through `upsert_task` can be visible to a later run before the
