@@ -142,8 +142,13 @@ Common sources of confusion:
   records successes, and reschedules handler failures with configurable backoff.
   `WatchScheduledRunNotifications` runs the same drain helper immediately and on
   a ticker for long-running host delivery workers, and the drain result observer
-  option lets hosts emit delivery metrics for successful drain passes. Hosts
-  can opt into `WithScheduledRunNotificationMaxAttempts` to stop retrying
+  option lets hosts emit delivery metrics for successful drain passes.
+  `GetScheduledRunNotificationStats` reports current outbox health for
+  dashboard and alert loops: pending, leased, claimable, delivered, failed,
+  dead-lettered, total attempts, oldest-undelivered age, and next-claimable
+  time. The oldest-undelivered clock starts at record creation, and
+  next-claimable is the earliest pending/retry/lease-expiry `DeliverAfter`.
+  Hosts can opt into `WithScheduledRunNotificationMaxAttempts` to stop retrying
   poison notifications and mark them `dead_lettered` for manual recovery.
   Stores that implement `ScheduledRunNotificationRecoveryStore` let hosts
   requeue inspected failed or dead-lettered records after remediation while

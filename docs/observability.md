@@ -231,6 +231,16 @@ channel implementation in host code. Hosts can attach
 `WithScheduledRunNotificationDrainResultObserver` when they need per-pass
 delivery metrics for successful drain passes without reimplementing the drain
 loop; store and context errors are surfaced through the drain return value.
+`GetScheduledRunNotificationStats` gives hosts a current outbox health snapshot
+without changing delivery semantics. Stores can implement
+`ScheduledRunNotificationStatsStore` for efficient native snapshots; otherwise
+the helper falls back to listing records and computing the same pending,
+leased, claimable, delivered, failed, dead-lettered, retry-attempt,
+oldest-undelivered, and next-claimable fields in memory. These stats are
+current-state observability, not historical counters. `OldestUndeliveredAt`
+is based on record creation time, and `NextClaimableAt` is the earliest
+`DeliverAfter` among pending, failed, and delivering records, so it can point
+to already-claimable backlog, a future retry, or an active lease expiry.
 Hosts that set `WithScheduledRunNotificationMaxAttempts` get a DLQ-style
 terminal path: after the failed attempt reaches the configured limit, the drain
 helper marks the record `dead_lettered` through

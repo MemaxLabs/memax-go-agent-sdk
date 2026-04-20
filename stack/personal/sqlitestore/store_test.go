@@ -732,6 +732,135 @@ func TestStoreRequeueScheduledRunNotificationRejectsNonRecoverableStates(t *test
 	}
 }
 
+func TestStoreScheduledRunNotificationStats(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	now := time.Date(2026, 4, 19, 7, 10, 0, 0, time.UTC)
+
+	createNotificationForStats(t, store, "delivered:2026-04-19T07:00:00Z", 0)
+	deliveredClaim := claimOneNotificationForStats(t, store, "stats-worker-1", now)
+	if _, err := store.MarkScheduledRunNotificationDelivered(context.Background(), personal.MarkScheduledRunNotificationDeliveredRequest{
+		ID:          deliveredClaim.ID,
+		WorkerID:    "stats-worker-1",
+		DeliveredAt: now.Add(time.Second),
+	}); err != nil {
+		t.Fatalf("MarkScheduledRunNotificationDelivered() error = %v", err)
+	}
+
+	createNotificationForStats(t, store, "leased:2026-04-19T07:00:00Z", time.Minute)
+	leasedClaim := claimOneNotificationForStats(t, store, "stats-worker-2", now)
+
+	createNotificationForStats(t, store, "expired-lease:2026-04-19T07:00:00Z", 3*time.Minute)
+	claimOneNotificationForStatsWithLease(t, store, "stats-worker-expired", now.Add(-2*time.Minute), time.Minute)
+
+	createNotificationForStats(t, store, "failed:2026-04-19T07:00:00Z", 2*time.Minute)
+	failedClaim := claimOneNotificationForStats(t, store, "stats-worker-3", now)
+	retryAt := now.Add(time.Hour)
+	if _, err := store.MarkScheduledRunNotificationFailed(context.Background(), personal.MarkScheduledRunNotificationFailedRequest{
+		ID:       failedClaim.ID,
+		WorkerID: "stats-worker-3",
+		Error:    "push gateway unavailable",
+		RetryAt:  retryAt,
+		FailedAt: now.Add(2 * time.Second),
+	}); err != nil {
+		t.Fatalf("MarkScheduledRunNotificationFailed() error = %v", err)
+	}
+
+	createNotificationForStats(t, store, "dead-lettered:2026-04-19T07:00:00Z", 3*time.Minute)
+	deadLetterClaim := claimOneNotificationForStats(t, store, "stats-worker-4", now)
+	if _, err := store.MarkScheduledRunNotificationDeadLettered(context.Background(), personal.MarkScheduledRunNotificationDeadLetteredRequest{
+		ID:             deadLetterClaim.ID,
+		WorkerID:       "stats-worker-4",
+		Error:          "permanent route failure",
+		DeadLetteredAt: now.Add(3 * time.Second),
+	}); err != nil {
+		t.Fatalf("MarkScheduledRunNotificationDeadLettered() error = %v", err)
+	}
+
+	pendingDue := createNotificationForStats(t, store, "pending:2026-04-19T07:00:00Z", 4*time.Minute)
+	createNotificationForStats(t, store, "future-pending:2026-04-19T07:00:00Z", time.Hour)
+
+	stats, err := store.ScheduledRunNotificationStats(context.Background(), now)
+	if err != nil {
+		t.Fatalf("ScheduledRunNotificationStats() error = %v", err)
+	}
+	assertScheduledRunNotificationStats(t, stats, personal.ScheduledRunNotificationStats{
+		TotalCount:            7,
+		PendingCount:          2,
+		DeliveringCount:       2,
+		DeliveredCount:        1,
+		FailedCount:           1,
+		DeadLetteredCount:     1,
+		ClaimableCount:        2,
+		LeasedCount:           1,
+		DeliveryAttemptsTotal: 5,
+		OldestUndeliveredAt:   leasedClaim.CreatedAt,
+		OldestUndeliveredAge:  now.Sub(leasedClaim.CreatedAt),
+		NextClaimableAt:       pendingDue.CreatedAt,
+	})
+}
+
+func TestStoreScheduledRunNotificationStatsEmptyStore(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	stats, err := store.ScheduledRunNotificationStats(context.Background(), time.Date(2026, 4, 19, 7, 10, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("ScheduledRunNotificationStats(empty) error = %v", err)
+	}
+	assertScheduledRunNotificationStats(t, stats, personal.ScheduledRunNotificationStats{})
+}
+
+func TestStoreScheduledRunNotificationStatsTerminalOnly(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	now := time.Date(2026, 4, 19, 7, 10, 0, 0, time.UTC)
+	createNotificationForStats(t, store, "delivered:2026-04-19T07:00:00Z", 0)
+	deliveredClaim := claimOneNotificationForStats(t, store, "stats-worker-delivered", now)
+	if _, err := store.MarkScheduledRunNotificationDelivered(context.Background(), personal.MarkScheduledRunNotificationDeliveredRequest{
+		ID:          deliveredClaim.ID,
+		WorkerID:    "stats-worker-delivered",
+		DeliveredAt: now.Add(time.Second),
+	}); err != nil {
+		t.Fatalf("MarkScheduledRunNotificationDelivered() error = %v", err)
+	}
+	createNotificationForStats(t, store, "dead-lettered:2026-04-19T07:00:00Z", time.Minute)
+	deadLetterClaim := claimOneNotificationForStats(t, store, "stats-worker-dead", now)
+	if _, err := store.MarkScheduledRunNotificationDeadLettered(context.Background(), personal.MarkScheduledRunNotificationDeadLetteredRequest{
+		ID:             deadLetterClaim.ID,
+		WorkerID:       "stats-worker-dead",
+		Error:          "permanent route failure",
+		DeadLetteredAt: now.Add(2 * time.Second),
+	}); err != nil {
+		t.Fatalf("MarkScheduledRunNotificationDeadLettered() error = %v", err)
+	}
+
+	stats, err := store.ScheduledRunNotificationStats(context.Background(), now)
+	if err != nil {
+		t.Fatalf("ScheduledRunNotificationStats(terminal-only) error = %v", err)
+	}
+	assertScheduledRunNotificationStats(t, stats, personal.ScheduledRunNotificationStats{
+		TotalCount:            2,
+		DeliveredCount:        1,
+		DeadLetteredCount:     1,
+		DeliveryAttemptsTotal: 2,
+	})
+}
+
+func TestStoreScheduledRunNotificationStatsHonorsContextCancellation(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := store.ScheduledRunNotificationStats(ctx, time.Date(2026, 4, 19, 7, 10, 0, 0, time.UTC))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("ScheduledRunNotificationStats(canceled) error = %v, want context.Canceled", err)
+	}
+}
+
 func TestStoreClaimScheduledRunNotificationIsAtomic(t *testing.T) {
 	t.Parallel()
 
@@ -972,6 +1101,56 @@ func scheduledRunNotificationRequest(runID string, status personal.ScheduledRunS
 		Prompt:       "Prepare the morning briefing.",
 		Result:       "Morning briefing ready.",
 		CreatedAt:    createdAt,
+	}
+}
+
+func createNotificationForStats(t *testing.T, store *Store, runID string, offset time.Duration) personal.ScheduledRunNotificationRecord {
+	t.Helper()
+	req := scheduledRunNotificationRequest(runID, personal.ScheduledRunSucceeded, offset)
+	record, _, err := store.CreateScheduledRunNotification(context.Background(), req)
+	if err != nil {
+		t.Fatalf("CreateScheduledRunNotification(%q) error = %v", runID, err)
+	}
+	return record
+}
+
+func claimOneNotificationForStats(t *testing.T, store *Store, workerID string, now time.Time) personal.ScheduledRunNotificationRecord {
+	t.Helper()
+	return claimOneNotificationForStatsWithLease(t, store, workerID, now, 5*time.Minute)
+}
+
+func claimOneNotificationForStatsWithLease(t *testing.T, store *Store, workerID string, now time.Time, lease time.Duration) personal.ScheduledRunNotificationRecord {
+	t.Helper()
+	claimed, err := store.ClaimScheduledRunNotifications(context.Background(), personal.ClaimScheduledRunNotificationsRequest{
+		WorkerID:      workerID,
+		Limit:         1,
+		Now:           now,
+		LeaseDuration: lease,
+	})
+	if err != nil {
+		t.Fatalf("ClaimScheduledRunNotifications(%s) error = %v", workerID, err)
+	}
+	if len(claimed) != 1 {
+		t.Fatalf("ClaimScheduledRunNotifications(%s) = %#v, want one claim", workerID, claimed)
+	}
+	return claimed[0]
+}
+
+func assertScheduledRunNotificationStats(t *testing.T, got, want personal.ScheduledRunNotificationStats) {
+	t.Helper()
+	if got.TotalCount != want.TotalCount ||
+		got.PendingCount != want.PendingCount ||
+		got.DeliveringCount != want.DeliveringCount ||
+		got.DeliveredCount != want.DeliveredCount ||
+		got.FailedCount != want.FailedCount ||
+		got.DeadLetteredCount != want.DeadLetteredCount ||
+		got.ClaimableCount != want.ClaimableCount ||
+		got.LeasedCount != want.LeasedCount ||
+		got.DeliveryAttemptsTotal != want.DeliveryAttemptsTotal ||
+		!got.OldestUndeliveredAt.Equal(want.OldestUndeliveredAt) ||
+		got.OldestUndeliveredAge != want.OldestUndeliveredAge ||
+		!got.NextClaimableAt.Equal(want.NextClaimableAt) {
+		t.Fatalf("stats = %#v, want %#v", got, want)
 	}
 }
 

@@ -225,6 +225,9 @@ system prompt.
   for max-attempt terminal state when poison notifications need manual
   recovery; stores can also expose the recovery extension to requeue inspected
   failed or dead-lettered notifications without resetting attempt history.
+  `GetScheduledRunNotificationStats` adds a store-backed health snapshot for
+  current pending, leased, claimable, delivered, failed, dead-lettered, attempt,
+  and delivery-lag state.
   `stack/personal/webhook` now ships the first host delivery adapter: a signed
   HTTP handler with idempotency headers and typed status errors. Next steps are
   additional delivery adapters for external personal systems plus more

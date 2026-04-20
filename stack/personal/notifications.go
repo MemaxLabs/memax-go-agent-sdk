@@ -117,6 +117,50 @@ type ScheduledRunNotificationFilter struct {
 	Limit          int
 }
 
+// ScheduledRunNotificationStats reports a current operational snapshot of a
+// scheduled-run notification outbox. Counts are derived from current records;
+// this is not a historical event counter. DeliveryAttemptsTotal preserves the
+// accumulated attempt count on surviving records so hosts can detect retry
+// pressure without scanning the full outbox.
+type ScheduledRunNotificationStats struct {
+	// TotalCount is the total number of surviving notification outbox records,
+	// including delivered and dead-lettered records.
+	TotalCount int
+	// PendingCount is the number of records currently waiting for delivery.
+	PendingCount int
+	// DeliveringCount is the number of records claimed by a worker, including
+	// records whose lease has expired and can be claimed again.
+	DeliveringCount int
+	// DeliveredCount is the number of records marked delivered.
+	DeliveredCount int
+	// FailedCount is the number of retryable records whose previous delivery
+	// attempt failed.
+	FailedCount int
+	// DeadLetteredCount is the number of records that exhausted retry policy and
+	// require host intervention.
+	DeadLetteredCount int
+	// ClaimableCount is the number of pending, failed, or delivering records
+	// whose DeliverAfter time is not after the supplied snapshot time. This
+	// includes delivering records with expired leases.
+	ClaimableCount int
+	// LeasedCount is the number of delivering records whose DeliverAfter time is
+	// still after the supplied snapshot time.
+	LeasedCount int
+	// DeliveryAttemptsTotal is the sum of delivery attempts across surviving
+	// records.
+	DeliveryAttemptsTotal int
+	// OldestUndeliveredAt is the earliest CreatedAt among records not yet
+	// delivered or dead-lettered.
+	OldestUndeliveredAt time.Time
+	// OldestUndeliveredAge is the age of OldestUndeliveredAt at the supplied
+	// snapshot time. It is zero when there are no undelivered records.
+	OldestUndeliveredAge time.Duration
+	// NextClaimableAt is the earliest DeliverAfter among pending, failed, and
+	// delivering records. It may be in the past when backlog is already
+	// claimable, or in the future for retry delays and active delivery leases.
+	NextClaimableAt time.Time
+}
+
 // ScheduledRunNotificationDeliveryStatus records the host-owned delivery
 // lifecycle for a scheduled-run notification outbox item.
 type ScheduledRunNotificationDeliveryStatus string
@@ -207,6 +251,15 @@ type ScheduledRunNotificationStore interface {
 	ListScheduledRunNotifications(context.Context, ScheduledRunNotificationFilter) ([]ScheduledRunNotificationRecord, error)
 }
 
+// ScheduledRunNotificationStatsStore is the optional store extension for
+// efficient notification outbox health snapshots. Stores that do not implement
+// it can still be inspected with GetScheduledRunNotificationStats, which falls
+// back to ListScheduledRunNotifications and computes the same snapshot in
+// memory.
+type ScheduledRunNotificationStatsStore interface {
+	ScheduledRunNotificationStats(context.Context, time.Time) (ScheduledRunNotificationStats, error)
+}
+
 // ScheduledRunNotificationDeliveryStore is the optional delivery extension for
 // notification outboxes. It deliberately models claim/ack state only; actual
 // channels such as email, mobile push, Slack, or webhooks remain host-owned.
@@ -260,6 +313,25 @@ func (f ScheduledRunNotificationDeliveryHandlerFunc) DeliverScheduledRunNotifica
 		return ErrScheduledRunNotificationDeliveryHandlerRequired
 	}
 	return f(ctx, record)
+}
+
+// GetScheduledRunNotificationStats returns an operational snapshot for a
+// notification outbox. Stores with a native stats implementation can avoid a
+// full scan; other stores fall back to ListScheduledRunNotifications. The now
+// argument controls lease-expiry and age calculations; zero uses time.Now.
+func GetScheduledRunNotificationStats(ctx context.Context, store ScheduledRunNotificationStore, now time.Time) (ScheduledRunNotificationStats, error) {
+	if store == nil {
+		return ScheduledRunNotificationStats{}, ErrScheduledRunNotificationStoreRequired
+	}
+	now = normalizeScheduledRunNotificationStatsNow(now)
+	if statsStore, ok := store.(ScheduledRunNotificationStatsStore); ok {
+		return statsStore.ScheduledRunNotificationStats(ctx, now)
+	}
+	records, err := store.ListScheduledRunNotifications(ctx, ScheduledRunNotificationFilter{})
+	if err != nil {
+		return ScheduledRunNotificationStats{}, err
+	}
+	return scheduledRunNotificationStatsFromRecords(records, now), nil
 }
 
 // ScheduledRunNotificationRetryBackoff returns the next retry time for a failed
@@ -548,6 +620,7 @@ type MemoryScheduledRunNotificationStore struct {
 var _ ScheduledRunNotificationDeliveryStore = (*MemoryScheduledRunNotificationStore)(nil)
 var _ ScheduledRunNotificationDeadLetterStore = (*MemoryScheduledRunNotificationStore)(nil)
 var _ ScheduledRunNotificationRecoveryStore = (*MemoryScheduledRunNotificationStore)(nil)
+var _ ScheduledRunNotificationStatsStore = (*MemoryScheduledRunNotificationStore)(nil)
 
 // NewMemoryScheduledRunNotificationStore constructs a reference in-memory
 // scheduled-run notification outbox.
@@ -605,6 +678,25 @@ func (s *MemoryScheduledRunNotificationStore) ListScheduledRunNotifications(ctx 
 		}
 	}
 	return notifications, nil
+}
+
+// ScheduledRunNotificationStats implements
+// ScheduledRunNotificationStatsStore.
+func (s *MemoryScheduledRunNotificationStore) ScheduledRunNotificationStats(ctx context.Context, now time.Time) (ScheduledRunNotificationStats, error) {
+	if s == nil {
+		return ScheduledRunNotificationStats{}, fmt.Errorf("memory scheduled run notification store is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return ScheduledRunNotificationStats{}, err
+	}
+	now = normalizeScheduledRunNotificationStatsNow(now)
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	records := make([]ScheduledRunNotificationRecord, 0, len(s.ids))
+	for _, id := range s.ids {
+		records = append(records, s.byID[id])
+	}
+	return scheduledRunNotificationStatsFromRecords(records, now), nil
 }
 
 // ClaimScheduledRunNotifications implements
@@ -1155,6 +1247,54 @@ func cloneScheduledRunNotification(record ScheduledRunNotificationRecord) Schedu
 	// All fields are value types today; keep this helper as the defensive-copy
 	// boundary if the record later grows slices, maps, or pointer fields.
 	return record
+}
+
+func normalizeScheduledRunNotificationStatsNow(now time.Time) time.Time {
+	if now.IsZero() {
+		return time.Now().UTC()
+	}
+	return now.UTC()
+}
+
+func scheduledRunNotificationStatsFromRecords(records []ScheduledRunNotificationRecord, now time.Time) ScheduledRunNotificationStats {
+	now = normalizeScheduledRunNotificationStatsNow(now)
+	var stats ScheduledRunNotificationStats
+	for _, record := range records {
+		stats.TotalCount++
+		stats.DeliveryAttemptsTotal += record.DeliveryAttempts
+		switch record.DeliveryStatus {
+		case ScheduledRunNotificationDeliveryPending:
+			stats.PendingCount++
+		case ScheduledRunNotificationDeliveryDelivering:
+			stats.DeliveringCount++
+		case ScheduledRunNotificationDeliveryDelivered:
+			stats.DeliveredCount++
+		case ScheduledRunNotificationDeliveryFailed:
+			stats.FailedCount++
+		case ScheduledRunNotificationDeliveryDeadLettered:
+			stats.DeadLetteredCount++
+		}
+		if record.deliveryClaimableAt(now) {
+			stats.ClaimableCount++
+		}
+		if record.DeliveryStatus == ScheduledRunNotificationDeliveryPending || record.DeliveryStatus == ScheduledRunNotificationDeliveryFailed || record.DeliveryStatus == ScheduledRunNotificationDeliveryDelivering {
+			if stats.NextClaimableAt.IsZero() || record.DeliverAfter.Before(stats.NextClaimableAt) {
+				stats.NextClaimableAt = record.DeliverAfter
+			}
+		}
+		if record.DeliveryStatus == ScheduledRunNotificationDeliveryDelivering && record.DeliverAfter.After(now) {
+			stats.LeasedCount++
+		}
+		if record.DeliveryStatus != ScheduledRunNotificationDeliveryDelivered && record.DeliveryStatus != ScheduledRunNotificationDeliveryDeadLettered {
+			if stats.OldestUndeliveredAt.IsZero() || record.CreatedAt.Before(stats.OldestUndeliveredAt) {
+				stats.OldestUndeliveredAt = record.CreatedAt
+			}
+		}
+	}
+	if !stats.OldestUndeliveredAt.IsZero() && now.After(stats.OldestUndeliveredAt) {
+		stats.OldestUndeliveredAge = now.Sub(stats.OldestUndeliveredAt)
+	}
+	return stats
 }
 
 func cloneScheduledRunNotificationDrainResult(result ScheduledRunNotificationDrainResult) ScheduledRunNotificationDrainResult {

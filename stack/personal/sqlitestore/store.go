@@ -36,6 +36,7 @@ var (
 	_ personal.ScheduledRunNotificationDeliveryStore    = (*Store)(nil)
 	_ personal.ScheduledRunNotificationDeadLetterStore  = (*Store)(nil)
 	_ personal.ScheduledRunNotificationRecoveryStore    = (*Store)(nil)
+	_ personal.ScheduledRunNotificationStatsStore       = (*Store)(nil)
 )
 
 // New initializes and returns a SQLite-backed scheduled-run store.
@@ -358,6 +359,118 @@ func (s *Store) ListScheduledRunNotifications(ctx context.Context, filter person
 		return nil, fmt.Errorf("iterate sqlite scheduled run notifications: %w", err)
 	}
 	return notifications, nil
+}
+
+// ScheduledRunNotificationStats implements
+// personal.ScheduledRunNotificationStatsStore.
+func (s *Store) ScheduledRunNotificationStats(ctx context.Context, now time.Time) (personal.ScheduledRunNotificationStats, error) {
+	if err := contextError(ctx); err != nil {
+		return personal.ScheduledRunNotificationStats{}, err
+	}
+	if s == nil {
+		return personal.ScheduledRunNotificationStats{}, fmt.Errorf("sqlite scheduled run notification store is nil")
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	} else {
+		now = now.UTC()
+	}
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return personal.ScheduledRunNotificationStats{}, fmt.Errorf("acquire sqlite scheduled run stats connection: %w", err)
+	}
+	defer conn.Close()
+
+	var (
+		stats             personal.ScheduledRunNotificationStats
+		total             int64
+		pending           int64
+		delivering        int64
+		delivered         int64
+		failed            int64
+		deadLettered      int64
+		claimable         int64
+		leased            int64
+		attempts          int64
+		oldestUndelivered sql.NullInt64
+		nextClaimable     sql.NullInt64
+	)
+	err = conn.QueryRowContext(ctx, `
+		SELECT
+			COUNT(*),
+			COALESCE(SUM(CASE WHEN delivery_status = ? THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN delivery_status = ? THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN delivery_status = ? THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN delivery_status = ? THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN delivery_status = ? THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE
+				WHEN delivery_status IN (?, ?, ?) AND deliver_after_unix_ms <= ? THEN 1
+				ELSE 0
+			END), 0),
+			COALESCE(SUM(CASE
+				WHEN delivery_status = ? AND deliver_after_unix_ms > ? THEN 1
+				ELSE 0
+			END), 0),
+			COALESCE(SUM(delivery_attempts), 0),
+			MIN(CASE
+				WHEN delivery_status NOT IN (?, ?) THEN created_at_unix_ms
+			END),
+			MIN(CASE
+				WHEN delivery_status IN (?, ?, ?) THEN deliver_after_unix_ms
+			END)
+		FROM memax_personal_scheduled_run_notifications
+	`,
+		string(personal.ScheduledRunNotificationDeliveryPending),
+		string(personal.ScheduledRunNotificationDeliveryDelivering),
+		string(personal.ScheduledRunNotificationDeliveryDelivered),
+		string(personal.ScheduledRunNotificationDeliveryFailed),
+		string(personal.ScheduledRunNotificationDeliveryDeadLettered),
+		string(personal.ScheduledRunNotificationDeliveryPending),
+		string(personal.ScheduledRunNotificationDeliveryFailed),
+		string(personal.ScheduledRunNotificationDeliveryDelivering),
+		unixMillis(now),
+		string(personal.ScheduledRunNotificationDeliveryDelivering),
+		unixMillis(now),
+		string(personal.ScheduledRunNotificationDeliveryDelivered),
+		string(personal.ScheduledRunNotificationDeliveryDeadLettered),
+		string(personal.ScheduledRunNotificationDeliveryPending),
+		string(personal.ScheduledRunNotificationDeliveryFailed),
+		string(personal.ScheduledRunNotificationDeliveryDelivering),
+	).Scan(
+		&total,
+		&pending,
+		&delivering,
+		&delivered,
+		&failed,
+		&deadLettered,
+		&claimable,
+		&leased,
+		&attempts,
+		&oldestUndelivered,
+		&nextClaimable,
+	)
+	if err != nil {
+		return personal.ScheduledRunNotificationStats{}, fmt.Errorf("query sqlite scheduled run notification stats: %w", err)
+	}
+	stats.TotalCount = int(total)
+	stats.PendingCount = int(pending)
+	stats.DeliveringCount = int(delivering)
+	stats.DeliveredCount = int(delivered)
+	stats.FailedCount = int(failed)
+	stats.DeadLetteredCount = int(deadLettered)
+	stats.ClaimableCount = int(claimable)
+	stats.LeasedCount = int(leased)
+	stats.DeliveryAttemptsTotal = int(attempts)
+	if oldestUndelivered.Valid {
+		stats.OldestUndeliveredAt = time.UnixMilli(oldestUndelivered.Int64).UTC()
+		if now.After(stats.OldestUndeliveredAt) {
+			stats.OldestUndeliveredAge = now.Sub(stats.OldestUndeliveredAt)
+		}
+	}
+	if nextClaimable.Valid {
+		stats.NextClaimableAt = time.UnixMilli(nextClaimable.Int64).UTC()
+	}
+	return stats, nil
 }
 
 // ClaimScheduledRunNotifications implements
