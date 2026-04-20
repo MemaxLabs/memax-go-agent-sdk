@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -195,6 +196,40 @@ func TestOSSessionManagerWriteInputEchoesAndExits(t *testing.T) {
 	})
 	if final.Session.ExitCode == nil || *final.Session.ExitCode != 0 {
 		t.Fatalf("final = %#v, want exited session after exit input", final)
+	}
+}
+
+func TestOSSessionManagerBoundsInheritedStdoutDrain(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fd-inheritance fixture is Unix-specific")
+	}
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skipf("sh not available: %v", err)
+	}
+	manager, err := NewOSSessionManager(t.TempDir(), WithOSSessionManagerDrainTimeout(25*time.Millisecond))
+	if err != nil {
+		t.Fatalf("NewOSSessionManager returned error: %v", err)
+	}
+	started, err := manager.StartCommand(context.Background(), StartRequest{
+		SessionID: "session-1",
+		Argv:      []string{sh, "-c", "sleep 1 & printf 'ready\\n'"},
+	})
+	if err != nil {
+		t.Fatalf("StartCommand returned error: %v", err)
+	}
+	result := waitForOutput(t, manager, ReadRequest{SessionID: "session-1", ID: started.ID}, func(result ReadResult) bool {
+		return result.Session.Status == SessionExited
+	})
+	if result.Session.ExitCode == nil || *result.Session.ExitCode != 0 {
+		t.Fatalf("session = %#v, want exited session with zero exit code", result.Session)
+	}
+	output := joinChunkText(result.Chunks)
+	if !strings.Contains(output, "ready\n") {
+		t.Fatalf("output = %q, want shell output", output)
+	}
+	if !strings.Contains(output, "output drain timed out") {
+		t.Fatalf("output = %q, want forced drain diagnostic for inherited stdout", output)
 	}
 }
 
