@@ -99,8 +99,24 @@ const (
 	// succeeded, failed, or canceled. Run events with TriggerName set identify
 	// personal proactive scheduled-run occurrences.
 	EventRunStateChanged EventKind = "run_state_changed"
-	EventError           EventKind = "error"
-	EventResult          EventKind = "result"
+	// EventScheduledRunNotificationClaimed is emitted when a personal
+	// scheduled-run notification outbox record is leased to a delivery worker.
+	EventScheduledRunNotificationClaimed EventKind = "scheduled_run_notification_claimed"
+	// EventScheduledRunNotificationDelivered is emitted when a personal
+	// scheduled-run notification outbox record is acked as externally delivered.
+	EventScheduledRunNotificationDelivered EventKind = "scheduled_run_notification_delivered"
+	// EventScheduledRunNotificationFailed is emitted when a personal
+	// scheduled-run notification delivery attempt is marked retryable.
+	EventScheduledRunNotificationFailed EventKind = "scheduled_run_notification_failed"
+	// EventScheduledRunNotificationDeadLettered is emitted when a personal
+	// scheduled-run notification exhausts retry policy and requires host
+	// intervention.
+	EventScheduledRunNotificationDeadLettered EventKind = "scheduled_run_notification_dead_lettered"
+	// EventScheduledRunNotificationRequeued is emitted when a host requeues a
+	// failed or dead-lettered personal scheduled-run notification.
+	EventScheduledRunNotificationRequeued EventKind = "scheduled_run_notification_requeued"
+	EventError                            EventKind = "error"
+	EventResult                           EventKind = "result"
 )
 
 // Event is emitted by Query as the orchestration loop progresses.
@@ -126,6 +142,7 @@ type Event struct {
 	Tenant       *TenantEvent
 	Command      *CommandEvent
 	Run          *RunEvent
+	Notification *ScheduledRunNotificationEvent
 	Result       string
 	Err          error
 }
@@ -268,6 +285,38 @@ type RunEvent struct {
 	OccurrenceAt time.Time
 	Result       string
 	Error        string
+}
+
+// ScheduledRunNotificationEvent describes one host-owned personal notification
+// outbox delivery transition. Status is the scheduled-run lifecycle status that
+// produced the notification. DeliveryStatus, WorkerID, Attempts, DeliveryError,
+// DeliverAfter, DeliveredAt, and DeliveryUpdatedAt describe the current
+// delivery state after the transition.
+type ScheduledRunNotificationEvent struct {
+	// NotificationID is the host-owned outbox record ID.
+	NotificationID string
+	// RunID is the scheduled-run ID that produced the notification.
+	RunID string
+	// Status is the scheduled-run lifecycle status that produced the notification.
+	Status string
+	// TriggerName is the scheduled trigger name, when the notification came from a trigger.
+	TriggerName string
+	// OccurrenceAt is the deterministic scheduled occurrence time, when present.
+	OccurrenceAt time.Time
+	// DeliveryStatus is the notification delivery status after the transition.
+	DeliveryStatus string
+	// WorkerID is the delivery worker that claimed or updated the notification.
+	WorkerID string
+	// Attempts is the number of delivery attempts after the transition.
+	Attempts int
+	// DeliveryError is the latest delivery failure reason, when present.
+	DeliveryError string
+	// DeliverAfter is the next eligible delivery time.
+	DeliverAfter time.Time
+	// DeliveredAt is set when the notification reaches delivered status.
+	DeliveredAt time.Time
+	// DeliveryUpdatedAt is the timestamp of the delivery-state transition.
+	DeliveryUpdatedAt time.Time
 }
 
 func newEvent(kind EventKind, sessionID string, turn int) Event {

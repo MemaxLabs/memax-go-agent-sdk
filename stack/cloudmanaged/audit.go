@@ -60,28 +60,29 @@ type Subscriber interface {
 // errors so hosts can persist one stable object per event without parsing
 // transcript text.
 type AuditRecord struct {
-	Kind            memaxagent.EventKind              `json:"kind"`
-	SessionID       string                            `json:"session_id,omitempty"`
-	ParentSessionID string                            `json:"parent_session_id,omitempty"`
-	Turn            int                               `json:"turn,omitempty"`
-	Time            time.Time                         `json:"time"`
-	Message         *model.Message                    `json:"message,omitempty"`
-	ToolUse         *model.ToolUse                    `json:"tool_use,omitempty"`
-	ToolUseDelta    string                            `json:"tool_use_delta,omitempty"`
-	ToolResult      *model.ToolResult                 `json:"tool_result,omitempty"`
-	Usage           *model.Usage                      `json:"usage,omitempty"`
-	Context         *memaxagent.ContextEvent          `json:"context,omitempty"`
-	Compaction      *AuditCompactionRecord            `json:"compaction,omitempty"`
-	Memory          *memaxagent.MemoryCandidatesEvent `json:"memory,omitempty"`
-	Skill           *memaxagent.SkillEvent            `json:"skill,omitempty"`
-	Workspace       *memaxagent.WorkspaceEvent        `json:"workspace,omitempty"`
-	Verification    *memaxagent.VerificationEvent     `json:"verification,omitempty"`
-	Approval        *memaxagent.ApprovalEvent         `json:"approval,omitempty"`
-	Tenant          *memaxagent.TenantEvent           `json:"tenant,omitempty"`
-	Command         *memaxagent.CommandEvent          `json:"command,omitempty"`
-	Run             *memaxagent.RunEvent              `json:"run,omitempty"`
-	Result          string                            `json:"result,omitempty"`
-	Error           string                            `json:"error,omitempty"`
+	Kind            memaxagent.EventKind                      `json:"kind"`
+	SessionID       string                                    `json:"session_id,omitempty"`
+	ParentSessionID string                                    `json:"parent_session_id,omitempty"`
+	Turn            int                                       `json:"turn,omitempty"`
+	Time            time.Time                                 `json:"time"`
+	Message         *model.Message                            `json:"message,omitempty"`
+	ToolUse         *model.ToolUse                            `json:"tool_use,omitempty"`
+	ToolUseDelta    string                                    `json:"tool_use_delta,omitempty"`
+	ToolResult      *model.ToolResult                         `json:"tool_result,omitempty"`
+	Usage           *model.Usage                              `json:"usage,omitempty"`
+	Context         *memaxagent.ContextEvent                  `json:"context,omitempty"`
+	Compaction      *AuditCompactionRecord                    `json:"compaction,omitempty"`
+	Memory          *memaxagent.MemoryCandidatesEvent         `json:"memory,omitempty"`
+	Skill           *memaxagent.SkillEvent                    `json:"skill,omitempty"`
+	Workspace       *memaxagent.WorkspaceEvent                `json:"workspace,omitempty"`
+	Verification    *memaxagent.VerificationEvent             `json:"verification,omitempty"`
+	Approval        *memaxagent.ApprovalEvent                 `json:"approval,omitempty"`
+	Tenant          *memaxagent.TenantEvent                   `json:"tenant,omitempty"`
+	Command         *memaxagent.CommandEvent                  `json:"command,omitempty"`
+	Run             *memaxagent.RunEvent                      `json:"run,omitempty"`
+	Notification    *memaxagent.ScheduledRunNotificationEvent `json:"notification,omitempty"`
+	Result          string                                    `json:"result,omitempty"`
+	Error           string                                    `json:"error,omitempty"`
 }
 
 // AuditCompactionRecord is the JSON-friendly audit shape for context
@@ -296,6 +297,10 @@ func recordFromEvent(event memaxagent.Event) AuditRecord {
 		runEvent := *event.Run
 		record.Run = &runEvent
 	}
+	if event.Notification != nil {
+		notificationEvent := *event.Notification
+		record.Notification = &notificationEvent
+	}
 	if event.Err != nil {
 		record.Error = event.Err.Error()
 	}
@@ -369,6 +374,10 @@ func cloneAuditRecord(record AuditRecord) AuditRecord {
 	if record.Run != nil {
 		runEvent := *record.Run
 		clone.Run = &runEvent
+	}
+	if record.Notification != nil {
+		notificationEvent := *record.Notification
+		clone.Notification = &notificationEvent
 	}
 	return clone
 }

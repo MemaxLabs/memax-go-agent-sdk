@@ -225,6 +225,10 @@ system prompt.
   for max-attempt terminal state when poison notifications need manual
   recovery; stores can also expose the recovery extension to requeue inspected
   failed or dead-lettered notifications without resetting attempt history.
+  Notification delivery transitions now emit structured observer events after
+  durable store updates, so audit sinks can follow claim, delivered, failed,
+  dead-lettered, and requeued state changes without polling-only
+  reconstruction.
   `GetScheduledRunNotificationStats` adds a store-backed health snapshot for
   current pending, leased, claimable, delivered, failed, dead-lettered, attempt,
   and delivery-lag state.

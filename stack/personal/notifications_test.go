@@ -187,6 +187,151 @@ func TestMemoryScheduledRunNotificationStoreDeliveryLifecycle(t *testing.T) {
 	}
 }
 
+func TestMemoryScheduledRunNotificationStoreObservesDeliveryLifecycle(t *testing.T) {
+	t.Parallel()
+
+	store := NewMemoryScheduledRunNotificationStore()
+	req := scheduledRunNotificationRequestForTest("daily-brief:2026-04-19T07:00:00Z", ScheduledRunSucceeded, 0)
+	if _, _, err := store.CreateScheduledRunNotification(context.Background(), req); err != nil {
+		t.Fatalf("CreateScheduledRunNotification() error = %v", err)
+	}
+	var events []memaxagent.Event
+	ctx := memaxagent.WithEventObserver(context.Background(), memaxagent.EventObserverFunc(func(_ context.Context, event memaxagent.Event) {
+		events = append(events, event)
+	}))
+	now := time.Date(2026, 4, 19, 7, 10, 0, 0, time.UTC)
+
+	if _, err := store.RequeueScheduledRunNotification(ctx, RequeueScheduledRunNotificationRequest{
+		ID:         req.ID,
+		RequeuedAt: now,
+	}); !errors.Is(err, ErrScheduledRunNotificationNotRecoverable) {
+		t.Fatalf("RequeueScheduledRunNotification(pending) error = %v, want not recoverable", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("events after rejected pending requeue = %#v, want none", events)
+	}
+
+	firstClaim, err := store.ClaimScheduledRunNotifications(ctx, ClaimScheduledRunNotificationsRequest{
+		WorkerID: "worker-1",
+		Limit:    1,
+		Now:      now,
+	})
+	if err != nil {
+		t.Fatalf("ClaimScheduledRunNotifications(first) error = %v", err)
+	}
+	if len(firstClaim) != 1 {
+		t.Fatalf("first claim = %#v, want one notification", firstClaim)
+	}
+	if _, err := store.MarkScheduledRunNotificationDelivered(ctx, MarkScheduledRunNotificationDeliveredRequest{
+		ID:          firstClaim[0].ID,
+		WorkerID:    "other-worker",
+		DeliveredAt: now.Add(time.Second),
+	}); !errors.Is(err, ErrScheduledRunNotificationWorkerMismatch) {
+		t.Fatalf("MarkScheduledRunNotificationDelivered(wrong worker) error = %v, want worker mismatch", err)
+	}
+	if len(events) != 1 || events[0].Kind != memaxagent.EventScheduledRunNotificationClaimed {
+		t.Fatalf("events after rejected wrong-worker delivery = %#v, want only first claim", events)
+	}
+	if _, err := store.MarkScheduledRunNotificationFailed(ctx, MarkScheduledRunNotificationFailedRequest{
+		ID:       firstClaim[0].ID,
+		WorkerID: "worker-1",
+		Error:    "push gateway unavailable",
+		RetryAt:  now.Add(time.Minute),
+		FailedAt: now.Add(time.Second),
+	}); err != nil {
+		t.Fatalf("MarkScheduledRunNotificationFailed() error = %v", err)
+	}
+	if _, err := store.RequeueScheduledRunNotification(ctx, RequeueScheduledRunNotificationRequest{
+		ID:         firstClaim[0].ID,
+		RequeuedAt: now.Add(2 * time.Second),
+	}); err != nil {
+		t.Fatalf("RequeueScheduledRunNotification(failed) error = %v", err)
+	}
+	secondClaim, err := store.ClaimScheduledRunNotifications(ctx, ClaimScheduledRunNotificationsRequest{
+		WorkerID: "worker-2",
+		Limit:    1,
+		Now:      now.Add(2 * time.Second),
+	})
+	if err != nil {
+		t.Fatalf("ClaimScheduledRunNotifications(second) error = %v", err)
+	}
+	if len(secondClaim) != 1 {
+		t.Fatalf("second claim = %#v, want one notification", secondClaim)
+	}
+	if _, err := store.MarkScheduledRunNotificationDeadLettered(ctx, MarkScheduledRunNotificationDeadLetteredRequest{
+		ID:             secondClaim[0].ID,
+		WorkerID:       "worker-2",
+		Error:          "permanent route failure",
+		DeadLetteredAt: now.Add(3 * time.Second),
+	}); err != nil {
+		t.Fatalf("MarkScheduledRunNotificationDeadLettered() error = %v", err)
+	}
+	if _, err := store.RequeueScheduledRunNotification(ctx, RequeueScheduledRunNotificationRequest{
+		ID:         firstClaim[0].ID,
+		RequeuedAt: now.Add(4 * time.Second),
+	}); err != nil {
+		t.Fatalf("RequeueScheduledRunNotification(dead-lettered) error = %v", err)
+	}
+	thirdClaim, err := store.ClaimScheduledRunNotifications(ctx, ClaimScheduledRunNotificationsRequest{
+		WorkerID: "worker-3",
+		Limit:    1,
+		Now:      now.Add(4 * time.Second),
+	})
+	if err != nil {
+		t.Fatalf("ClaimScheduledRunNotifications(third) error = %v", err)
+	}
+	if len(thirdClaim) != 1 {
+		t.Fatalf("third claim = %#v, want one notification", thirdClaim)
+	}
+	delivered, err := store.MarkScheduledRunNotificationDelivered(ctx, MarkScheduledRunNotificationDeliveredRequest{
+		ID:          thirdClaim[0].ID,
+		WorkerID:    "worker-3",
+		DeliveredAt: now.Add(5 * time.Second),
+	})
+	if err != nil {
+		t.Fatalf("MarkScheduledRunNotificationDelivered() error = %v", err)
+	}
+	if _, err := store.MarkScheduledRunNotificationDelivered(ctx, MarkScheduledRunNotificationDeliveredRequest{
+		ID:          thirdClaim[0].ID,
+		WorkerID:    "worker-3",
+		DeliveredAt: now.Add(6 * time.Second),
+	}); err != nil {
+		t.Fatalf("MarkScheduledRunNotificationDelivered(duplicate) error = %v", err)
+	}
+
+	wantKinds := []memaxagent.EventKind{
+		memaxagent.EventScheduledRunNotificationClaimed,
+		memaxagent.EventScheduledRunNotificationFailed,
+		memaxagent.EventScheduledRunNotificationRequeued,
+		memaxagent.EventScheduledRunNotificationClaimed,
+		memaxagent.EventScheduledRunNotificationDeadLettered,
+		memaxagent.EventScheduledRunNotificationRequeued,
+		memaxagent.EventScheduledRunNotificationClaimed,
+		memaxagent.EventScheduledRunNotificationDelivered,
+	}
+	if len(events) != len(wantKinds) {
+		t.Fatalf("observed %d events = %#v, want %d", len(events), events, len(wantKinds))
+	}
+	for i, want := range wantKinds {
+		if events[i].Kind != want {
+			t.Fatalf("event[%d].Kind = %s, want %s", i, events[i].Kind, want)
+		}
+		if events[i].Notification == nil {
+			t.Fatalf("event[%d].Notification is nil", i)
+		}
+		if events[i].Notification.NotificationID != req.ID || events[i].Notification.RunID != req.RunID {
+			t.Fatalf("event[%d].Notification = %#v, want notification/run IDs %s/%s", i, events[i].Notification, req.ID, req.RunID)
+		}
+	}
+	finalEvent := events[len(events)-1].Notification
+	if finalEvent.DeliveryStatus != string(ScheduledRunNotificationDeliveryDelivered) ||
+		finalEvent.WorkerID != "worker-3" ||
+		finalEvent.Attempts != 3 ||
+		!finalEvent.DeliveredAt.Equal(delivered.DeliveredAt) {
+		t.Fatalf("final notification event = %#v, want delivered third attempt by worker-3", finalEvent)
+	}
+}
+
 func TestMemoryScheduledRunNotificationStoreReclaimsExpiredLease(t *testing.T) {
 	t.Parallel()
 

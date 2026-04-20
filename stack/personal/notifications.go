@@ -609,6 +609,37 @@ func observeScheduledRunNotificationDrainResult(ctx context.Context, observer fu
 	observer(ctx, cloneScheduledRunNotificationDrainResult(result))
 }
 
+// ObserveScheduledRunNotificationDeliveryEvent emits one scheduled-run
+// notification delivery transition through the EventObserver attached to ctx.
+// Store implementations call this after durably recording a transition so
+// hosts can audit claim, delivery, retry, dead-letter, and requeue lifecycle
+// changes without polling the outbox.
+func ObserveScheduledRunNotificationDeliveryEvent(ctx context.Context, kind memaxagent.EventKind, record ScheduledRunNotificationRecord) {
+	memaxagent.ObserveEvent(ctx, ScheduledRunNotificationDeliveryEvent(kind, record))
+}
+
+// ScheduledRunNotificationDeliveryEvent builds the root event shape for one
+// scheduled-run notification delivery transition.
+func ScheduledRunNotificationDeliveryEvent(kind memaxagent.EventKind, record ScheduledRunNotificationRecord) memaxagent.Event {
+	return memaxagent.Event{
+		Kind: kind,
+		Notification: &memaxagent.ScheduledRunNotificationEvent{
+			NotificationID:    record.ID,
+			RunID:             record.RunID,
+			Status:            string(record.Status),
+			TriggerName:       record.TriggerName,
+			OccurrenceAt:      record.OccurrenceAt,
+			DeliveryStatus:    string(record.DeliveryStatus),
+			WorkerID:          record.DeliveryWorkerID,
+			Attempts:          record.DeliveryAttempts,
+			DeliveryError:     record.DeliveryError,
+			DeliverAfter:      record.DeliverAfter,
+			DeliveredAt:       record.DeliveredAt,
+			DeliveryUpdatedAt: record.DeliveryUpdatedAt,
+		},
+	}
+}
+
 // MemoryScheduledRunNotificationStore is the reference in-memory notification
 // outbox backend.
 type MemoryScheduledRunNotificationStore struct {
@@ -714,7 +745,6 @@ func (s *MemoryScheduledRunNotificationStore) ClaimScheduledRunNotifications(ctx
 	}
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	candidates := make([]ScheduledRunNotificationRecord, 0, len(s.ids))
 	for _, id := range s.ids {
@@ -748,6 +778,10 @@ func (s *MemoryScheduledRunNotificationStore) ClaimScheduledRunNotifications(ctx
 		s.byID[record.ID] = record
 		claimed = append(claimed, cloneScheduledRunNotification(record))
 	}
+	s.mu.Unlock()
+	for _, record := range claimed {
+		ObserveScheduledRunNotificationDeliveryEvent(ctx, memaxagent.EventScheduledRunNotificationClaimed, record)
+	}
 	return claimed, nil
 }
 
@@ -765,18 +799,22 @@ func (s *MemoryScheduledRunNotificationStore) MarkScheduledRunNotificationDelive
 		return ScheduledRunNotificationRecord{}, err
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	record, ok := s.byID[update.id]
 	if !ok {
+		s.mu.Unlock()
 		return ScheduledRunNotificationRecord{}, ErrScheduledRunNotificationNotFound
 	}
 	if record.DeliveryStatus == ScheduledRunNotificationDeliveryDelivered {
 		if record.DeliveryWorkerID == update.workerID {
-			return cloneScheduledRunNotification(record), nil
+			clone := cloneScheduledRunNotification(record)
+			s.mu.Unlock()
+			return clone, nil
 		}
+		s.mu.Unlock()
 		return ScheduledRunNotificationRecord{}, ErrScheduledRunNotificationWorkerMismatch
 	}
 	if err := record.ensureDeliveryWorker(update.workerID); err != nil {
+		s.mu.Unlock()
 		return ScheduledRunNotificationRecord{}, err
 	}
 	record.DeliveryStatus = ScheduledRunNotificationDeliveryDelivered
@@ -786,7 +824,10 @@ func (s *MemoryScheduledRunNotificationStore) MarkScheduledRunNotificationDelive
 	record.DeliverAfter = update.deliveredAt
 	record.DeliveryUpdatedAt = update.deliveredAt
 	s.byID[record.ID] = record
-	return cloneScheduledRunNotification(record), nil
+	clone := cloneScheduledRunNotification(record)
+	s.mu.Unlock()
+	ObserveScheduledRunNotificationDeliveryEvent(ctx, memaxagent.EventScheduledRunNotificationDelivered, clone)
+	return clone, nil
 }
 
 // MarkScheduledRunNotificationFailed implements
@@ -803,12 +844,13 @@ func (s *MemoryScheduledRunNotificationStore) MarkScheduledRunNotificationFailed
 		return ScheduledRunNotificationRecord{}, err
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	record, ok := s.byID[update.id]
 	if !ok {
+		s.mu.Unlock()
 		return ScheduledRunNotificationRecord{}, ErrScheduledRunNotificationNotFound
 	}
 	if err := record.ensureDeliveryWorker(update.workerID); err != nil {
+		s.mu.Unlock()
 		return ScheduledRunNotificationRecord{}, err
 	}
 	record.DeliveryStatus = ScheduledRunNotificationDeliveryFailed
@@ -817,7 +859,10 @@ func (s *MemoryScheduledRunNotificationStore) MarkScheduledRunNotificationFailed
 	record.DeliverAfter = update.retryAt
 	record.DeliveryUpdatedAt = update.failedAt
 	s.byID[record.ID] = record
-	return cloneScheduledRunNotification(record), nil
+	clone := cloneScheduledRunNotification(record)
+	s.mu.Unlock()
+	ObserveScheduledRunNotificationDeliveryEvent(ctx, memaxagent.EventScheduledRunNotificationFailed, clone)
+	return clone, nil
 }
 
 // MarkScheduledRunNotificationDeadLettered implements
@@ -834,12 +879,13 @@ func (s *MemoryScheduledRunNotificationStore) MarkScheduledRunNotificationDeadLe
 		return ScheduledRunNotificationRecord{}, err
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	record, ok := s.byID[update.id]
 	if !ok {
+		s.mu.Unlock()
 		return ScheduledRunNotificationRecord{}, ErrScheduledRunNotificationNotFound
 	}
 	if err := record.ensureDeliveryWorker(update.workerID); err != nil {
+		s.mu.Unlock()
 		return ScheduledRunNotificationRecord{}, err
 	}
 	record.DeliveryStatus = ScheduledRunNotificationDeliveryDeadLettered
@@ -848,7 +894,10 @@ func (s *MemoryScheduledRunNotificationStore) MarkScheduledRunNotificationDeadLe
 	record.DeliverAfter = update.deadLetteredAt
 	record.DeliveryUpdatedAt = update.deadLetteredAt
 	s.byID[record.ID] = record
-	return cloneScheduledRunNotification(record), nil
+	clone := cloneScheduledRunNotification(record)
+	s.mu.Unlock()
+	ObserveScheduledRunNotificationDeliveryEvent(ctx, memaxagent.EventScheduledRunNotificationDeadLettered, clone)
+	return clone, nil
 }
 
 // RequeueScheduledRunNotification implements
@@ -865,12 +914,13 @@ func (s *MemoryScheduledRunNotificationStore) RequeueScheduledRunNotification(ct
 		return ScheduledRunNotificationRecord{}, err
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	record, ok := s.byID[update.id]
 	if !ok {
+		s.mu.Unlock()
 		return ScheduledRunNotificationRecord{}, ErrScheduledRunNotificationNotFound
 	}
 	if record.DeliveryStatus != ScheduledRunNotificationDeliveryFailed && record.DeliveryStatus != ScheduledRunNotificationDeliveryDeadLettered {
+		s.mu.Unlock()
 		return ScheduledRunNotificationRecord{}, ErrScheduledRunNotificationNotRecoverable
 	}
 	record.DeliveryStatus = ScheduledRunNotificationDeliveryPending
@@ -879,7 +929,10 @@ func (s *MemoryScheduledRunNotificationStore) RequeueScheduledRunNotification(ct
 	record.DeliverAfter = update.deliverAfter
 	record.DeliveryUpdatedAt = update.requeuedAt
 	s.byID[record.ID] = record
-	return cloneScheduledRunNotification(record), nil
+	clone := cloneScheduledRunNotification(record)
+	s.mu.Unlock()
+	ObserveScheduledRunNotificationDeliveryEvent(ctx, memaxagent.EventScheduledRunNotificationRequeued, clone)
+	return clone, nil
 }
 
 type scheduledRunNotifierConfig struct {

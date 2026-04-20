@@ -143,6 +143,11 @@ Common sources of confusion:
   `WatchScheduledRunNotifications` runs the same drain helper immediately and on
   a ticker for long-running host delivery workers, and the drain result observer
   option lets hosts emit delivery metrics for successful drain passes.
+  Notification delivery transitions also flow through the root event observer
+  seam after durable store updates: claimed, delivered, retryable failed,
+  dead-lettered, and requeued records emit structured events with notification
+  ID, run ID, worker, attempt count, error, and timing fields. These ordered
+  events are the audit trail; stats remain the current outbox snapshot.
   `GetScheduledRunNotificationStats` reports current outbox health for
   dashboard and alert loops: pending, leased, claimable, delivered, failed,
   dead-lettered, total attempts, oldest-undelivered age, and next-claimable

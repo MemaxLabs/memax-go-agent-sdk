@@ -218,9 +218,12 @@ retry time. `DrainScheduledRunNotifications` provides the reusable one-pass
 worker helper for claim, host delivery, ack, and retry bookkeeping, while
 `WatchScheduledRunNotifications` wraps it in a long-running ticker worker for
 host services. Hosts can attach a drain result observer for successful-pass
-delivery metrics. Hosts can call `GetScheduledRunNotificationStats` for a
-current health snapshot covering pending, leased, claimable, delivered, failed,
-dead-lettered, retry-attempt, oldest-undelivered, and next-claimable state.
+delivery metrics. Delivery transitions also emit structured observer events for
+claimed, delivered, failed, dead-lettered, and requeued outbox records, giving
+audit sinks an ordered lifecycle stream without polling. Hosts can call
+`GetScheduledRunNotificationStats` for a current health snapshot covering
+pending, leased, claimable, delivered, failed, dead-lettered, retry-attempt,
+oldest-undelivered, and next-claimable state.
 Hosts can opt into `WithScheduledRunNotificationMaxAttempts`
 to move poison notifications to `dead_lettered` state after exhausted retries
 when the store implements the dead-letter extension. Stores can also implement

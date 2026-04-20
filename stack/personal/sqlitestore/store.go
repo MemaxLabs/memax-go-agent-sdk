@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	memaxagent "github.com/MemaxLabs/memax-go-agent-sdk"
 	"github.com/MemaxLabs/memax-go-agent-sdk/stack/personal"
 )
 
@@ -568,6 +569,9 @@ func (s *Store) ClaimScheduledRunNotifications(ctx context.Context, req personal
 	if err != nil {
 		return nil, err
 	}
+	for _, record := range claimed {
+		personal.ObserveScheduledRunNotificationDeliveryEvent(ctx, memaxagent.EventScheduledRunNotificationClaimed, record)
+	}
 	return claimed, nil
 }
 
@@ -585,6 +589,7 @@ func (s *Store) MarkScheduledRunNotificationDelivered(ctx context.Context, req p
 		return personal.ScheduledRunNotificationRecord{}, err
 	}
 	var record personal.ScheduledRunNotificationRecord
+	var changed bool
 	err = s.withImmediateTx(ctx, func(conn *sql.Conn) error {
 		current, err := s.getScheduledRunNotificationConn(ctx, conn, update.id)
 		if err != nil {
@@ -620,10 +625,14 @@ func (s *Store) MarkScheduledRunNotificationDelivered(ctx context.Context, req p
 			return fmt.Errorf("mark sqlite scheduled run notification delivered %s: %w", update.id, err)
 		}
 		record, err = s.getScheduledRunNotificationConn(ctx, conn, update.id)
+		changed = err == nil
 		return err
 	})
 	if err != nil {
 		return personal.ScheduledRunNotificationRecord{}, err
+	}
+	if changed {
+		personal.ObserveScheduledRunNotificationDeliveryEvent(ctx, memaxagent.EventScheduledRunNotificationDelivered, record)
 	}
 	return record, nil
 }
@@ -673,6 +682,7 @@ func (s *Store) MarkScheduledRunNotificationFailed(ctx context.Context, req pers
 	if err != nil {
 		return personal.ScheduledRunNotificationRecord{}, err
 	}
+	personal.ObserveScheduledRunNotificationDeliveryEvent(ctx, memaxagent.EventScheduledRunNotificationFailed, record)
 	return record, nil
 }
 
@@ -721,6 +731,7 @@ func (s *Store) MarkScheduledRunNotificationDeadLettered(ctx context.Context, re
 	if err != nil {
 		return personal.ScheduledRunNotificationRecord{}, err
 	}
+	personal.ObserveScheduledRunNotificationDeliveryEvent(ctx, memaxagent.EventScheduledRunNotificationDeadLettered, record)
 	return record, nil
 }
 
@@ -768,6 +779,7 @@ func (s *Store) RequeueScheduledRunNotification(ctx context.Context, req persona
 	if err != nil {
 		return personal.ScheduledRunNotificationRecord{}, err
 	}
+	personal.ObserveScheduledRunNotificationDeliveryEvent(ctx, memaxagent.EventScheduledRunNotificationRequeued, record)
 	return record, nil
 }
 

@@ -80,6 +80,12 @@ orphaned `EventToolUse`.
 - `EventTenantDenied`: `Tenant`
 - `EventCommandFinished`, `EventCommandStarted`, `EventCommandInput`, `EventCommandOutput`,
   `EventCommandStopped`: `Command`
+- `EventRunStateChanged`: `Run`
+- `EventScheduledRunNotificationClaimed`,
+  `EventScheduledRunNotificationDelivered`,
+  `EventScheduledRunNotificationFailed`,
+  `EventScheduledRunNotificationDeadLettered`, and
+  `EventScheduledRunNotificationRequeued`: `Notification`
 - `EventResult`: `Result` and optional aggregate `Usage`
 - `EventError` and `EventMemoryCandidateHandlerError`: `Err`
 
@@ -134,6 +140,20 @@ Tenant denial events are emitted from explicit tenant-validation seams rather
 than generic string parsing. They include the denied boundary (`session_start`,
 `model_request`, or `tool_use`), the opaque tenant and subject identifiers, the
 string-typed tenant attributes, and the host-visible denial reason.
+
+Scheduled-run notification delivery events are emitted after the outbox store
+durably accepts a claim, delivered ack, retryable failure, dead-letter terminal
+state, or manual requeue. The payload includes the notification ID, originating
+scheduled run ID, trigger name, occurrence time, scheduled-run status, current
+delivery status, worker ID, attempt count, retry/error text, `DeliverAfter`,
+`DeliveredAt`, and `DeliveryUpdatedAt`. These events complement
+`GetScheduledRunNotificationStats`: stats describe the current outbox snapshot,
+while notification delivery events provide the ordered transition stream that
+audit sinks and alerting systems need. Delivery events intentionally omit the
+scheduled-run session ID, prompt text, terminal result, and terminal error so the
+observer stream stays compact and delivery-focused. Hosts that need the full
+workflow context should correlate by `RunID` with earlier `EventRunStateChanged`
+records or read the notification outbox record by notification ID.
 
 ## Metrics And Spans
 
@@ -231,6 +251,16 @@ channel implementation in host code. Hosts can attach
 `WithScheduledRunNotificationDrainResultObserver` when they need per-pass
 delivery metrics for successful drain passes without reimplementing the drain
 loop; store and context errors are surfaced through the drain return value.
+Delivery transitions also emit structured observer events:
+`scheduled_run_notification_claimed`,
+`scheduled_run_notification_delivered`, `scheduled_run_notification_failed`,
+`scheduled_run_notification_dead_lettered`, and
+`scheduled_run_notification_requeued`. The reference memory store and
+`stack/personal/sqlitestore` emit these events from direct store calls and from
+`DrainScheduledRunNotifications`, so host audit trails do not depend on polling
+or wrapping the drain helper. These events carry delivery state only; use the
+notification ID or run ID to join back to scheduled-run records when an audit
+view needs prompt, result, error, or session-level context.
 `GetScheduledRunNotificationStats` gives hosts a current outbox health snapshot
 without changing delivery semantics. Stores can implement
 `ScheduledRunNotificationStatsStore` for efficient native snapshots; otherwise
