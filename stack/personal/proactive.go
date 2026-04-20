@@ -195,6 +195,14 @@ type ScheduledTrigger interface {
 	IntentAt(now time.Time) (ScheduledIntent, bool)
 }
 
+// ScheduledFireResult reports the outcome of evaluating one due scheduled
+// trigger.
+type ScheduledFireResult struct {
+	Intent  ScheduledIntent
+	Record  ScheduledRunRecord
+	Created bool
+}
+
 // PeriodicTrigger fires one deterministic occurrence each time its cadence
 // window is crossed. Idempotency is handled by the ScheduledRunStore, so the
 // same occurrence can be re-evaluated safely on every watcher tick.
@@ -261,6 +269,36 @@ func (s Stack) StartScheduledRun(ctx context.Context, store ScheduledRunStore, i
 	return record, true, nil
 }
 
+// FireScheduledTriggers evaluates triggers once at now and starts any due
+// proactive runs. This is the one-shot counterpart to WatchScheduledTriggers
+// for cron jobs, serverless handlers, examples, and tests that already have an
+// external scheduler.
+func (s Stack) FireScheduledTriggers(ctx context.Context, store ScheduledRunStore, now time.Time, triggers ...ScheduledTrigger) ([]ScheduledFireResult, error) {
+	if store == nil {
+		return nil, ErrScheduledRunStoreRequired
+	}
+	if len(triggers) == 0 {
+		return nil, fmt.Errorf("at least one scheduled trigger is required")
+	}
+	var results []ScheduledFireResult
+	for _, trigger := range triggers {
+		intent, due := trigger.IntentAt(now.UTC())
+		if !due {
+			continue
+		}
+		record, created, err := s.StartScheduledRun(ctx, store, intent)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, ScheduledFireResult{
+			Intent:  intent,
+			Record:  record,
+			Created: created,
+		})
+	}
+	return results, nil
+}
+
 // WatchScheduledTriggers polls the supplied triggers on a ticker and starts
 // any due proactive runs. Cancel ctx to stop the watcher.
 func (s Stack) WatchScheduledTriggers(ctx context.Context, store ScheduledRunStore, options TriggerWatcherOptions, triggers ...ScheduledTrigger) error {
@@ -275,16 +313,8 @@ func (s Stack) WatchScheduledTriggers(ctx context.Context, store ScheduledRunSto
 		return fmt.Errorf("scheduled trigger interval must be positive")
 	}
 	fire := func(now time.Time) error {
-		for _, trigger := range triggers {
-			intent, due := trigger.IntentAt(now)
-			if !due {
-				continue
-			}
-			if _, _, err := s.StartScheduledRun(ctx, store, intent); err != nil {
-				return err
-			}
-		}
-		return nil
+		_, err := s.FireScheduledTriggers(ctx, store, now, triggers...)
+		return err
 	}
 	if err := fire(options.Now().UTC()); err != nil {
 		return err

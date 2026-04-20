@@ -128,6 +128,61 @@ func TestStackStartScheduledRunPersistsAndDeduplicates(t *testing.T) {
 	}
 }
 
+func TestStackFireScheduledTriggersStartsDueOnlyAndDeduplicates(t *testing.T) {
+	t.Parallel()
+
+	modelClient := &scheduledRunModel{
+		turns: [][]model.StreamEvent{
+			{{Kind: model.StreamText, Text: "Morning briefing ready."}},
+		},
+	}
+	stack, err := New(Config{
+		Base: memaxagent.Options{
+			Model: modelClient,
+		},
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	store := NewMemoryScheduledRunStore()
+	now := time.Date(2026, 4, 19, 7, 1, 0, 0, time.UTC)
+	due := PeriodicTrigger{
+		Name:   "daily-brief",
+		Prompt: "Prepare the morning briefing.",
+		Every:  24 * time.Hour,
+		Anchor: time.Date(2026, 4, 19, 7, 0, 0, 0, time.UTC),
+	}
+	notDue := PeriodicTrigger{
+		Name:   "tomorrow-brief",
+		Prompt: "Prepare tomorrow's briefing.",
+		Every:  24 * time.Hour,
+		Anchor: time.Date(2026, 4, 20, 7, 0, 0, 0, time.UTC),
+	}
+
+	results, err := stack.FireScheduledTriggers(context.Background(), store, now, due, notDue)
+	if err != nil {
+		t.Fatalf("FireScheduledTriggers() error = %v", err)
+	}
+	if len(results) != 1 || !results[0].Created || results[0].Record.ID != "daily-brief:2026-04-19T07:00:00Z" {
+		t.Fatalf("FireScheduledTriggers() = %#v, want one created due run", results)
+	}
+	final := waitForScheduledRun(t, store, results[0].Record.ID, func(r ScheduledRunRecord) bool { return r.Terminal() })
+	if final.Status != ScheduledRunSucceeded || final.Result != "Morning briefing ready." || final.SessionID == "" {
+		t.Fatalf("final run = %#v, want succeeded proactive run", final)
+	}
+
+	duplicates, err := stack.FireScheduledTriggers(context.Background(), store, now, due, notDue)
+	if err != nil {
+		t.Fatalf("FireScheduledTriggers(duplicate) error = %v", err)
+	}
+	if len(duplicates) != 1 || duplicates[0].Created || duplicates[0].Record.ID != final.ID {
+		t.Fatalf("FireScheduledTriggers(duplicate) = %#v, want existing due run created=false", duplicates)
+	}
+	if len(modelClient.requests) != 1 {
+		t.Fatalf("model requests = %d, want one run after duplicate fire", len(modelClient.requests))
+	}
+}
+
 func TestStackWatchScheduledTriggersFiresOncePerOccurrence(t *testing.T) {
 	t.Parallel()
 
