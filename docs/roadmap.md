@@ -112,8 +112,9 @@ system prompt.
   cleanup hooks, scripted managed sessions, command session event coverage,
   buffered-read and interactive-write repair eval coverage, PTY-backed terminal
   session support, explicit terminal geometry and live resize support, Unix PTY
-  plus Windows ConPTY support, and a reference OS-backed managed session
-  adapter now exist over host-owned lifecycle interfaces. Windows ConPTY is
+  plus Windows ConPTY support, Unix process-group stop/timeout cleanup for
+  descendants, and a reference OS-backed managed session adapter now exist over
+  host-owned lifecycle interfaces. Windows ConPTY is
   cross-compiled, unit-tested at the orchestration layer, and awaiting runtime
   coverage in a Windows CI lane for end-to-end validation on the target OS.
 - Add context retention hardening. Initial `contextwindow.PreserveImportant`

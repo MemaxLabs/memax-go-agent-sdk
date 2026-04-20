@@ -68,14 +68,15 @@ func (r sessionRuntime) inputWriter() io.WriteCloser {
 }
 
 type execCommandProcess struct {
-	cmd *exec.Cmd
+	cmd                *exec.Cmd
+	signalsProcessTree bool
 }
 
-func newExecCommandProcess(cmd *exec.Cmd) commandProcess {
+func newExecCommandProcess(cmd *exec.Cmd, signalsProcessTree bool) commandProcess {
 	if cmd == nil {
 		return nil
 	}
-	return &execCommandProcess{cmd: cmd}
+	return &execCommandProcess{cmd: cmd, signalsProcessTree: signalsProcessTree}
 }
 
 func (p *execCommandProcess) PID() int {
@@ -89,14 +90,14 @@ func (p *execCommandProcess) Interrupt() error {
 	if p == nil || p.cmd == nil || p.cmd.Process == nil {
 		return os.ErrProcessDone
 	}
-	return p.cmd.Process.Signal(os.Interrupt)
+	return interruptSessionProcess(p.cmd.Process, p.signalsProcessTree)
 }
 
 func (p *execCommandProcess) Kill() error {
 	if p == nil || p.cmd == nil || p.cmd.Process == nil {
 		return os.ErrProcessDone
 	}
-	return p.cmd.Process.Kill()
+	return killSessionProcess(p.cmd.Process, p.signalsProcessTree)
 }
 
 func (p *execCommandProcess) Wait() sessionWaitResult {
@@ -280,7 +281,8 @@ func (m *OSSessionManager) StartCommand(ctx context.Context, req StartRequest) (
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = cwd
 	cmd.Env = m.runner.env(req.Env)
-	runtime, err := startSessionIO(cmd, req)
+	signalsProcessTree := configureSessionCommand(cmd, req.TTY)
+	runtime, err := startSessionIO(cmd, req, signalsProcessTree)
 	if err != nil {
 		return CommandSession{}, err
 	}
@@ -295,19 +297,20 @@ func (m *OSSessionManager) StartCommand(ctx context.Context, req StartRequest) (
 		stdin:    runtime.stdin,
 		terminal: runtime.terminal,
 		session: CommandSession{
-			SessionID:       req.SessionID,
-			ParentSessionID: req.ParentSessionID,
-			Identity:        req.Identity,
-			Argv:            append([]string(nil), argv...),
-			CWD:             cwd,
-			Purpose:         strings.TrimSpace(req.Purpose),
-			Status:          SessionRunning,
-			PID:             runtime.process.PID(),
-			TTY:             req.TTY,
-			Cols:            req.Cols,
-			Rows:            req.Rows,
-			StartedAt:       now,
-			NextSeq:         1,
+			SessionID:          req.SessionID,
+			ParentSessionID:    req.ParentSessionID,
+			Identity:           req.Identity,
+			Argv:               append([]string(nil), argv...),
+			CWD:                cwd,
+			Purpose:            strings.TrimSpace(req.Purpose),
+			Status:             SessionRunning,
+			PID:                runtime.process.PID(),
+			TTY:                req.TTY,
+			Cols:               req.Cols,
+			Rows:               req.Rows,
+			SignalsProcessTree: signalsProcessTree,
+			StartedAt:          now,
+			NextSeq:            1,
 		},
 		done:    make(chan struct{}),
 		updates: make(chan struct{}, 1),
@@ -530,9 +533,9 @@ func cleanupFailedSessionRuntime(runtime sessionRuntime) {
 	}
 }
 
-func startSessionIO(cmd *exec.Cmd, req StartRequest) (sessionRuntime, error) {
+func startSessionIO(cmd *exec.Cmd, req StartRequest, signalsProcessTree bool) (sessionRuntime, error) {
 	if req.TTY {
-		terminal, process, err := startPTYCommand(cmd, req.Cols, req.Rows)
+		terminal, process, err := startPTYCommand(cmd, req.Cols, req.Rows, signalsProcessTree)
 		if err != nil {
 			return sessionRuntime{}, err
 		}
@@ -578,7 +581,7 @@ func startSessionIO(cmd *exec.Cmd, req StartRequest) (sessionRuntime, error) {
 	_ = stdoutWriter.Close()
 	_ = stderrWriter.Close()
 	return sessionRuntime{
-		process: newExecCommandProcess(cmd),
+		process: newExecCommandProcess(cmd, signalsProcessTree),
 		stdin:   stdin,
 		readers: []osSessionReader{
 			{stream: "stdout", reader: stdout, closer: stdout},

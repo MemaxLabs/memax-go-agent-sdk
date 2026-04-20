@@ -47,19 +47,20 @@ const (
 
 // Metadata for managed command sessions.
 const (
-	MetadataCommandSessionID     = model.MetadataCommandSessionID
-	MetadataCommandStatus        = model.MetadataCommandStatus
-	MetadataCommandPID           = model.MetadataCommandPID
-	MetadataCommandTTY           = model.MetadataCommandTTY
-	MetadataCommandCols          = model.MetadataCommandCols
-	MetadataCommandRows          = model.MetadataCommandRows
-	MetadataCommandStartedAt     = model.MetadataCommandStartedAt
-	MetadataCommandFinishedAt    = model.MetadataCommandFinishedAt
-	MetadataCommandInputBytes    = model.MetadataCommandInputBytes
-	MetadataCommandNextSeq       = model.MetadataCommandNextSeq
-	MetadataCommandOutputChunks  = model.MetadataCommandOutputChunks
-	MetadataCommandDroppedChunks = model.MetadataCommandDroppedChunks
-	MetadataCommandDroppedBytes  = model.MetadataCommandDroppedBytes
+	MetadataCommandSessionID          = model.MetadataCommandSessionID
+	MetadataCommandStatus             = model.MetadataCommandStatus
+	MetadataCommandPID                = model.MetadataCommandPID
+	MetadataCommandTTY                = model.MetadataCommandTTY
+	MetadataCommandSignalsProcessTree = model.MetadataCommandSignalsProcessTree
+	MetadataCommandCols               = model.MetadataCommandCols
+	MetadataCommandRows               = model.MetadataCommandRows
+	MetadataCommandStartedAt          = model.MetadataCommandStartedAt
+	MetadataCommandFinishedAt         = model.MetadataCommandFinishedAt
+	MetadataCommandInputBytes         = model.MetadataCommandInputBytes
+	MetadataCommandNextSeq            = model.MetadataCommandNextSeq
+	MetadataCommandOutputChunks       = model.MetadataCommandOutputChunks
+	MetadataCommandDroppedChunks      = model.MetadataCommandDroppedChunks
+	MetadataCommandDroppedBytes       = model.MetadataCommandDroppedBytes
 )
 
 // SessionStatus describes a managed command lifecycle state.
@@ -85,13 +86,16 @@ type CommandSession struct {
 	TTY             bool
 	Cols            int
 	Rows            int
-	StartedAt       time.Time
-	FinishedAt      *time.Time
-	ExitCode        *int
-	TimedOut        bool
-	NextSeq         int
-	DroppedChunks   int
-	DroppedBytes    int
+	// SignalsProcessTree reports whether StopCommand and timeout handling target
+	// the launched process tree/group instead of only the top-level process.
+	SignalsProcessTree bool
+	StartedAt          time.Time
+	FinishedAt         *time.Time
+	ExitCode           *int
+	TimedOut           bool
+	NextSeq            int
+	DroppedChunks      int
+	DroppedBytes       int
 }
 
 // OutputChunk is one ordered piece of buffered command output.
@@ -870,15 +874,16 @@ func listResult(sessions []CommandSession) model.ToolResult {
 
 func sessionMetadata(session CommandSession) map[string]any {
 	metadata := map[string]any{
-		MetadataCommandSessionID: session.ID,
-		MetadataCommandArgv:      append([]string(nil), session.Argv...),
-		MetadataCommandCWD:       session.CWD,
-		MetadataCommandStatus:    string(session.Status),
-		MetadataCommandPID:       session.PID,
-		MetadataCommandTTY:       session.TTY,
-		MetadataCommandStartedAt: session.StartedAt.UTC().Format(time.RFC3339Nano),
-		MetadataCommandTimedOut:  session.TimedOut,
-		MetadataCommandNextSeq:   session.NextSeq,
+		MetadataCommandSessionID:          session.ID,
+		MetadataCommandArgv:               append([]string(nil), session.Argv...),
+		MetadataCommandCWD:                session.CWD,
+		MetadataCommandStatus:             string(session.Status),
+		MetadataCommandPID:                session.PID,
+		MetadataCommandTTY:                session.TTY,
+		MetadataCommandSignalsProcessTree: session.SignalsProcessTree,
+		MetadataCommandStartedAt:          session.StartedAt.UTC().Format(time.RFC3339Nano),
+		MetadataCommandTimedOut:           session.TimedOut,
+		MetadataCommandNextSeq:            session.NextSeq,
 	}
 	if session.TTY {
 		metadata[MetadataCommandCols] = session.Cols

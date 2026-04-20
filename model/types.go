@@ -214,6 +214,9 @@ const (
 	MetadataCommandPID = "command_pid"
 	// MetadataCommandTTY records whether the managed command session uses a PTY.
 	MetadataCommandTTY = "command_tty"
+	// MetadataCommandSignalsProcessTree records whether stop and timeout signals
+	// target a process tree or group rather than only the top-level process.
+	MetadataCommandSignalsProcessTree = "command_signals_process_tree"
 	// MetadataCommandCols carries the terminal width for PTY-backed managed
 	// command sessions.
 	MetadataCommandCols = "command_cols"

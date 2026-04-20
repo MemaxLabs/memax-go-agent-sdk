@@ -508,7 +508,12 @@ single opaque shell tool. `commandtools.OSSessionManager` is the reference
 local adapter: it launches argv directly, applies rooted cwd resolution,
 retains bounded stdout/stderr chunks with drop accounting, keeps stdin open for
 interactive writes, and supports start, write, resize, read, stop, list, and cleanup
-over real local processes. When `start_command` sets `tty: true`, the adapter
+over real local processes. On Unix, started sessions get their own process
+group so `stop_command`, timeouts, and session cleanup signal ordinary child
+processes as well as the top-level command; shells that create additional
+process groups for job-control children may still require sandbox-level cleanup.
+When `start_command` sets
+`tty: true`, the adapter
 starts a PTY-backed terminal session and returns `pty` output chunks instead of
 pretending terminal-native output is plain stdout. `cols` and `rows` set the
 initial geometry, and `resize_command_terminal` updates it later for shells,
@@ -518,8 +523,8 @@ sandbox and does not filter executables, arguments, or system access.
 On Unix the PTY path uses native pseudo terminals; on Windows it uses ConPTY
 when the host OS exposes the required APIs. Graceful stop is best-effort and
 platform dependent; on Unix it attempts an interrupt before forcing
-termination, while some Windows processes fall back to forced termination
-immediately.
+termination of the process group, while some Windows processes fall back to
+forced termination of the top-level process immediately.
 `commandtools.ScriptedSessionManager` remains available for deterministic tests
 and evals. `commandtools.SessionCleanupOptions(...)` installs `SessionEnded`
 cleanup hooks so session-owned commands do not outlive the parent agent run;

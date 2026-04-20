@@ -32,7 +32,7 @@ type conPTYTerminal struct {
 	closeErr  error
 }
 
-func startPTYCommand(cmd *exec.Cmd, cols, rows int) (terminalHandle, commandProcess, error) {
+func startPTYCommand(cmd *exec.Cmd, cols, rows int, signalsProcessTree bool) (terminalHandle, commandProcess, error) {
 	size, err := conPTYCoord(cols, rows)
 	if err != nil {
 		return nil, nil, err
@@ -68,6 +68,7 @@ func startPTYCommand(cmd *exec.Cmd, cols, rows int) (terminalHandle, commandProc
 		_ = terminal.Close()
 		return nil, nil, err
 	}
+	_ = signalsProcessTree
 	return terminal, process, nil
 }
 

@@ -289,7 +289,8 @@ patches, snapshots, restore, reviewable mutations, and sandbox boundaries.
   interfaces rather than hidden background shell state. Initial start/read/stop
   support exists, including a reference OS-backed managed-session adapter with
   rooted cwd resolution, bounded buffered output, explicit PTY terminal
-  geometry, live resize, and session cleanup hooks.
+  geometry, live resize, Unix process-group cleanup for descendants, and
+  session cleanup hooks.
 - More isolated execution can stay outside the core loop through adapter seams
   that let hosts wire related sandbox-backed workspace, one-shot command, and
   managed command-session toolkits together.
@@ -316,7 +317,10 @@ patches, snapshots, restore, reviewable mutations, and sandbox boundaries.
   stopping or exiting the session explicitly after success. PTY-backed starts
   now cover shells and REPLs that require terminal behavior instead of plain
   pipes, and dedicated PTY resize coverage exists so terminal geometry is part
-  of the eval contract. Initial coverage exists.
+  of the eval contract. Unix stop and timeout paths now cover ordinary
+  descendant process cleanup through process groups; shells can still create
+  separate job-control process groups that require sandbox-level cleanup.
+  Initial coverage exists.
 - Command approval denial drives an exact-input `request_approval` call and a
   single-use approved retry. Initial coverage exists.
 - Command verification policy denial prevents finalization after a matching

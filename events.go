@@ -243,32 +243,33 @@ type TenantEvent struct {
 // CommandEvent describes one host-owned command lifecycle observation.
 // `run_command` uses Action "run" and populates process status fields.
 // Managed command sessions populate Action "start", "write", "read", "resize",
-// or "stop" plus CommandID, Status, PID, TTY, Cols, Rows, NextSeq,
-// OutputChunks, DroppedChunks, and DroppedBytes as appropriate. "write"
-// additionally sets InputBytes.
+// or "stop" plus CommandID, Status, PID, TTY, SignalsProcessTree, Cols, Rows,
+// NextSeq, OutputChunks, DroppedChunks, and DroppedBytes as appropriate.
+// "write" additionally sets InputBytes.
 // Command output text remains in the paired EventToolResult so
 // transcript-visible tool behavior stays explicit.
 type CommandEvent struct {
-	Operation       string
-	CommandID       string
-	Argv            []string
-	CWD             string
-	Status          string
-	PID             int
-	TTY             bool
-	Cols            int
-	Rows            int
-	InputBytes      int
-	ExitCode        int
-	TimedOut        bool
-	DurationMS      int
-	StdoutBytes     int
-	StderrBytes     int
-	OutputTruncated bool
-	NextSeq         int
-	OutputChunks    int
-	DroppedChunks   int
-	DroppedBytes    int
+	Operation          string
+	CommandID          string
+	Argv               []string
+	CWD                string
+	Status             string
+	PID                int
+	TTY                bool
+	SignalsProcessTree bool
+	Cols               int
+	Rows               int
+	InputBytes         int
+	ExitCode           int
+	TimedOut           bool
+	DurationMS         int
+	StdoutBytes        int
+	StderrBytes        int
+	OutputTruncated    bool
+	NextSeq            int
+	OutputChunks       int
+	DroppedChunks      int
+	DroppedBytes       int
 }
 
 // RunEvent describes one durable host-owned run lifecycle transition.

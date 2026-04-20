@@ -121,8 +121,9 @@ status, duration, retained output byte counts, and truncation status.
 Managed-session command tools can additionally emit `EventCommandStarted`,
 `EventCommandInput`, `EventCommandOutput`, `EventCommandResized`, and
 `EventCommandStopped` with a command session ID, status, optional PID, whether
-the session is PTY-backed, terminal cols/rows, next output sequence, stdin byte
-count, returned chunk count, and dropped buffer accounting. Command
+the session is PTY-backed, whether stop/timeout signals target the process
+tree, terminal cols/rows, next output sequence, stdin byte count, returned
+chunk count, and dropped buffer accounting. Command
 stdout/stderr remain in the paired `EventToolResult`, preserving the normal
 transcript-visible tool contract while giving hosts structured process status.
 Terminal geometry metadata is emitted only for PTY-backed sessions; non-TTY

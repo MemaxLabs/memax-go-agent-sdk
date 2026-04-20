@@ -17,7 +17,7 @@ type unixPTYTerminal struct {
 	closeErr  error
 }
 
-func startPTYCommand(cmd *exec.Cmd, cols, rows int) (terminalHandle, commandProcess, error) {
+func startPTYCommand(cmd *exec.Cmd, cols, rows int, signalsProcessTree bool) (terminalHandle, commandProcess, error) {
 	size := &pty.Winsize{
 		Cols: uint16(cols),
 		Rows: uint16(rows),
@@ -27,7 +27,7 @@ func startPTYCommand(cmd *exec.Cmd, cols, rows int) (terminalHandle, commandProc
 		return nil, nil, fmt.Errorf("commandtools: start PTY command: %w", err)
 	}
 	terminal := &unixPTYTerminal{file: file}
-	return terminal, newExecCommandProcess(cmd), nil
+	return terminal, newExecCommandProcess(cmd, signalsProcessTree), nil
 }
 
 func (t *unixPTYTerminal) Read(p []byte) (int, error) {
