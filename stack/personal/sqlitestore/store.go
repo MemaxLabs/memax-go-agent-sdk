@@ -114,6 +114,10 @@ func (s *Store) UpdateScheduledRun(ctx context.Context, update personal.Schedule
 		if err != nil {
 			return err
 		}
+		if current.Terminal() {
+			record = current
+			return nil
+		}
 		if update.Status != "" {
 			current.Status = update.Status
 			if update.Status == personal.ScheduledRunRunning && current.StartedAt.IsZero() {
@@ -159,6 +163,72 @@ func (s *Store) GetScheduledRun(ctx context.Context, id string) (personal.Schedu
 	}
 	defer conn.Close()
 	return s.getScheduledRunConn(ctx, conn, id)
+}
+
+// FailStaleScheduledRuns implements
+// personal.ScheduledRunStoreWithStaleReconciliation. Hosts are expected to call
+// it from their own periodic reconciliation loop.
+func (s *Store) FailStaleScheduledRuns(ctx context.Context, staleBefore time.Time, reason string) ([]personal.ScheduledRunRecord, error) {
+	if err := contextError(ctx); err != nil {
+		return nil, err
+	}
+	if s == nil {
+		return nil, fmt.Errorf("sqlite scheduled run store is nil")
+	}
+
+	var failed []personal.ScheduledRunRecord
+	err := s.withImmediateTx(ctx, func(conn *sql.Conn) error {
+		rows, err := conn.QueryContext(ctx, `
+			SELECT id
+			FROM memax_personal_scheduled_runs
+			WHERE status IN (?, ?)
+				AND updated_at_unix_ms < ?
+			ORDER BY updated_at_unix_ms ASC, id ASC
+		`, string(personal.ScheduledRunQueued), string(personal.ScheduledRunRunning), unixMillis(staleBefore.UTC()))
+		if err != nil {
+			return fmt.Errorf("list stale sqlite scheduled runs: %w", err)
+		}
+		defer rows.Close()
+
+		var ids []string
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				return fmt.Errorf("scan stale sqlite scheduled run id: %w", err)
+			}
+			ids = append(ids, id)
+		}
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("iterate stale sqlite scheduled runs: %w", err)
+		}
+		if err := rows.Close(); err != nil {
+			return fmt.Errorf("close stale sqlite scheduled run rows: %w", err)
+		}
+
+		now := time.Now().UTC()
+		for _, id := range ids {
+			record, err := s.getScheduledRunConn(ctx, conn, id)
+			if err != nil {
+				return err
+			}
+			if record.Terminal() {
+				continue
+			}
+			record.Status = personal.ScheduledRunFailed
+			record.Error = reason
+			record.CompletedAt = now
+			record.UpdatedAt = now
+			if err := s.updateScheduledRunConn(ctx, conn, record); err != nil {
+				return err
+			}
+			failed = append(failed, record)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return failed, nil
 }
 
 func (s *Store) init(ctx context.Context) error {

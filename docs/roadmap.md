@@ -213,7 +213,10 @@ system prompt.
   `ScheduledWorkflowRegistry` firing. Scheduled runs now emit
   `run_state_changed` observer events, with eval-backed lifecycle and
   idempotency coverage for daily briefing plus idempotency coverage for inbox
-  triage and task-ledger maintenance occurrences. Next steps are broader host
+  triage and task-ledger maintenance occurrences. Hosts can also reconcile stale
+  queued or running scheduled occurrences through `FailStaleScheduledRuns` and
+  `WatchStaleScheduledRuns` when their store implements the optional stale
+  reconciliation interface. Next steps are broader host
   adapters for external personal systems plus more adversarial preset suites
   for privacy-sensitive and long-horizon personal workflows.
 - Add `stack/cloudmanaged` for multi-tenant, server-embedded, remote-execution

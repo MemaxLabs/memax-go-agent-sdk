@@ -64,6 +64,19 @@ func TestMemoryScheduledRunStoreCreateUpdateAndGet(t *testing.T) {
 	if got.TriggerName != "daily-brief" || got.OccurrenceAt != occurrence {
 		t.Fatalf("GetScheduledRun() = %#v, want trigger name and occurrence", got)
 	}
+
+	errText := "late failure"
+	unchanged, err := store.UpdateScheduledRun(context.Background(), ScheduledRunUpdate{
+		ID:     record.ID,
+		Status: ScheduledRunFailed,
+		Error:  &errText,
+	})
+	if err != nil {
+		t.Fatalf("UpdateScheduledRun(terminal) error = %v", err)
+	}
+	if unchanged.Status != ScheduledRunSucceeded || unchanged.Result != result || unchanged.Error != "" {
+		t.Fatalf("UpdateScheduledRun(terminal) = %#v, want terminal record unchanged", unchanged)
+	}
 }
 
 func TestPeriodicTriggerIntentAtUsesDeterministicOccurrenceID(t *testing.T) {
@@ -342,6 +355,341 @@ func TestStackStartScheduledRunStopsWhenRunningTransitionFails(t *testing.T) {
 	mu.Unlock()
 	if len(got) != 1 || got[0].Status != string(ScheduledRunQueued) {
 		t.Fatalf("run lifecycle events = %#v, want only queued event", got)
+	}
+}
+
+func TestMemoryScheduledRunStoreFailsStaleQueuedAndRunningRuns(t *testing.T) {
+	t.Parallel()
+
+	store := NewMemoryScheduledRunStore()
+	now := time.Date(2026, 4, 19, 7, 0, 0, 0, time.UTC)
+	for _, req := range []CreateScheduledRunRequest{
+		{
+			ID:           "stale-queued",
+			TriggerName:  "daily-brief",
+			OccurrenceAt: now,
+			Prompt:       "Prepare the morning briefing.",
+		},
+		{
+			ID:           "stale-running",
+			TriggerName:  "daily-brief",
+			OccurrenceAt: now,
+			Prompt:       "Prepare the morning briefing.",
+		},
+		{
+			ID:           "fresh-queued",
+			TriggerName:  "daily-brief",
+			OccurrenceAt: now,
+			Prompt:       "Prepare the morning briefing.",
+		},
+		{
+			ID:           "terminal",
+			TriggerName:  "daily-brief",
+			OccurrenceAt: now,
+			Prompt:       "Prepare the morning briefing.",
+		},
+	} {
+		if _, _, err := store.CreateScheduledRun(context.Background(), req); err != nil {
+			t.Fatalf("CreateScheduledRun(%q) error = %v", req.ID, err)
+		}
+	}
+	if _, err := store.UpdateScheduledRun(context.Background(), ScheduledRunUpdate{
+		ID:     "stale-running",
+		Status: ScheduledRunRunning,
+	}); err != nil {
+		t.Fatalf("UpdateScheduledRun(stale-running) error = %v", err)
+	}
+	completedAt := now.Add(1 * time.Minute)
+	result := "done"
+	if _, err := store.UpdateScheduledRun(context.Background(), ScheduledRunUpdate{
+		ID:          "terminal",
+		Status:      ScheduledRunSucceeded,
+		Result:      &result,
+		CompletedAt: &completedAt,
+	}); err != nil {
+		t.Fatalf("UpdateScheduledRun(terminal) error = %v", err)
+	}
+
+	staleUpdatedAt := time.Now().UTC().Add(-2 * time.Hour)
+	store.mu.Lock()
+	for _, id := range []string{"stale-queued", "stale-running", "terminal"} {
+		record := store.runs[id]
+		record.UpdatedAt = staleUpdatedAt
+		store.runs[id] = record
+	}
+	store.mu.Unlock()
+
+	failed, err := store.FailStaleScheduledRuns(context.Background(), time.Now().UTC().Add(-time.Hour), "reconciled stale run")
+	if err != nil {
+		t.Fatalf("FailStaleScheduledRuns() error = %v", err)
+	}
+	if len(failed) != 2 {
+		t.Fatalf("failed = %#v, want stale queued and running only", failed)
+	}
+	for _, id := range []string{"stale-queued", "stale-running"} {
+		record, err := store.GetScheduledRun(context.Background(), id)
+		if err != nil {
+			t.Fatalf("GetScheduledRun(%q) error = %v", id, err)
+		}
+		if record.Status != ScheduledRunFailed || record.Error != "reconciled stale run" || record.CompletedAt.IsZero() {
+			t.Fatalf("record %q = %#v, want failed stale run", id, record)
+		}
+	}
+	for _, id := range []string{"fresh-queued", "terminal"} {
+		record, err := store.GetScheduledRun(context.Background(), id)
+		if err != nil {
+			t.Fatalf("GetScheduledRun(%q) error = %v", id, err)
+		}
+		if record.Status == ScheduledRunFailed {
+			t.Fatalf("record %q = %#v, want not failed", id, record)
+		}
+	}
+}
+
+func TestStackFailStaleScheduledRunsEmitsLifecycleEvents(t *testing.T) {
+	t.Parallel()
+
+	stack, err := New(Config{
+		Base: memaxagent.Options{
+			Model: &scheduledRunModel{},
+		},
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	store := NewMemoryScheduledRunStore()
+	if _, _, err := store.CreateScheduledRun(context.Background(), CreateScheduledRunRequest{
+		ID:           "daily-brief:2026-04-19T07:00:00Z",
+		TriggerName:  "daily-brief",
+		OccurrenceAt: time.Date(2026, 4, 19, 7, 0, 0, 0, time.UTC),
+		Prompt:       "Prepare the morning briefing.",
+	}); err != nil {
+		t.Fatalf("CreateScheduledRun() error = %v", err)
+	}
+	store.mu.Lock()
+	record := store.runs["daily-brief:2026-04-19T07:00:00Z"]
+	record.UpdatedAt = time.Now().UTC().Add(-2 * time.Hour)
+	store.runs[record.ID] = record
+	store.mu.Unlock()
+
+	var (
+		mu     sync.Mutex
+		events []memaxagent.RunEvent
+	)
+	observer := memaxagent.EventObserverFunc(func(_ context.Context, event memaxagent.Event) {
+		if event.Kind != memaxagent.EventRunStateChanged || event.Run == nil {
+			return
+		}
+		mu.Lock()
+		events = append(events, *event.Run)
+		mu.Unlock()
+	})
+
+	count, err := stack.FailStaleScheduledRuns(memaxagent.WithEventObserver(context.Background(), observer), store, time.Now().UTC().Add(-time.Hour), "scheduled reconciliation")
+	if err != nil {
+		t.Fatalf("FailStaleScheduledRuns() error = %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("FailStaleScheduledRuns() count = %d, want 1", count)
+	}
+	got := waitForObservedRunEvents(t, func() []memaxagent.RunEvent {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]memaxagent.RunEvent(nil), events...)
+	}, 1)
+	if got[0].RunID != record.ID || got[0].Status != string(ScheduledRunFailed) || got[0].Error != "scheduled reconciliation" {
+		t.Fatalf("run event = %#v, want stale failure", got[0])
+	}
+}
+
+func TestStackWatchStaleScheduledRunsFailsExpiredRun(t *testing.T) {
+	t.Parallel()
+
+	stack, err := New(Config{
+		Base: memaxagent.Options{
+			Model: &scheduledRunModel{},
+		},
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	store := NewMemoryScheduledRunStore()
+	if _, _, err := store.CreateScheduledRun(context.Background(), CreateScheduledRunRequest{
+		ID:           "daily-brief:2026-04-19T07:00:00Z",
+		TriggerName:  "daily-brief",
+		OccurrenceAt: time.Date(2026, 4, 19, 7, 0, 0, 0, time.UTC),
+		Prompt:       "Prepare the morning briefing.",
+	}); err != nil {
+		t.Fatalf("CreateScheduledRun() error = %v", err)
+	}
+	store.mu.Lock()
+	record := store.runs["daily-brief:2026-04-19T07:00:00Z"]
+	record.UpdatedAt = time.Now().UTC().Add(-2 * time.Hour)
+	store.runs[record.ID] = record
+	store.mu.Unlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- stack.WatchStaleScheduledRuns(ctx, store, time.Millisecond, time.Hour)
+	}()
+	final := waitForScheduledRun(t, store, record.ID, func(r ScheduledRunRecord) bool { return r.Terminal() })
+	cancel()
+	if final.Status != ScheduledRunFailed || final.Error != staleScheduledRunFailureReason {
+		t.Fatalf("final run = %#v, want stale failure", final)
+	}
+	if err := <-errCh; !errors.Is(err, context.Canceled) {
+		t.Fatalf("WatchStaleScheduledRuns() error = %v, want context.Canceled", err)
+	}
+}
+
+func TestStackStartScheduledRunDoesNotOverwriteStaleFailureAfterLateCompletion(t *testing.T) {
+	modelClient := newBlockingScheduledRunModel()
+	stack, err := New(Config{
+		Base: memaxagent.Options{
+			Model: modelClient,
+		},
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	store := NewMemoryScheduledRunStore()
+	intent := ScheduledIntent{
+		ID:           "daily-brief:2026-04-19T07:00:00Z",
+		TriggerName:  "daily-brief",
+		OccurrenceAt: time.Date(2026, 4, 19, 7, 0, 0, 0, time.UTC),
+		Prompt:       "Prepare the morning briefing.",
+	}
+	var (
+		mu     sync.Mutex
+		events []memaxagent.RunEvent
+	)
+	observer := memaxagent.EventObserverFunc(func(_ context.Context, event memaxagent.Event) {
+		if event.Kind != memaxagent.EventRunStateChanged || event.Run == nil {
+			return
+		}
+		mu.Lock()
+		events = append(events, *event.Run)
+		mu.Unlock()
+	})
+
+	record, created, err := stack.StartScheduledRun(memaxagent.WithEventObserver(context.Background(), observer), store, intent)
+	if err != nil {
+		t.Fatalf("StartScheduledRun() error = %v", err)
+	}
+	if !created {
+		t.Fatal("StartScheduledRun() created = false, want true")
+	}
+	_ = waitForScheduledRun(t, store, record.ID, func(r ScheduledRunRecord) bool { return r.Status == ScheduledRunRunning })
+	select {
+	case <-modelClient.blocked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("scheduled run model did not block")
+	}
+
+	staleUpdatedAt := time.Now().UTC().Add(-2 * time.Hour)
+	store.mu.Lock()
+	running := store.runs[record.ID]
+	running.UpdatedAt = staleUpdatedAt
+	store.runs[record.ID] = running
+	store.mu.Unlock()
+
+	count, err := stack.FailStaleScheduledRuns(memaxagent.WithEventObserver(context.Background(), observer), store, time.Now().UTC().Add(-time.Hour), staleScheduledRunFailureReason)
+	if err != nil {
+		t.Fatalf("FailStaleScheduledRuns() error = %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("FailStaleScheduledRuns() count = %d, want 1", count)
+	}
+	modelClient.releaseStream()
+	select {
+	case <-modelClient.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("scheduled run model did not finish")
+	}
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		final, err := store.GetScheduledRun(context.Background(), record.ID)
+		if err != nil {
+			t.Fatalf("GetScheduledRun() error = %v", err)
+		}
+		if final.Status != ScheduledRunFailed || final.Error != staleScheduledRunFailureReason {
+			t.Fatalf("final run = %#v, want stale failure to remain terminal", final)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, event := range events {
+		if event.Status == string(ScheduledRunSucceeded) {
+			t.Fatalf("events = %#v, want no late succeeded event after stale failure", events)
+		}
+	}
+}
+
+func TestStackExecuteScheduledRunDoesNotReopenTerminalRun(t *testing.T) {
+	t.Parallel()
+
+	modelClient := &scheduledRunModel{}
+	stack, err := New(Config{
+		Base: memaxagent.Options{
+			Model: modelClient,
+		},
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	store := NewMemoryScheduledRunStore()
+	record, _, err := store.CreateScheduledRun(context.Background(), CreateScheduledRunRequest{
+		ID:           "daily-brief:2026-04-19T07:00:00Z",
+		TriggerName:  "daily-brief",
+		OccurrenceAt: time.Date(2026, 4, 19, 7, 0, 0, 0, time.UTC),
+		Prompt:       "Prepare the morning briefing.",
+	})
+	if err != nil {
+		t.Fatalf("CreateScheduledRun() error = %v", err)
+	}
+	reason := "scheduled reconciliation"
+	completedAt := time.Now().UTC()
+	if _, err := store.UpdateScheduledRun(context.Background(), ScheduledRunUpdate{
+		ID:          record.ID,
+		Status:      ScheduledRunFailed,
+		Error:       &reason,
+		CompletedAt: &completedAt,
+	}); err != nil {
+		t.Fatalf("UpdateScheduledRun(failed) error = %v", err)
+	}
+
+	var (
+		mu     sync.Mutex
+		events []memaxagent.RunEvent
+	)
+	observer := memaxagent.EventObserverFunc(func(_ context.Context, event memaxagent.Event) {
+		if event.Kind != memaxagent.EventRunStateChanged || event.Run == nil {
+			return
+		}
+		mu.Lock()
+		events = append(events, *event.Run)
+		mu.Unlock()
+	})
+
+	stack.executeScheduledRun(memaxagent.WithEventObserver(context.Background(), observer), store, record)
+
+	final, err := store.GetScheduledRun(context.Background(), record.ID)
+	if err != nil {
+		t.Fatalf("GetScheduledRun() error = %v", err)
+	}
+	if final.Status != ScheduledRunFailed || final.Error != reason {
+		t.Fatalf("final run = %#v, want terminal failed run unchanged", final)
+	}
+	if len(modelClient.requests) != 0 {
+		t.Fatalf("model requests = %d, want none for terminal run", len(modelClient.requests))
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(events) != 0 {
+		t.Fatalf("events = %#v, want no reopened lifecycle events", events)
 	}
 }
 
@@ -748,6 +1096,70 @@ func (m *scheduledRunModel) Stream(_ context.Context, req model.Request) (model.
 	events := m.turns[0]
 	m.turns = m.turns[1:]
 	return &scheduledRunStream{events: events}, nil
+}
+
+type blockingScheduledRunModel struct {
+	blocked     chan struct{}
+	release     chan struct{}
+	done        chan struct{}
+	blockOnce   sync.Once
+	releaseOnce sync.Once
+	doneOnce    sync.Once
+}
+
+func newBlockingScheduledRunModel() *blockingScheduledRunModel {
+	return &blockingScheduledRunModel{
+		blocked: make(chan struct{}),
+		release: make(chan struct{}),
+		done:    make(chan struct{}),
+	}
+}
+
+func (m *blockingScheduledRunModel) Stream(context.Context, model.Request) (model.Stream, error) {
+	return &blockingScheduledRunStream{model: m}, nil
+}
+
+func (m *blockingScheduledRunModel) releaseStream() {
+	m.releaseOnce.Do(func() {
+		close(m.release)
+	})
+}
+
+func (m *blockingScheduledRunModel) markBlocked() {
+	m.blockOnce.Do(func() {
+		close(m.blocked)
+	})
+}
+
+func (m *blockingScheduledRunModel) markDone() {
+	m.doneOnce.Do(func() {
+		close(m.done)
+	})
+}
+
+type blockingScheduledRunStream struct {
+	model    *blockingScheduledRunModel
+	released bool
+	sent     bool
+}
+
+func (s *blockingScheduledRunStream) Recv() (model.StreamEvent, error) {
+	if !s.released {
+		s.model.markBlocked()
+		<-s.model.release
+		s.released = true
+	}
+	if s.sent {
+		s.model.markDone()
+		return model.StreamEvent{}, model.ErrEndOfStream
+	}
+	s.sent = true
+	return model.StreamEvent{Kind: model.StreamText, Text: "Morning briefing ready."}, nil
+}
+
+func (s *blockingScheduledRunStream) Close() error {
+	s.model.markDone()
+	return nil
 }
 
 type scheduledRunStream struct {

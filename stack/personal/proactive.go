@@ -15,6 +15,11 @@ import (
 // needs an explicit store.
 var ErrScheduledRunStoreRequired = errors.New("personal stack: scheduled run store is required")
 
+// ErrScheduledRunStoreStaleUnsupported reports that stale scheduled-run
+// reconciliation needs a store that can atomically fail old queued/running
+// records.
+var ErrScheduledRunStoreStaleUnsupported = errors.New("personal stack: scheduled run store does not support stale reconciliation")
+
 // ErrScheduledWorkflowRegistryRequired reports that proactive workflow
 // execution needs an explicit workflow registry.
 var ErrScheduledWorkflowRegistryRequired = errors.New("personal stack: scheduled workflow registry is required")
@@ -88,10 +93,24 @@ type ScheduledRunUpdate struct {
 // This is intentionally separate from cloudmanaged.RunStore: the personal
 // stack's distinctive contract is idempotency by deterministic trigger intent,
 // not multi-tenant worker claiming or heartbeat-based liveness.
+//
+// Implementations must treat terminal records as immutable. An
+// UpdateScheduledRun call against a terminal record should return the existing
+// record unchanged without reporting an error.
 type ScheduledRunStore interface {
 	CreateScheduledRun(context.Context, CreateScheduledRunRequest) (ScheduledRunRecord, bool, error)
 	UpdateScheduledRun(context.Context, ScheduledRunUpdate) (ScheduledRunRecord, error)
 	GetScheduledRun(context.Context, string) (ScheduledRunRecord, error)
+}
+
+// ScheduledRunStoreWithStaleReconciliation atomically marks stale queued or
+// running scheduled runs as failed. Stores use UpdatedAt as the liveness clock:
+// queued records that never transition to running and running records that
+// never reach a terminal update both become explicit failed runs. The
+// reconciliation must be atomic with UpdateScheduledRun so a late executor
+// cannot overwrite a reconciled terminal failure.
+type ScheduledRunStoreWithStaleReconciliation interface {
+	FailStaleScheduledRuns(context.Context, time.Time, string) ([]ScheduledRunRecord, error)
 }
 
 // MemoryScheduledRunStore is the reference in-memory scheduled-run backend.
@@ -153,6 +172,9 @@ func (s *MemoryScheduledRunStore) UpdateScheduledRun(_ context.Context, update S
 	if !ok {
 		return ScheduledRunRecord{}, ErrScheduledRunNotFound
 	}
+	if record.Terminal() {
+		return cloneScheduledRunRecord(record), nil
+	}
 	if update.Status != "" {
 		record.Status = update.Status
 		if update.Status == ScheduledRunRunning && record.StartedAt.IsZero() {
@@ -188,6 +210,35 @@ func (s *MemoryScheduledRunStore) GetScheduledRun(_ context.Context, id string) 
 		return ScheduledRunRecord{}, ErrScheduledRunNotFound
 	}
 	return cloneScheduledRunRecord(record), nil
+}
+
+// FailStaleScheduledRuns implements ScheduledRunStoreWithStaleReconciliation.
+func (s *MemoryScheduledRunStore) FailStaleScheduledRuns(ctx context.Context, staleBefore time.Time, reason string) ([]ScheduledRunRecord, error) {
+	if s == nil {
+		return nil, fmt.Errorf("memory scheduled run store is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var failed []ScheduledRunRecord
+	now := time.Now().UTC()
+	for id, record := range s.runs {
+		if record.Status != ScheduledRunQueued && record.Status != ScheduledRunRunning {
+			continue
+		}
+		if !record.UpdatedAt.Before(staleBefore) {
+			continue
+		}
+		record.Status = ScheduledRunFailed
+		record.Error = reason
+		record.CompletedAt = now
+		record.UpdatedAt = now
+		s.runs[id] = record
+		failed = append(failed, cloneScheduledRunRecord(record))
+	}
+	return failed, nil
 }
 
 // ScheduledIntent identifies one deterministic proactive run occurrence.
@@ -301,6 +352,8 @@ type TriggerWatcherOptions struct {
 	Interval time.Duration
 	Now      func() time.Time
 }
+
+const staleScheduledRunFailureReason = "scheduled run stale timeout"
 
 func (o TriggerWatcherOptions) withDefaults() TriggerWatcherOptions {
 	if o.Now == nil {
@@ -437,12 +490,70 @@ func (s Stack) WatchScheduledTriggers(ctx context.Context, store ScheduledRunSto
 	}
 }
 
+// FailStaleScheduledRuns marks queued or running scheduled runs whose UpdatedAt
+// is older than staleBefore as failed, then emits lifecycle events for the
+// failed records. Use it from host-owned reconciliation jobs when a process may
+// have died after creating a scheduled occurrence or while running it.
+func (s Stack) FailStaleScheduledRuns(ctx context.Context, store ScheduledRunStore, staleBefore time.Time, reason string) (int64, error) {
+	if store == nil {
+		return 0, ErrScheduledRunStoreRequired
+	}
+	reconciler, ok := store.(ScheduledRunStoreWithStaleReconciliation)
+	if !ok {
+		return 0, ErrScheduledRunStoreStaleUnsupported
+	}
+	failed, err := reconciler.FailStaleScheduledRuns(ctx, staleBefore, reason)
+	if err != nil {
+		return 0, fmt.Errorf("fail stale scheduled runs: %w", err)
+	}
+	for _, record := range failed {
+		observeScheduledRunState(ctx, record)
+	}
+	return int64(len(failed)), nil
+}
+
+// WatchStaleScheduledRuns continuously fails queued or running scheduled runs
+// whose UpdatedAt ages past staleThreshold. Cancel ctx to stop the watcher.
+func (s Stack) WatchStaleScheduledRuns(ctx context.Context, store ScheduledRunStore, interval, staleThreshold time.Duration) error {
+	if store == nil {
+		return ErrScheduledRunStoreRequired
+	}
+	if interval <= 0 {
+		return fmt.Errorf("stale scheduled run watch interval must be positive")
+	}
+	if staleThreshold <= 0 {
+		return fmt.Errorf("stale scheduled run threshold must be positive")
+	}
+	check := func() error {
+		_, err := s.FailStaleScheduledRuns(ctx, store, time.Now().UTC().Add(-staleThreshold), staleScheduledRunFailureReason)
+		return err
+	}
+	if err := check(); err != nil {
+		return err
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			if err := check(); err != nil {
+				return err
+			}
+		}
+	}
+}
+
 func (s Stack) executeScheduledRun(ctx context.Context, store ScheduledRunStore, record ScheduledRunRecord) {
 	record, err := store.UpdateScheduledRun(ctx, ScheduledRunUpdate{
 		ID:     record.ID,
 		Status: ScheduledRunRunning,
 	})
 	if err != nil {
+		return
+	}
+	if record.Status != ScheduledRunRunning {
 		return
 	}
 	observeScheduledRunState(ctx, record)
@@ -465,6 +576,11 @@ func (s Stack) executeScheduledRun(ctx context.Context, store ScheduledRunStore,
 			runErr = event.Err
 		}
 	}
+	current, err := store.GetScheduledRun(context.Background(), record.ID)
+	if err == nil && current.Terminal() {
+		return
+	}
+
 	now := time.Now().UTC()
 	update := ScheduledRunUpdate{
 		ID:          record.ID,
@@ -479,7 +595,7 @@ func (s Stack) executeScheduledRun(ctx context.Context, store ScheduledRunStore,
 		update.Result = &finalResult
 	}
 	record, err = store.UpdateScheduledRun(ctx, update)
-	if err == nil {
+	if err == nil && record.Status == update.Status {
 		observeScheduledRunState(ctx, record)
 	}
 }

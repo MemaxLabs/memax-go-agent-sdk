@@ -208,6 +208,10 @@ one exists, so hosts can build proactive-workflow audit trails without
 polling the scheduled-run store as their only source of truth. These events are
 emitted after the scheduled-run store accepts the corresponding durable
 transition; if a store write fails, that transition is not synthesized.
+When hosts reconcile orphaned personal scheduled runs with
+`FailStaleScheduledRuns` or `WatchStaleScheduledRuns`, each stale queued or
+running occurrence that is marked failed emits the same event after the store
+accepts the durable failure update.
 
 ## Regression Coverage
 

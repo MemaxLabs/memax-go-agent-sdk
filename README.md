@@ -189,7 +189,7 @@ preset contract, default policy posture, and authoritative eval scenario names.
 
 | Preset | Intended workflow | Eval-backed coverage |
 | --- | --- | --- |
-| `personal_assistant` | careful personal assistance with durable recall plus approval-gated memory, note, message, and schedule writes | `personal_preset_personal_assistant`, `personal_preset_personal_assistant_memory_approval_recovery`, `personal_preset_personal_assistant_note_recall`, `personal_preset_personal_assistant_message_recall`, `personal_preset_personal_assistant_message_approval_recovery`, `personal_preset_personal_assistant_inbox_triage_reply_followup`, `personal_preset_personal_assistant_inbox_send_backend_failure`, `personal_preset_personal_assistant_jmap_inbox_reply`, `personal_preset_personal_assistant_schedule_recall`, `personal_preset_personal_assistant_schedule_approval_recovery`, `personal_preset_personal_assistant_schedule_conflict_recovery`, `personal_preset_personal_assistant_daily_briefing`, `personal_preset_personal_assistant_week_ahead_planning`, `personal_preset_personal_assistant_week_ahead_task_ledger`, `personal_preset_personal_assistant_week_ahead_task_ledger_sqlite`, `personal_preset_personal_assistant_scheduled_daily_briefing`, `personal_preset_personal_assistant_scheduled_inbox_triage`, `personal_preset_personal_assistant_scheduled_inbox_triage_jmap` |
+| `personal_assistant` | careful personal assistance with durable recall plus approval-gated memory, note, message, and schedule writes | `personal_preset_personal_assistant`, `personal_preset_personal_assistant_memory_approval_recovery`, `personal_preset_personal_assistant_note_recall`, `personal_preset_personal_assistant_message_recall`, `personal_preset_personal_assistant_message_approval_recovery`, `personal_preset_personal_assistant_inbox_triage_reply_followup`, `personal_preset_personal_assistant_inbox_send_backend_failure`, `personal_preset_personal_assistant_jmap_inbox_reply`, `personal_preset_personal_assistant_schedule_recall`, `personal_preset_personal_assistant_schedule_approval_recovery`, `personal_preset_personal_assistant_schedule_conflict_recovery`, `personal_preset_personal_assistant_daily_briefing`, `personal_preset_personal_assistant_week_ahead_planning`, `personal_preset_personal_assistant_week_ahead_task_ledger`, `personal_preset_personal_assistant_week_ahead_task_ledger_sqlite`, `personal_preset_personal_assistant_scheduled_daily_briefing`, `personal_preset_personal_assistant_scheduled_run_stale_reconciliation`, `personal_preset_personal_assistant_scheduled_inbox_triage`, `personal_preset_personal_assistant_scheduled_inbox_triage_jmap` |
 | `research_partner` | longer-horizon personal research and scoped delegation | `personal_preset_research_partner` |
 
 The first real remote inbox backend for the personal stack now exists through
@@ -204,7 +204,10 @@ deterministic occurrences plus an embedded SQLite backend in
 `stack/personal/sqlitestore`. Scheduled runs emit `run_state_changed` observer
 events so hosts can monitor proactive workflow lifecycle without polling the
 scheduled-run store alone; those events are emitted after the scheduled-run
-store accepts each durable transition. Week-ahead planning also has
+store accepts each durable transition. Hosts can reconcile orphaned queued or
+running scheduled records through `FailStaleScheduledRuns` and
+`WatchStaleScheduledRuns` when the store implements the optional stale
+reconciliation interface. Week-ahead planning also has
 eval-backed durable task continuity: follow-ups can be written through
 `upsert_task`, reloaded in a later run through planner context, and updated
 without duplicating the task ledger.

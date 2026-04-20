@@ -1514,6 +1514,116 @@ func PersonalPresetAssistantScheduledDailyBriefing() agenteval.Case {
 	}
 }
 
+// PersonalPresetAssistantScheduledRunStaleReconciliation returns a scenario
+// where a proactive scheduled occurrence is orphaned before execution and the
+// host-owned reconciliation path turns it into an explicit failed lifecycle.
+func PersonalPresetAssistantScheduledRunStaleReconciliation() agenteval.Case {
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "should not run"}},
+	)
+
+	config, configErr := personal.PresetPersonalAssistant.Config()
+	if configErr == nil {
+		config.Base.Model = modelClient
+	}
+	stack, stackErr := personal.New(config)
+	scheduledDB, scheduledDBErr := sql.Open("sqlite", "file:scheduled-run-stale-reconciliation?mode=memory&cache=shared")
+	var (
+		store    personal.ScheduledRunStore
+		storeErr error
+	)
+	if scheduledDBErr == nil {
+		store, storeErr = personalsqlitestore.New(context.Background(), scheduledDB)
+	}
+	occurrence := time.Date(2026, 4, 19, 7, 0, 0, 0, time.UTC)
+	var (
+		finalRun personal.ScheduledRunRecord
+		failErr  error
+		count    int64
+	)
+
+	return agenteval.Case{
+		Name:   "personal_preset_personal_assistant_scheduled_run_stale_reconciliation",
+		Prompt: "Reconcile an orphaned proactive scheduled occurrence.",
+		Cleanup: func() {
+			if scheduledDB != nil {
+				_ = scheduledDB.Close()
+			}
+		},
+		Run: func(ctx context.Context) (<-chan memaxagent.Event, error) {
+			if stackErr != nil {
+				return nil, stackErr
+			}
+			if scheduledDBErr != nil {
+				return nil, scheduledDBErr
+			}
+			if storeErr != nil {
+				return nil, storeErr
+			}
+			if _, created, err := store.CreateScheduledRun(ctx, personal.CreateScheduledRunRequest{
+				ID:           "daily-brief:2026-04-19T07:00:00Z",
+				TriggerName:  "daily-brief",
+				OccurrenceAt: occurrence,
+				Prompt:       "Prepare the morning briefing for 2026-04-19.",
+			}); err != nil {
+				return nil, err
+			} else if !created {
+				return nil, fmt.Errorf("scheduled run already existed")
+			}
+			staleUpdatedAt := time.Now().UTC().Add(-2 * time.Hour)
+			if _, err := scheduledDB.ExecContext(ctx, `
+				UPDATE memax_personal_scheduled_runs
+				SET updated_at_unix_ms = ?
+				WHERE id = ?
+			`, staleUpdatedAt.UnixMilli(), "daily-brief:2026-04-19T07:00:00Z"); err != nil {
+				return nil, fmt.Errorf("age scheduled run: %w", err)
+			}
+			out, observer, closeOut := observedEventStream(ctx, 16)
+			go func() {
+				defer closeOut()
+				count, failErr = stack.FailStaleScheduledRuns(memaxagent.WithEventObserver(ctx, observer), store, time.Now().UTC().Add(-time.Hour), "scheduled reconciliation")
+				finalRun, _ = store.GetScheduledRun(context.Background(), "daily-brief:2026-04-19T07:00:00Z")
+			}()
+			return out, nil
+		},
+		Assertions: []agenteval.Assertion{
+			toolConstructionSucceeded(configErr, stackErr, scheduledDBErr, storeErr),
+			agenteval.EventKindEmitted(memaxagent.EventRunStateChanged),
+			requestCountEquals(modelClient, 0),
+			{
+				Name: "stale reconciliation emits failed lifecycle and durable terminal state",
+				Check: func(result agenteval.Result) error {
+					if failErr != nil {
+						return failErr
+					}
+					if count != 1 {
+						return fmt.Errorf("failed count = %d, want 1", count)
+					}
+					var got []memaxagent.RunEvent
+					for _, event := range result.Events {
+						if event.Kind == memaxagent.EventRunStateChanged && event.Run != nil {
+							got = append(got, *event.Run)
+						}
+					}
+					if len(got) != 1 {
+						return fmt.Errorf("scheduled run events = %#v, want one failed event", got)
+					}
+					if got[0].RunID != "daily-brief:2026-04-19T07:00:00Z" || got[0].TriggerName != "daily-brief" {
+						return fmt.Errorf("scheduled run event = %#v, want daily brief identity", got[0])
+					}
+					if got[0].Status != string(personal.ScheduledRunFailed) || got[0].Error != "scheduled reconciliation" {
+						return fmt.Errorf("scheduled run event = %#v, want failed reconciliation event", got[0])
+					}
+					if finalRun.Status != personal.ScheduledRunFailed || finalRun.Error != "scheduled reconciliation" || finalRun.CompletedAt.IsZero() {
+						return fmt.Errorf("final run = %#v, want failed stale scheduled run", finalRun)
+					}
+					return nil
+				},
+			},
+		},
+	}
+}
+
 // PersonalPresetAssistantScheduledTaskLedgerMaintenance returns a single-use
 // scenario where a proactive scheduled trigger maintains durable task state by
 // listing persisted pending work before applying deterministic updates.

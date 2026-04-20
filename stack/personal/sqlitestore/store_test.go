@@ -79,6 +79,19 @@ func TestStoreCreateUpdateAndGetScheduledRun(t *testing.T) {
 		t.Fatalf("UpdateScheduledRun(succeeded) = %#v, want succeeded record with result", record)
 	}
 
+	errText := "late failure"
+	unchanged, err := store.UpdateScheduledRun(context.Background(), personal.ScheduledRunUpdate{
+		ID:     record.ID,
+		Status: personal.ScheduledRunFailed,
+		Error:  &errText,
+	})
+	if err != nil {
+		t.Fatalf("UpdateScheduledRun(terminal) error = %v", err)
+	}
+	if unchanged.Status != personal.ScheduledRunSucceeded || unchanged.Result != result || unchanged.Error != "" {
+		t.Fatalf("UpdateScheduledRun(terminal) = %#v, want terminal record unchanged", unchanged)
+	}
+
 	got, err := store.GetScheduledRun(context.Background(), record.ID)
 	if err != nil {
 		t.Fatalf("GetScheduledRun() error = %v", err)
@@ -142,6 +155,94 @@ func TestStoreCreateScheduledRunIsAtomic(t *testing.T) {
 	}
 	if got.Status != personal.ScheduledRunQueued {
 		t.Fatalf("GetScheduledRun() = %#v, want queued durable record", got)
+	}
+}
+
+func TestStoreFailStaleScheduledRuns(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	occurrence := time.Date(2026, 4, 19, 7, 0, 0, 0, time.UTC)
+	for _, req := range []personal.CreateScheduledRunRequest{
+		{
+			ID:           "stale-queued",
+			TriggerName:  "daily-brief",
+			OccurrenceAt: occurrence,
+			Prompt:       "Prepare the morning briefing.",
+		},
+		{
+			ID:           "stale-running",
+			TriggerName:  "daily-brief",
+			OccurrenceAt: occurrence,
+			Prompt:       "Prepare the morning briefing.",
+		},
+		{
+			ID:           "fresh-queued",
+			TriggerName:  "daily-brief",
+			OccurrenceAt: occurrence,
+			Prompt:       "Prepare the morning briefing.",
+		},
+		{
+			ID:           "terminal",
+			TriggerName:  "daily-brief",
+			OccurrenceAt: occurrence,
+			Prompt:       "Prepare the morning briefing.",
+		},
+	} {
+		if _, _, err := store.CreateScheduledRun(context.Background(), req); err != nil {
+			t.Fatalf("CreateScheduledRun(%q) error = %v", req.ID, err)
+		}
+	}
+	if _, err := store.UpdateScheduledRun(context.Background(), personal.ScheduledRunUpdate{
+		ID:     "stale-running",
+		Status: personal.ScheduledRunRunning,
+	}); err != nil {
+		t.Fatalf("UpdateScheduledRun(stale-running) error = %v", err)
+	}
+	completedAt := time.Now().UTC()
+	result := "done"
+	if _, err := store.UpdateScheduledRun(context.Background(), personal.ScheduledRunUpdate{
+		ID:          "terminal",
+		Status:      personal.ScheduledRunSucceeded,
+		Result:      &result,
+		CompletedAt: &completedAt,
+	}); err != nil {
+		t.Fatalf("UpdateScheduledRun(terminal) error = %v", err)
+	}
+
+	staleUpdatedAt := time.Now().UTC().Add(-2 * time.Hour)
+	if _, err := store.db.ExecContext(context.Background(), `
+		UPDATE memax_personal_scheduled_runs
+		SET updated_at_unix_ms = ?
+		WHERE id IN (?, ?, ?)
+	`, staleUpdatedAt.UnixMilli(), "stale-queued", "stale-running", "terminal"); err != nil {
+		t.Fatalf("age stale runs: %v", err)
+	}
+
+	failed, err := store.FailStaleScheduledRuns(context.Background(), time.Now().UTC().Add(-time.Hour), "reconciled stale run")
+	if err != nil {
+		t.Fatalf("FailStaleScheduledRuns() error = %v", err)
+	}
+	if len(failed) != 2 {
+		t.Fatalf("failed = %#v, want stale queued and running only", failed)
+	}
+	for _, id := range []string{"stale-queued", "stale-running"} {
+		record, err := store.GetScheduledRun(context.Background(), id)
+		if err != nil {
+			t.Fatalf("GetScheduledRun(%q) error = %v", id, err)
+		}
+		if record.Status != personal.ScheduledRunFailed || record.Error != "reconciled stale run" || record.CompletedAt.IsZero() {
+			t.Fatalf("record %q = %#v, want failed stale run", id, record)
+		}
+	}
+	for _, id := range []string{"fresh-queued", "terminal"} {
+		record, err := store.GetScheduledRun(context.Background(), id)
+		if err != nil {
+			t.Fatalf("GetScheduledRun(%q) error = %v", id, err)
+		}
+		if record.Status == personal.ScheduledRunFailed {
+			t.Fatalf("record %q = %#v, want not failed", id, record)
+		}
 	}
 }
 
