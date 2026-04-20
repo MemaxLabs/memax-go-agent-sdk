@@ -1514,6 +1514,105 @@ func PersonalPresetAssistantScheduledDailyBriefing() agenteval.Case {
 	}
 }
 
+// PersonalPresetAssistantScheduledDailyBriefingNotification returns a
+// single-use scenario where a proactive daily briefing completion is mirrored
+// into a host-owned notification outbox.
+func PersonalPresetAssistantScheduledDailyBriefingNotification() agenteval.Case {
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "Morning briefing ready for 2026-04-19."}},
+	)
+
+	config, configErr := personal.PresetPersonalAssistant.Config()
+	if configErr == nil {
+		config.Base.Model = modelClient
+	}
+	stack, stackErr := personal.New(config)
+	store := personal.NewMemoryScheduledRunStore()
+	notificationStore := personal.NewMemoryScheduledRunNotificationStore()
+	notifier, notifierErr := personal.NewScheduledRunNotifier(notificationStore)
+	now := time.Date(2026, 4, 19, 7, 1, 0, 0, time.UTC)
+	trigger := personal.PeriodicTrigger{
+		Name:   "daily-brief",
+		Prompt: "Prepare the morning briefing for 2026-04-19.",
+		Every:  24 * time.Hour,
+		Anchor: time.Date(2026, 4, 19, 7, 0, 0, 0, time.UTC),
+	}
+
+	var (
+		finalRun personal.ScheduledRunRecord
+		fireErr  error
+	)
+
+	return agenteval.Case{
+		Name:   "personal_preset_personal_assistant_scheduled_daily_briefing_notification",
+		Prompt: "Run the daily briefing trigger and mirror terminal completion into the notification outbox.",
+		Run: func(ctx context.Context) (<-chan memaxagent.Event, error) {
+			if stackErr != nil {
+				return nil, stackErr
+			}
+			if notifierErr != nil {
+				return nil, notifierErr
+			}
+			out, observer, closeOut := observedEventStream(ctx, 32)
+			go func() {
+				defer closeOut()
+				runCtx := memaxagent.WithEventObserver(memaxagent.WithEventObserver(ctx, observer), notifier)
+				finalRun, _, _, fireErr = fireScheduledTriggerOnce(runCtx, stack, store, now, trigger)
+			}()
+			return out, nil
+		},
+		Assertions: []agenteval.Assertion{
+			toolConstructionSucceeded(configErr, stackErr, notifierErr),
+			agenteval.EventKindEmitted(memaxagent.EventRunStateChanged),
+			agenteval.FinalEquals("Morning briefing ready for 2026-04-19."),
+			requestCountEquals(modelClient, 1),
+			{
+				Name: "terminal scheduled run notification is stored exactly once",
+				Check: func(result agenteval.Result) error {
+					if fireErr != nil {
+						return fireErr
+					}
+					if finalRun.Status != personal.ScheduledRunSucceeded {
+						return fmt.Errorf("final run = %#v, want succeeded", finalRun)
+					}
+					notifications, err := notificationStore.ListScheduledRunNotifications(context.Background(), personal.ScheduledRunNotificationFilter{})
+					if err != nil {
+						return err
+					}
+					if len(notifications) != 1 {
+						return fmt.Errorf("notifications = %#v, want one terminal notification", notifications)
+					}
+					got := notifications[0]
+					if got.RunID != finalRun.ID || got.Status != personal.ScheduledRunSucceeded {
+						return fmt.Errorf("notification = %#v, want succeeded final run %q", got, finalRun.ID)
+					}
+					if got.Result != "Morning briefing ready for 2026-04-19." || got.TriggerName != "daily-brief" {
+						return fmt.Errorf("notification = %#v, want daily briefing result", got)
+					}
+					return nil
+				},
+			},
+			{
+				Name: "succeeded lifecycle event carries result for delivery observers",
+				Check: func(result agenteval.Result) error {
+					for _, event := range result.Events {
+						if event.Kind != memaxagent.EventRunStateChanged || event.Run == nil {
+							continue
+						}
+						if event.Run.Status == string(personal.ScheduledRunSucceeded) {
+							if event.Run.Result != "Morning briefing ready for 2026-04-19." {
+								return fmt.Errorf("succeeded run event = %#v, want result", event.Run)
+							}
+							return nil
+						}
+					}
+					return fmt.Errorf("missing succeeded scheduled run event")
+				},
+			},
+		},
+	}
+}
+
 // PersonalPresetAssistantScheduledRunStaleReconciliation returns a scenario
 // where a proactive scheduled occurrence is orphaned before execution and the
 // host-owned reconciliation path turns it into an explicit failed lifecycle.

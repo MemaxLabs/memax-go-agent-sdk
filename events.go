@@ -257,13 +257,16 @@ type CommandEvent struct {
 // RunEvent describes one durable host-owned run lifecycle transition.
 // Status is one of the stack-defined lifecycle states such as queued, running,
 // succeeded, failed, or canceled. TriggerName and OccurrenceAt are set for
-// personal proactive scheduled runs.
+// personal proactive scheduled runs. Result is set by stacks that expose a
+// terminal user-facing result, including partial terminal output, through
+// lifecycle notifications.
 type RunEvent struct {
 	RunID        string
 	Status       string
 	Prompt       string
 	TriggerName  string
 	OccurrenceAt time.Time
+	Result       string
 	Error        string
 }
 

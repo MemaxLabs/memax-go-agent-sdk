@@ -216,7 +216,9 @@ system prompt.
   triage and task-ledger maintenance occurrences. Hosts can also reconcile stale
   queued or running scheduled occurrences through `FailStaleScheduledRuns` and
   `WatchStaleScheduledRuns` when their store implements the optional stale
-  reconciliation interface. Next steps are broader host
+  reconciliation interface, and can mirror scheduled-run lifecycle into a
+  host-owned notification outbox through `NewScheduledRunNotifier`. Next steps
+  are broader durable notification stores and host
   adapters for external personal systems plus more adversarial preset suites
   for privacy-sensitive and long-horizon personal workflows.
 - Add `stack/cloudmanaged` for multi-tenant, server-embedded, remote-execution

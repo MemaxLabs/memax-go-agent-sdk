@@ -61,7 +61,12 @@ type ScheduledRunRecord struct {
 
 // Terminal reports whether r is finished.
 func (r ScheduledRunRecord) Terminal() bool {
-	switch r.Status {
+	return r.Status.Terminal()
+}
+
+// Terminal reports whether status is a finished scheduled-run lifecycle state.
+func (s ScheduledRunStatus) Terminal() bool {
+	switch s {
 	case ScheduledRunSucceeded, ScheduledRunFailed:
 		return true
 	default:
@@ -590,6 +595,9 @@ func (s Stack) executeScheduledRun(ctx context.Context, store ScheduledRunStore,
 		update.Status = ScheduledRunFailed
 		errText := runErr.Error()
 		update.Error = &errText
+		if finalResult != "" {
+			update.Result = &finalResult
+		}
 	} else {
 		update.Status = ScheduledRunSucceeded
 		update.Result = &finalResult
@@ -612,6 +620,10 @@ func observeScheduledRunState(ctx context.Context, record ScheduledRunRecord) {
 	if record.Status == ScheduledRunFailed {
 		errText = record.Error
 	}
+	var result string
+	if record.Status.Terminal() {
+		result = record.Result
+	}
 	event := memaxagent.Event{
 		Kind:      memaxagent.EventRunStateChanged,
 		SessionID: record.SessionID,
@@ -622,6 +634,7 @@ func observeScheduledRunState(ctx context.Context, record ScheduledRunRecord) {
 			Prompt:       record.Prompt,
 			TriggerName:  record.TriggerName,
 			OccurrenceAt: record.OccurrenceAt,
+			Result:       result,
 			Error:        errText,
 		},
 	}

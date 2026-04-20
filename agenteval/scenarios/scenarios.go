@@ -75,6 +75,7 @@ func All() []agenteval.Case {
 		PersonalPresetAssistantWeekAheadTaskLedger(),
 		PersonalPresetAssistantWeekAheadTaskLedgerSQLite(),
 		PersonalPresetAssistantScheduledDailyBriefing(),
+		PersonalPresetAssistantScheduledDailyBriefingNotification(),
 		PersonalPresetAssistantScheduledRunStaleReconciliation(),
 		PersonalPresetAssistantScheduledTaskLedgerMaintenance(),
 		PersonalPresetAssistantScheduledInboxTriage(),

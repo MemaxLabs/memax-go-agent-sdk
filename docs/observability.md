@@ -203,15 +203,23 @@ state reconstruction.
 Personal proactive scheduled runs use the same `run_state_changed` observer
 event when a deterministic occurrence moves through queued, running,
 succeeded, or failed lifecycle. The event includes the scheduled run ID,
-trigger name, occurrence timestamp, prompt, status, and terminal error when
-one exists, so hosts can build proactive-workflow audit trails without
-polling the scheduled-run store as their only source of truth. These events are
-emitted after the scheduled-run store accepts the corresponding durable
-transition; if a store write fails, that transition is not synthesized.
+trigger name, occurrence timestamp, prompt, status, terminal result, and
+terminal error when one exists, so hosts can build proactive-workflow audit
+trails without polling the scheduled-run store as their only source of truth.
+These events are emitted after the scheduled-run store accepts the
+corresponding durable transition; if a store write fails, that transition is
+not synthesized.
 When hosts reconcile orphaned personal scheduled runs with
 `FailStaleScheduledRuns` or `WatchStaleScheduledRuns`, each stale queued or
 running occurrence that is marked failed emits the same event after the store
 accepts the durable failure update.
+`stack/personal.NewScheduledRunNotifier` is a host-owned observer adapter over
+these events. It writes idempotent run/status notifications to a configured
+outbox store and supports `done_only`, `state_changes`, and `silent` policies,
+leaving the actual delivery channel and buffering policy under host control.
+Notification records include the scheduled prompt plus terminal result or error
+text, so production outbox backends are responsible for any redaction policy
+needed before email, push, chat, or inbox delivery.
 
 ## Regression Coverage
 

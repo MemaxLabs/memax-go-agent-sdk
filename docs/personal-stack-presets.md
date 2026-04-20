@@ -127,6 +127,14 @@ Common sources of confusion:
   `FailStaleScheduledRuns` or `WatchStaleScheduledRuns`; stale queued or
   running records become failed records and emit the same lifecycle event
   contract.
+- `NewScheduledRunNotifier` converts those scheduled-run lifecycle events into
+  a host-owned notification outbox. The default `done_only` policy mirrors only
+  terminal completions, `state_changes` mirrors every transition, and `silent`
+  leaves lifecycle observation enabled without user-facing delivery. The
+  reference memory outbox is intentionally small; production hosts can replace
+  it with email, push, chat, or durable inbox delivery.
+  Notification records carry the scheduled prompt plus terminal result or error
+  text; host-owned delivery backends should apply their own redaction policy.
 - attaching `Tasks` gives personal workflows a durable task ledger. The
   planner reloads task state before every model request, so follow-ups created
   in one run through `upsert_task` can be visible to a later run before the

@@ -286,6 +286,43 @@ func TestStackStartScheduledRunEmitsFailedLifecycleEvent(t *testing.T) {
 	}
 }
 
+func TestObserveScheduledRunStateIncludesFailedPartialResult(t *testing.T) {
+	t.Parallel()
+
+	var got memaxagent.RunEvent
+	observer := memaxagent.EventObserverFunc(func(_ context.Context, event memaxagent.Event) {
+		if event.Kind == memaxagent.EventRunStateChanged && event.Run != nil {
+			got = *event.Run
+		}
+	})
+	ctx := memaxagent.WithEventObserver(context.Background(), observer)
+	observeScheduledRunState(ctx, ScheduledRunRecord{
+		ID:           "daily-brief:2026-04-19T07:00:00Z",
+		TriggerName:  "daily-brief",
+		OccurrenceAt: time.Date(2026, 4, 19, 7, 0, 0, 0, time.UTC),
+		Prompt:       "Prepare the morning briefing.",
+		Status:       ScheduledRunFailed,
+		Result:       "Partial briefing ready.",
+		Error:        "provider unavailable",
+		UpdatedAt:    time.Date(2026, 4, 19, 7, 5, 0, 0, time.UTC),
+	})
+	if got.Status != string(ScheduledRunFailed) || got.Result != "Partial briefing ready." || got.Error != "provider unavailable" {
+		t.Fatalf("observed run = %#v, want failed partial result and error", got)
+	}
+	observeScheduledRunState(ctx, ScheduledRunRecord{
+		ID:           "daily-brief:2026-04-19T07:00:00Z",
+		TriggerName:  "daily-brief",
+		OccurrenceAt: time.Date(2026, 4, 19, 7, 0, 0, 0, time.UTC),
+		Prompt:       "Prepare the morning briefing.",
+		Status:       ScheduledRunRunning,
+		Result:       "Should not surface before terminal.",
+		UpdatedAt:    time.Date(2026, 4, 19, 7, 1, 0, 0, time.UTC),
+	})
+	if got.Status != string(ScheduledRunRunning) || got.Result != "" {
+		t.Fatalf("observed run = %#v, want non-terminal event without result", got)
+	}
+}
+
 func TestStackStartScheduledRunStopsWhenRunningTransitionFails(t *testing.T) {
 	t.Parallel()
 

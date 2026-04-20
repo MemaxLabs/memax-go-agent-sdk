@@ -436,7 +436,9 @@ mapping.
 **Current state:** deterministic eval harness and baseline scenarios exist,
 including an initial composed coding-loop scenario that ties planner context,
 workspace mutation, managed command-session output, verification, and
-finalization gating into one deterministic run.
+finalization gating into one deterministic run. Personal proactive workflows
+now have eval coverage for scheduled-run idempotency, lifecycle events, stale
+reconciliation, and terminal notification outbox mirroring.
 
 **Gap:** Most evals still test feature plumbing; composed long-horizon
 intelligence coverage is only starting to land.
