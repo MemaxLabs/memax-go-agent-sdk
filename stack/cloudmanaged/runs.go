@@ -366,6 +366,7 @@ func (s Stack) StartRun(ctx context.Context, prompt string, scope tenant.Scope) 
 		s.active.set(record.ID, cancel)
 	}
 	go func() {
+		defer cancel()
 		_, _ = s.ExecuteRun(runCtx, record.ID, WorkerOptions{})
 	}()
 	return record, nil
