@@ -71,7 +71,8 @@ type ScheduledRunNotificationFilter struct {
 // ScheduledRunNotificationStore persists host-owned scheduled-run notification
 // outbox records. Implementations should treat CreateScheduledRunNotification
 // as idempotent by ID, returning created=false with the existing record when a
-// notification was already recorded.
+// notification was already recorded. List ordering is backend-defined; callers
+// that need a portable order should sort by CreatedAt and ID.
 type ScheduledRunNotificationStore interface {
 	CreateScheduledRunNotification(context.Context, CreateScheduledRunNotificationRequest) (ScheduledRunNotificationRecord, bool, error)
 	ListScheduledRunNotifications(context.Context, ScheduledRunNotificationFilter) ([]ScheduledRunNotificationRecord, error)
@@ -99,7 +100,7 @@ func (s *MemoryScheduledRunNotificationStore) CreateScheduledRunNotification(ctx
 	if err := ctx.Err(); err != nil {
 		return ScheduledRunNotificationRecord{}, false, err
 	}
-	record, err := normalizeScheduledRunNotification(req)
+	record, err := req.Normalize()
 	if err != nil {
 		return ScheduledRunNotificationRecord{}, false, err
 	}
@@ -258,7 +259,10 @@ func scheduledRunNotificationFromEvent(event memaxagent.Event) (CreateScheduledR
 	}, true
 }
 
-func normalizeScheduledRunNotification(req CreateScheduledRunNotificationRequest) (ScheduledRunNotificationRecord, error) {
+// Normalize validates req and returns the durable notification record it
+// represents. Stores should use this helper so validation stays consistent
+// across in-memory and durable backends.
+func (req CreateScheduledRunNotificationRequest) Normalize() (ScheduledRunNotificationRecord, error) {
 	record := ScheduledRunNotificationRecord{
 		ID:           strings.TrimSpace(req.ID),
 		RunID:        strings.TrimSpace(req.RunID),

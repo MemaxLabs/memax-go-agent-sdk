@@ -210,7 +210,8 @@ running scheduled records through `FailStaleScheduledRuns` and
 reconciliation interface. Hosts can attach `NewScheduledRunNotifier` as an
 event observer to mirror terminal scheduled-run completions, or every lifecycle
 state, into a host-owned notification outbox with idempotent run/status
-records. Week-ahead planning also has
+records; `stack/personal/sqlitestore` persists both scheduled runs and those
+notification records for restart-safe lookback. Week-ahead planning also has
 eval-backed durable task continuity: follow-ups can be written through
 `upsert_task`, reloaded in a later run through planner context, and updated
 without duplicating the task ledger.

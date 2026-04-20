@@ -438,7 +438,8 @@ including an initial composed coding-loop scenario that ties planner context,
 workspace mutation, managed command-session output, verification, and
 finalization gating into one deterministic run. Personal proactive workflows
 now have eval coverage for scheduled-run idempotency, lifecycle events, stale
-reconciliation, and terminal notification outbox mirroring.
+reconciliation, and terminal notification outbox mirroring, plus unit coverage
+for SQLite notification lookback.
 
 **Gap:** Most evals still test feature plumbing; composed long-horizon
 intelligence coverage is only starting to land.

@@ -217,9 +217,10 @@ system prompt.
   queued or running scheduled occurrences through `FailStaleScheduledRuns` and
   `WatchStaleScheduledRuns` when their store implements the optional stale
   reconciliation interface, and can mirror scheduled-run lifecycle into a
-  host-owned notification outbox through `NewScheduledRunNotifier`. Next steps
-  are broader durable notification stores and host
-  adapters for external personal systems plus more adversarial preset suites
+  host-owned notification outbox through `NewScheduledRunNotifier`; the
+  personal SQLite store now persists both scheduled runs and notification
+  records for restart-safe lookback. Next steps are host delivery adapters for
+  external personal systems plus more adversarial preset suites
   for privacy-sensitive and long-horizon personal workflows.
 - Add `stack/cloudmanaged` for multi-tenant, server-embedded, remote-execution
   products with durable jobs, tenancy-aware policy, quotas, audit hooks, and

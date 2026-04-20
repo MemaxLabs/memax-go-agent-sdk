@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -246,6 +247,147 @@ func TestStoreFailStaleScheduledRuns(t *testing.T) {
 	}
 }
 
+func TestStoreCreateAndListScheduledRunNotifications(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	first := scheduledRunNotificationRequest("daily-brief:2026-04-19T07:00:00Z", personal.ScheduledRunSucceeded, 0)
+	record, created, err := store.CreateScheduledRunNotification(context.Background(), first)
+	if err != nil {
+		t.Fatalf("CreateScheduledRunNotification() error = %v", err)
+	}
+	if !created || record.ID != first.ID || record.Result != first.Result {
+		t.Fatalf("CreateScheduledRunNotification() = (%#v, %t), want created notification", record, created)
+	}
+	duplicate, created, err := store.CreateScheduledRunNotification(context.Background(), first)
+	if err != nil {
+		t.Fatalf("CreateScheduledRunNotification(duplicate) error = %v", err)
+	}
+	if created || duplicate.ID != record.ID {
+		t.Fatalf("CreateScheduledRunNotification(duplicate) = (%#v, %t), want existing notification", duplicate, created)
+	}
+
+	failed := scheduledRunNotificationRequest("daily-brief:2026-04-19T07:00:00Z", personal.ScheduledRunFailed, time.Minute)
+	failed.Error = "provider unavailable"
+	failed.Result = "Partial briefing ready."
+	if _, _, err := store.CreateScheduledRunNotification(context.Background(), failed); err != nil {
+		t.Fatalf("CreateScheduledRunNotification(failed) error = %v", err)
+	}
+	other := scheduledRunNotificationRequest("weekly-plan:2026-04-20T07:00:00Z", personal.ScheduledRunSucceeded, 2*time.Minute)
+	if _, _, err := store.CreateScheduledRunNotification(context.Background(), other); err != nil {
+		t.Fatalf("CreateScheduledRunNotification(other) error = %v", err)
+	}
+
+	all, err := store.ListScheduledRunNotifications(context.Background(), personal.ScheduledRunNotificationFilter{})
+	if err != nil {
+		t.Fatalf("ListScheduledRunNotifications() error = %v", err)
+	}
+	if got := gotIDs(all); !equalStrings(got, []string{first.ID, failed.ID, other.ID}) {
+		t.Fatalf("notification ids = %v, want insertion order", got)
+	}
+	byRun, err := store.ListScheduledRunNotifications(context.Background(), personal.ScheduledRunNotificationFilter{
+		RunID: first.RunID,
+	})
+	if err != nil {
+		t.Fatalf("ListScheduledRunNotifications(run) error = %v", err)
+	}
+	if got := gotIDs(byRun); !equalStrings(got, []string{first.ID, failed.ID}) {
+		t.Fatalf("run notification ids = %v, want first run notifications", got)
+	}
+	byStatus, err := store.ListScheduledRunNotifications(context.Background(), personal.ScheduledRunNotificationFilter{
+		Status: personal.ScheduledRunSucceeded,
+		Limit:  1,
+	})
+	if err != nil {
+		t.Fatalf("ListScheduledRunNotifications(status) error = %v", err)
+	}
+	if got := gotIDs(byStatus); !equalStrings(got, []string{first.ID}) {
+		t.Fatalf("status notification ids = %v, want first succeeded notification only", got)
+	}
+}
+
+func TestStoreScheduledRunNotificationsSurviveReopen(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "scheduled-runs.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("sql.Open() error = %v", err)
+	}
+	store, err := New(context.Background(), db)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	req := scheduledRunNotificationRequest("daily-brief:2026-04-19T07:00:00Z", personal.ScheduledRunSucceeded, 0)
+	if _, _, err := store.CreateScheduledRunNotification(context.Background(), req); err != nil {
+		t.Fatalf("CreateScheduledRunNotification() error = %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	reopenedDB, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("sql.Open(reopen) error = %v", err)
+	}
+	defer reopenedDB.Close()
+	reopened, err := New(context.Background(), reopenedDB)
+	if err != nil {
+		t.Fatalf("New(reopen) error = %v", err)
+	}
+	list, err := reopened.ListScheduledRunNotifications(context.Background(), personal.ScheduledRunNotificationFilter{
+		RunID: req.RunID,
+	})
+	if err != nil {
+		t.Fatalf("ListScheduledRunNotifications(reopen) error = %v", err)
+	}
+	if len(list) != 1 || list[0].ID != req.ID || list[0].Result != req.Result {
+		t.Fatalf("reopened notifications = %#v, want persisted notification", list)
+	}
+}
+
+func TestStoreCreateScheduledRunNotificationIsAtomic(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	req := scheduledRunNotificationRequest("daily-brief:2026-04-19T07:00:00Z", personal.ScheduledRunSucceeded, 0)
+
+	const goroutines = 16
+	var (
+		wg           sync.WaitGroup
+		createdCount int
+		mu           sync.Mutex
+	)
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, created, err := store.CreateScheduledRunNotification(context.Background(), req)
+			if err != nil {
+				t.Errorf("CreateScheduledRunNotification() error = %v", err)
+				return
+			}
+			if created {
+				mu.Lock()
+				createdCount++
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+
+	if createdCount != 1 {
+		t.Fatalf("created count = %d, want 1", createdCount)
+	}
+	list, err := store.ListScheduledRunNotifications(context.Background(), personal.ScheduledRunNotificationFilter{})
+	if err != nil {
+		t.Fatalf("ListScheduledRunNotifications() error = %v", err)
+	}
+	if len(list) != 1 || list[0].ID != req.ID {
+		t.Fatalf("notifications = %#v, want one durable notification", list)
+	}
+}
+
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
 
@@ -261,6 +403,40 @@ func newTestStore(t *testing.T) *Store {
 		t.Fatalf("New() error = %v", err)
 	}
 	return store
+}
+
+func scheduledRunNotificationRequest(runID string, status personal.ScheduledRunStatus, offset time.Duration) personal.CreateScheduledRunNotificationRequest {
+	createdAt := time.Date(2026, 4, 19, 7, 5, 0, 0, time.UTC).Add(offset)
+	return personal.CreateScheduledRunNotificationRequest{
+		ID:           runID + ":" + string(status),
+		RunID:        runID,
+		Status:       status,
+		TriggerName:  "daily-brief",
+		OccurrenceAt: time.Date(2026, 4, 19, 7, 0, 0, 0, time.UTC),
+		Prompt:       "Prepare the morning briefing.",
+		Result:       "Morning briefing ready.",
+		CreatedAt:    createdAt,
+	}
+}
+
+func gotIDs(records []personal.ScheduledRunNotificationRecord) []string {
+	ids := make([]string, 0, len(records))
+	for _, record := range records {
+		ids = append(ids, record.ID)
+	}
+	return ids
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func ExampleNew() {

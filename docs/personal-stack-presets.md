@@ -131,8 +131,9 @@ Common sources of confusion:
   a host-owned notification outbox. The default `done_only` policy mirrors only
   terminal completions, `state_changes` mirrors every transition, and `silent`
   leaves lifecycle observation enabled without user-facing delivery. The
-  reference memory outbox is intentionally small; production hosts can replace
-  it with email, push, chat, or durable inbox delivery.
+  reference memory outbox is intentionally small; `stack/personal/sqlitestore`
+  persists the same outbox records for restart-safe lookback. Production hosts
+  can replace or drain it into email, push, chat, or durable inbox delivery.
   Notification records carry the scheduled prompt plus terminal result or error
   text; host-owned delivery backends should apply their own redaction policy.
 - attaching `Tasks` gives personal workflows a durable task ledger. The

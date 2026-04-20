@@ -220,6 +220,8 @@ leaving the actual delivery channel and buffering policy under host control.
 Notification records include the scheduled prompt plus terminal result or error
 text, so production outbox backends are responsible for any redaction policy
 needed before email, push, chat, or inbox delivery.
+Use `stack/personal/sqlitestore` when those outbox records need to survive
+process restarts or be drained by a separate host delivery worker.
 
 ## Regression Coverage
 

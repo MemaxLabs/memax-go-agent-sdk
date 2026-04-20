@@ -1,11 +1,13 @@
 // Package sqlitestore provides a durable SQLite-backed personal scheduled-run
-// store.
+// store and scheduled-run notification outbox.
 //
 // The store preserves the ScheduledRunStore idempotency contract with SQLite
 // BEGIN IMMEDIATE transactions, so concurrent watchers attempting the same
-// trigger occurrence serialize before the create-if-missing check runs. Unlike
-// cloudmanaged.RunStore, this store is keyed by deterministic trigger intent
-// rather than worker claim or tenant identity.
+// trigger occurrence serialize before the create-if-missing check runs. The
+// notification outbox uses the same transaction discipline for idempotent
+// run/status records, so duplicate observer deliveries do not create duplicate
+// notifications. Unlike cloudmanaged.RunStore, this store is keyed by
+// deterministic trigger intent rather than worker claim or tenant identity.
 package sqlitestore
 
 import (
@@ -13,6 +15,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/stack/personal"
@@ -22,6 +25,12 @@ import (
 type Store struct {
 	db *sql.DB
 }
+
+var (
+	_ personal.ScheduledRunStore                        = (*Store)(nil)
+	_ personal.ScheduledRunStoreWithStaleReconciliation = (*Store)(nil)
+	_ personal.ScheduledRunNotificationStore            = (*Store)(nil)
+)
 
 // New initializes and returns a SQLite-backed scheduled-run store.
 func New(ctx context.Context, db *sql.DB) (*Store, error) {
@@ -231,6 +240,108 @@ func (s *Store) FailStaleScheduledRuns(ctx context.Context, staleBefore time.Tim
 	return failed, nil
 }
 
+// CreateScheduledRunNotification implements
+// personal.ScheduledRunNotificationStore.
+func (s *Store) CreateScheduledRunNotification(ctx context.Context, req personal.CreateScheduledRunNotificationRequest) (personal.ScheduledRunNotificationRecord, bool, error) {
+	if err := contextError(ctx); err != nil {
+		return personal.ScheduledRunNotificationRecord{}, false, err
+	}
+	if s == nil {
+		return personal.ScheduledRunNotificationRecord{}, false, fmt.Errorf("sqlite scheduled run notification store is nil")
+	}
+	record, err := req.Normalize()
+	if err != nil {
+		return personal.ScheduledRunNotificationRecord{}, false, err
+	}
+
+	var created bool
+	err = s.withImmediateTx(ctx, func(conn *sql.Conn) error {
+		existing, err := s.getScheduledRunNotificationConn(ctx, conn, record.ID)
+		if err == nil {
+			record = existing
+			created = false
+			return nil
+		}
+		if !errors.Is(err, errScheduledRunNotificationNotFound) {
+			return err
+		}
+		if _, err := conn.ExecContext(ctx, `
+			INSERT INTO memax_personal_scheduled_run_notifications (
+				id, run_id, status, trigger_name, occurrence_at_unix_ms,
+				prompt, result, error, created_at_unix_ms
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, record.ID, record.RunID, string(record.Status), record.TriggerName,
+			unixMillis(record.OccurrenceAt), record.Prompt, record.Result, record.Error,
+			unixMillis(record.CreatedAt)); err != nil {
+			return fmt.Errorf("create sqlite scheduled run notification: %w", err)
+		}
+		created = true
+		return nil
+	})
+	if err != nil {
+		return personal.ScheduledRunNotificationRecord{}, false, err
+	}
+	return record, created, nil
+}
+
+// ListScheduledRunNotifications implements personal.ScheduledRunNotificationStore.
+func (s *Store) ListScheduledRunNotifications(ctx context.Context, filter personal.ScheduledRunNotificationFilter) ([]personal.ScheduledRunNotificationRecord, error) {
+	if err := contextError(ctx); err != nil {
+		return nil, err
+	}
+	if s == nil {
+		return nil, fmt.Errorf("sqlite scheduled run notification store is nil")
+	}
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("acquire sqlite scheduled run connection: %w", err)
+	}
+	defer conn.Close()
+
+	var (
+		query strings.Builder
+		args  []any
+	)
+	query.WriteString(`
+		SELECT id, run_id, status, trigger_name, occurrence_at_unix_ms,
+			prompt, result, error, created_at_unix_ms
+		FROM memax_personal_scheduled_run_notifications
+		WHERE 1 = 1
+	`)
+	if strings.TrimSpace(filter.RunID) != "" {
+		query.WriteString(" AND run_id = ?")
+		args = append(args, strings.TrimSpace(filter.RunID))
+	}
+	if filter.Status != "" {
+		query.WriteString(" AND status = ?")
+		args = append(args, string(filter.Status))
+	}
+	query.WriteString(" ORDER BY created_at_unix_ms ASC, id ASC")
+	if filter.Limit > 0 {
+		query.WriteString(" LIMIT ?")
+		args = append(args, filter.Limit)
+	}
+
+	rows, err := conn.QueryContext(ctx, query.String(), args...)
+	if err != nil {
+		return nil, fmt.Errorf("list sqlite scheduled run notifications: %w", err)
+	}
+	defer rows.Close()
+
+	notifications := make([]personal.ScheduledRunNotificationRecord, 0)
+	for rows.Next() {
+		record, err := scanScheduledRunNotification(rows)
+		if err != nil {
+			return nil, err
+		}
+		notifications = append(notifications, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate sqlite scheduled run notifications: %w", err)
+	}
+	return notifications, nil
+}
+
 func (s *Store) init(ctx context.Context) error {
 	if err := contextError(ctx); err != nil {
 		return err
@@ -258,6 +369,33 @@ func (s *Store) init(ctx context.Context) error {
 		ON memax_personal_scheduled_runs(updated_at_unix_ms)
 	`); err != nil {
 		return fmt.Errorf("init sqlite scheduled run updated index: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS memax_personal_scheduled_run_notifications (
+			id TEXT PRIMARY KEY,
+			run_id TEXT NOT NULL,
+			status TEXT NOT NULL,
+			trigger_name TEXT NOT NULL,
+			occurrence_at_unix_ms INTEGER NOT NULL,
+			prompt TEXT NOT NULL,
+			result TEXT NOT NULL DEFAULT '',
+			error TEXT NOT NULL DEFAULT '',
+			created_at_unix_ms INTEGER NOT NULL
+		)
+	`); err != nil {
+		return fmt.Errorf("init sqlite scheduled run notification schema: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		CREATE INDEX IF NOT EXISTS memax_personal_scheduled_run_notifications_run_idx
+		ON memax_personal_scheduled_run_notifications(run_id, created_at_unix_ms)
+	`); err != nil {
+		return fmt.Errorf("init sqlite scheduled run notification run index: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		CREATE INDEX IF NOT EXISTS memax_personal_scheduled_run_notifications_status_idx
+		ON memax_personal_scheduled_run_notifications(status, created_at_unix_ms)
+	`); err != nil {
+		return fmt.Errorf("init sqlite scheduled run notification status index: %w", err)
 	}
 	return nil
 }
@@ -358,6 +496,53 @@ func (s *Store) updateScheduledRunConn(ctx context.Context, conn *sql.Conn, reco
 	return nil
 }
 
+func (s *Store) getScheduledRunNotificationConn(ctx context.Context, conn *sql.Conn, id string) (personal.ScheduledRunNotificationRecord, error) {
+	if id == "" {
+		return personal.ScheduledRunNotificationRecord{}, fmt.Errorf("scheduled run notification id is required")
+	}
+	row := conn.QueryRowContext(ctx, `
+		SELECT id, run_id, status, trigger_name, occurrence_at_unix_ms,
+			prompt, result, error, created_at_unix_ms
+		FROM memax_personal_scheduled_run_notifications
+		WHERE id = ?
+		LIMIT 1
+	`, id)
+	record, err := scanScheduledRunNotification(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return personal.ScheduledRunNotificationRecord{}, errScheduledRunNotificationNotFound
+		}
+		return personal.ScheduledRunNotificationRecord{}, fmt.Errorf("get sqlite scheduled run notification %s: %w", id, err)
+	}
+	return record, nil
+}
+
+type scheduledRunNotificationScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanScheduledRunNotification(scanner scheduledRunNotificationScanner) (personal.ScheduledRunNotificationRecord, error) {
+	var (
+		record personal.ScheduledRunNotificationRecord
+		status string
+	)
+	if err := scanner.Scan(
+		&record.ID,
+		&record.RunID,
+		&status,
+		&record.TriggerName,
+		(*unixMillisTime)(&record.OccurrenceAt),
+		&record.Prompt,
+		&record.Result,
+		&record.Error,
+		(*unixMillisTime)(&record.CreatedAt),
+	); err != nil {
+		return personal.ScheduledRunNotificationRecord{}, fmt.Errorf("scan sqlite scheduled run notification: %w", err)
+	}
+	record.Status = personal.ScheduledRunStatus(status)
+	return record, nil
+}
+
 func unixMillis(t time.Time) int64 {
 	return t.UnixMilli()
 }
@@ -383,3 +568,5 @@ func (t *unixMillisTime) Scan(value any) error {
 		return fmt.Errorf("scan unix millis time: unsupported %T", value)
 	}
 }
+
+var errScheduledRunNotificationNotFound = errors.New("sqlite scheduled run notification not found")
