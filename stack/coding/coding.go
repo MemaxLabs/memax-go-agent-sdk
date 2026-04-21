@@ -366,6 +366,7 @@ func defaultPlannerOptions(config Config) []planner.TaskSourceOption {
 		toolHints = append(toolHints,
 			commandtools.StartToolName,
 			commandtools.ReadOutputToolName,
+			commandtools.WaitOutputToolName,
 			commandtools.StopToolName,
 			commandtools.ListToolName,
 		)

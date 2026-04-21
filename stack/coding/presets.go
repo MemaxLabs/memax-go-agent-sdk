@@ -114,7 +114,7 @@ func InteractiveDev() Config {
 		Base: memaxagent.Options{
 			MaxTurns:           40,
 			MaxToolConcurrency: 8,
-			AppendSystemPrompt: "Use managed command sessions when continuous feedback helps. Read incremental output, keep long-running sessions organized, and stop sessions you no longer need.",
+			AppendSystemPrompt: "Use managed command sessions when continuous feedback helps. Wait for fresh output from watchers, read incremental output when inspecting history, keep long-running sessions organized, and stop sessions you no longer need.",
 		},
 		Command: commandtools.Config{
 			ConcurrencySafe: false,
