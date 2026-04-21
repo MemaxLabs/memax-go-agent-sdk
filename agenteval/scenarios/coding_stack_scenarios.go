@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1142,6 +1144,131 @@ func CodingPresetInteractiveDevWaitRepair() agenteval.Case {
 	}
 }
 
+// CodingPresetInteractiveDevWaitCursorRepair returns a single-use scenario that
+// exercises prompt-visible wait cursor handling with a non-default sequence
+// baseline. The model must derive after_seq from the first wait output instead
+// of relying on a hard-coded seq=1 path.
+func CodingPresetInteractiveDevWaitCursorRepair() agenteval.Case {
+	workspaceStore := workspace.NewMemoryStore(map[string]string{
+		"README.md": "status: broken",
+	})
+	taskStore := tasktools.NewMemoryStore([]tasktools.Task{{
+		ID:     "task-1",
+		Title:  "repair README status from observed watcher cursor",
+		Status: tasktools.StatusInProgress,
+		Notes:  "derive the next wait cursor from observed watcher output before waiting again",
+	}})
+	manager := commandtools.NewScriptedSessionManager(commandtools.ScriptedCommand{
+		ID:  "watch-1",
+		PID: 5153,
+		Pages: []commandtools.ScriptedOutputPage{
+			{
+				Chunks: []commandtools.OutputChunk{{
+					Seq:    41,
+					Stream: "stderr",
+					Text:   "watch: README.md status must be fixed\n",
+				}},
+				Running: true,
+			},
+			{
+				Chunks: []commandtools.OutputChunk{
+					{
+						Seq:    41,
+						Stream: "stderr",
+						Text:   "watch: README.md status must be fixed\n",
+					},
+					{
+						Seq:    42,
+						Stream: "stdout",
+						Text:   "watch: ok\n",
+					},
+				},
+				Running: true,
+			},
+		},
+		StopExitCode: intPtr(0),
+	})
+	modelClient := &codingWaitCursorModel{}
+
+	config, configErr := coding.PresetInteractiveDev.Config()
+	config.Workspace = workspaceStore
+	config.Tasks = taskStore
+	config.CommandSessions = manager
+	config.Verifier.Verifier = verifierForReadmeStatus(workspaceStore, "status: fixed")
+	stack, stackErr := coding.New(config)
+
+	return agenteval.Case{
+		Name:    "coding_preset_interactive_dev_wait_cursor_repair",
+		Prompt:  "Use watch mode to repair README.md. Use the sequence number from the first wait result when waiting for fresh output after the patch.",
+		Options: stack.WithModel(modelClient),
+		Assertions: []agenteval.Assertion{
+			toolConstructionSucceeded(configErr, stackErr),
+			agenteval.ToolUsed(commandtools.StartToolName),
+			agenteval.ToolUsed(commandtools.WaitOutputToolName),
+			agenteval.ToolUsed("workspace_checkpoint"),
+			agenteval.ToolUsed("workspace_apply_patch"),
+			agenteval.ToolUsed(commandtools.StopToolName),
+			agenteval.ToolUsed(verifytools.ToolName),
+			agenteval.NoToolErrors(),
+			agenteval.EventKindEmitted(memaxagent.EventCommandStarted),
+			agenteval.EventKindEmitted(memaxagent.EventCommandOutput),
+			agenteval.EventKindEmitted(memaxagent.EventWorkspaceCheckpoint),
+			agenteval.EventKindEmitted(memaxagent.EventCommandStopped),
+			agenteval.EventKindEmitted(memaxagent.EventWorkspacePatch),
+			agenteval.EventKindEmitted(memaxagent.EventVerification),
+			agenteval.FinalEquals("Interactive dev preset completed cursor-derived wait repair."),
+			{
+				Name: "interactive dev derives wait cursor from prior output",
+				Check: func(result agenteval.Result) error {
+					toolResults := result.ToolResults()
+					if len(toolResults) != 7 {
+						return fmt.Errorf("tool results = %#v, want 7 tool results", toolResults)
+					}
+					if toolResults[1].IsError || !strings.Contains(toolResults[1].Content, "[stderr #41]") {
+						return fmt.Errorf("first wait result = %#v, want observed seq 41 output", toolResults[1])
+					}
+					if toolResults[4].IsError || !strings.Contains(toolResults[4].Content, "[stdout #42]") ||
+						!strings.Contains(toolResults[4].Content, "watch: ok") {
+						return fmt.Errorf("second wait result = %#v, want fresh seq 42 output", toolResults[4])
+					}
+					if strings.Contains(toolResults[4].Content, "status must be fixed") {
+						return fmt.Errorf("second wait result = %#v, want cursor-derived after_seq to suppress stale seq 41 output", toolResults[4])
+					}
+					if toolResults[4].Metadata[commandtools.MetadataCommandOutputChunks] != 1 ||
+						toolResults[4].Metadata[commandtools.MetadataCommandNextSeq] != 43 {
+						return fmt.Errorf("second wait metadata = %#v, want one fresh chunk and next_seq=43", toolResults[4].Metadata)
+					}
+					readRequests := manager.ReadRequests()
+					if len(readRequests) != 2 || readRequests[0].AfterSeq != 0 || readRequests[1].AfterSeq != 41 {
+						return fmt.Errorf("wait/read requests = %#v, want second wait derived after_seq=41", readRequests)
+					}
+					if modelClient.RequestCount() != 8 {
+						return fmt.Errorf("model requests = %d, want 8", modelClient.RequestCount())
+					}
+					requests := modelClient.Requests()
+					if len(requests) != 8 {
+						return fmt.Errorf("model requests = %d, want 8", len(requests))
+					}
+					if !requestHasToolResult(requests[2], "wait-1", "[stderr #41]", "next_seq: 42") {
+						return fmt.Errorf("third request messages = %#v, want first wait result visible before cursor decision", requests[2].Messages)
+					}
+					if !strings.Contains(requests[0].SystemPrompt, "Wait for fresh output from watchers") {
+						return fmt.Errorf("initial prompt missing watcher wait guidance:\n%s", requests[0].SystemPrompt)
+					}
+					content, err := workspaceStore.ReadFile(context.Background(), "README.md")
+					if err != nil {
+						return err
+					}
+					if content != "status: fixed" {
+						return fmt.Errorf("README.md = %q, want repaired content", content)
+					}
+					return nil
+				},
+			},
+		},
+	}
+}
+
 // CodingPresetInteractiveDevSessionCleanup returns a single-use scenario that
 // exercises the interactive_dev preset with a long-lived session that must be
 // read incrementally, force-stopped explicitly, and confirmed absent from the
@@ -1366,4 +1493,191 @@ func CodingPresetInteractiveDevSessionCleanup() agenteval.Case {
 			},
 		},
 	}
+}
+
+type codingWaitCursorModel struct {
+	mu       sync.Mutex
+	requests []model.Request
+}
+
+func (m *codingWaitCursorModel) Stream(ctx context.Context, req model.Request) (model.Stream, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.requests = append(m.requests, cloneCodingRequest(req))
+	switch len(m.requests) {
+	case 1:
+		return codingStreamFromEvents(model.StreamEvent{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "start-1",
+				Name:  commandtools.StartToolName,
+				Input: json.RawMessage(`{"id":"watch-1","command":["npm","run","test:watch"],"purpose":"run README status watcher"}`),
+			},
+		}), nil
+	case 2:
+		return codingStreamFromEvents(model.StreamEvent{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "wait-1",
+				Name:  commandtools.WaitOutputToolName,
+				Input: json.RawMessage(`{"id":"watch-1","timeout_ms":1000}`),
+			},
+		}), nil
+	case 3:
+		if !requestHasToolResult(req, "wait-1", "[stderr #41]", "next_seq: 42") {
+			return codingStreamFromEvents(model.StreamEvent{Kind: model.StreamText, Text: "missing first wait cursor"}), nil
+		}
+		return codingStreamFromEvents(model.StreamEvent{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "checkpoint-1",
+				Name:  "workspace_checkpoint",
+				Input: json.RawMessage(`{"label":"before cursor-derived README repair"}`),
+			},
+		}), nil
+	case 4:
+		return codingStreamFromEvents(model.StreamEvent{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "patch-1",
+				Name: "workspace_apply_patch",
+				Input: json.RawMessage(`{"operations":[
+					{"path":"README.md","old_content":"status: broken","new_content":"status: fixed"}
+				]}`),
+			},
+		}), nil
+	case 5:
+		afterSeq, ok := highestCommandOutputSeq(req)
+		if !ok {
+			return codingStreamFromEvents(model.StreamEvent{Kind: model.StreamText, Text: "missing wait output sequence"}), nil
+		}
+		return codingStreamFromEvents(model.StreamEvent{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "wait-2",
+				Name:  commandtools.WaitOutputToolName,
+				Input: json.RawMessage(fmt.Sprintf(`{"id":"watch-1","after_seq":%d,"timeout_ms":1000}`, afterSeq)),
+			},
+		}), nil
+	case 6:
+		return codingStreamFromEvents(model.StreamEvent{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "stop-1",
+				Name:  commandtools.StopToolName,
+				Input: json.RawMessage(`{"id":"watch-1","force":true}`),
+			},
+		}), nil
+	case 7:
+		return codingStreamFromEvents(model.StreamEvent{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "verify-1",
+				Name: verifytools.ToolName,
+				Input: json.RawMessage(`{
+					"name":"test",
+					"target":"README.md",
+					"metadata":{"task_id":"task-1"}
+				}`),
+			},
+		}), nil
+	case 8:
+		return codingStreamFromEvents(model.StreamEvent{
+			Kind: model.StreamText,
+			Text: "Interactive dev preset completed cursor-derived wait repair.",
+		}), nil
+	default:
+		return codingStreamFromEvents(), nil
+	}
+}
+
+func (m *codingWaitCursorModel) RequestCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.requests)
+}
+
+func (m *codingWaitCursorModel) Requests() []model.Request {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]model.Request, len(m.requests))
+	for i, req := range m.requests {
+		out[i] = cloneCodingRequest(req)
+	}
+	return out
+}
+
+type codingStream struct {
+	events []model.StreamEvent
+	index  int
+}
+
+func codingStreamFromEvents(events ...model.StreamEvent) *codingStream {
+	return &codingStream{events: events}
+}
+
+func (s *codingStream) Recv() (model.StreamEvent, error) {
+	if s.index >= len(s.events) {
+		return model.StreamEvent{}, model.ErrEndOfStream
+	}
+	event := s.events[s.index]
+	s.index++
+	return event, nil
+}
+
+func (s *codingStream) Close() error {
+	return nil
+}
+
+func cloneCodingRequest(req model.Request) model.Request {
+	req.Messages = model.CloneMessages(req.Messages)
+	req.Tools = append([]model.ToolSpec(nil), req.Tools...)
+	return req
+}
+
+func requestHasToolResult(req model.Request, toolUseID string, substrings ...string) bool {
+	for _, msg := range req.Messages {
+		if msg.ToolResult == nil || msg.ToolResult.ToolUseID != toolUseID {
+			continue
+		}
+		foundAll := true
+		for _, substring := range substrings {
+			if !strings.Contains(msg.ToolResult.Content, substring) {
+				foundAll = false
+				break
+			}
+		}
+		if foundAll {
+			return true
+		}
+	}
+	return false
+}
+
+var commandOutputSeqPattern = regexp.MustCompile(`#([0-9]+)\]`)
+
+func highestCommandOutputSeq(req model.Request) (int, bool) {
+	maxSeq := 0
+	found := false
+	for _, msg := range req.Messages {
+		if msg.ToolResult == nil {
+			continue
+		}
+		// This mirrors the prompt-visible "[stream #seq]" chunk format emitted by commandtools.
+		// The fake intentionally derives the next cursor from transcript text instead of metadata.
+		for _, match := range commandOutputSeqPattern.FindAllStringSubmatch(msg.ToolResult.Content, -1) {
+			seq, err := strconv.Atoi(match[1])
+			if err != nil {
+				continue
+			}
+			if !found || seq > maxSeq {
+				maxSeq = seq
+				found = true
+			}
+		}
+	}
+	return maxSeq, found
 }

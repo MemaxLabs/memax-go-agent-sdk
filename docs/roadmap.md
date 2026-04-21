@@ -187,9 +187,10 @@ system prompt.
   `interactive_dev`). Initial deterministic eval coverage now exercises all
   three presets end to end, with adversarial rollback recovery coverage for
   `safe_local`, approval-recovery coverage for `ci_repair`, wait-driven watcher
-  repair coverage for `interactive_dev`, and managed-session cleanup coverage
-  for `interactive_dev`. Next steps are broader reference embeddings and more
-  adversarial preset suites tuned for competitive coding workflows.
+  repair and cursor-derived wait coverage for `interactive_dev`, and
+  managed-session cleanup coverage for `interactive_dev`. Next steps are
+  broader reference embeddings and more adversarial preset suites tuned for
+  competitive coding workflows.
 - Initial `stack/personal` assembly now exists with durable-memory,
   metadata-first notes/docs tools, metadata-first messaging tools,
   metadata-first scheduling tools, task, approval, progressive-skill, and
