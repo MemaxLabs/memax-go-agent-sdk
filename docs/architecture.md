@@ -424,7 +424,13 @@ the store while a process runs and falling back to persisted transcripts for
 read/list inspection after manager restart. Those persisted records reflect the
 last durable session snapshot, not proof that a process is still live after a
 manager restart; hosts that need liveness must keep a live manager or apply
-their own stale-session sweep.
+their own stale-session sweep. `OSSessionManager.SweepPersistedRunningCommands`
+is the built-in reconciliation helper for that host-owned sweep and marks
+unclaimed persisted `running` records as `orphaned`. Live-only operations
+(`write_command_input`, `resize_command_terminal`, and `stop_command`) return
+`ErrCommandSessionNotRunning` when only transcript state remains.
+Swept `orphaned` records keep prior durable output but use sweep time as
+`finished_at`; they do not infer a process `exit_code`.
 The `sandbox` package complements these local adapters by adapting host-owned
 sandbox-backed command/session backends into the same commandtool interfaces
 plus hook cleanup, making remote or container-backed execution an adapter

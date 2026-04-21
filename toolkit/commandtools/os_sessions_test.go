@@ -140,6 +140,257 @@ func TestOSSessionManagerStopAndCleanup(t *testing.T) {
 	}
 }
 
+func TestOSSessionManagerSweepPersistedRunningCommandsMarksOrphaned(t *testing.T) {
+	store := NewMemoryCommandTranscriptStore()
+	now := time.Now().UTC()
+	running := CommandSession{
+		ID:        "persisted-running",
+		SessionID: "session-1",
+		Status:    SessionRunning,
+		StartedAt: now,
+		NextSeq:   1,
+	}
+	exited := CommandSession{
+		ID:         "persisted-exited",
+		SessionID:  "session-1",
+		Status:     SessionExited,
+		StartedAt:  now.Add(time.Second),
+		FinishedAt: ptrTime(now.Add(2 * time.Second)),
+		ExitCode:   ptrInt(0),
+		NextSeq:    1,
+	}
+	if err := store.SaveCommandSession(context.Background(), running); err != nil {
+		t.Fatalf("SaveCommandSession(running) returned error: %v", err)
+	}
+	if err := store.SaveCommandSession(context.Background(), exited); err != nil {
+		t.Fatalf("SaveCommandSession(exited) returned error: %v", err)
+	}
+	manager, err := NewOSSessionManager(t.TempDir(), WithOSSessionManagerTranscriptStore(store))
+	if err != nil {
+		t.Fatalf("NewOSSessionManager returned error: %v", err)
+	}
+	swept, err := manager.SweepPersistedRunningCommands(context.Background())
+	if err != nil {
+		t.Fatalf("SweepPersistedRunningCommands returned error: %v", err)
+	}
+	if swept != 1 {
+		t.Fatalf("swept = %d, want 1", swept)
+	}
+	orphaned, err := store.CommandSession(context.Background(), running.ID)
+	if err != nil {
+		t.Fatalf("CommandSession(running) returned error: %v", err)
+	}
+	if orphaned.Status != SessionOrphaned || orphaned.FinishedAt == nil {
+		t.Fatalf("orphaned = %#v, want orphaned status with finished_at", orphaned)
+	}
+	unchanged, err := store.CommandSession(context.Background(), exited.ID)
+	if err != nil {
+		t.Fatalf("CommandSession(exited) returned error: %v", err)
+	}
+	if unchanged.Status != SessionExited {
+		t.Fatalf("unchanged = %#v, want exited status untouched", unchanged)
+	}
+	listed, err := manager.ListCommands(context.Background(), ListRequest{SessionID: "session-1"})
+	if err != nil {
+		t.Fatalf("ListCommands running-only returned error: %v", err)
+	}
+	if len(listed) != 0 {
+		t.Fatalf("listed = %#v, want no running sessions after sweep", listed)
+	}
+	sweptAgain, err := manager.SweepPersistedRunningCommands(context.Background())
+	if err != nil {
+		t.Fatalf("second SweepPersistedRunningCommands returned error: %v", err)
+	}
+	if sweptAgain != 0 {
+		t.Fatalf("sweptAgain = %d, want idempotent second sweep to return 0", sweptAgain)
+	}
+}
+
+func TestOSSessionManagerSweepPersistedRunningCommandsSkipsLiveSession(t *testing.T) {
+	store := NewMemoryCommandTranscriptStore()
+	manager, err := NewOSSessionManager(t.TempDir(), WithOSSessionManagerTranscriptStore(store))
+	if err != nil {
+		t.Fatalf("NewOSSessionManager returned error: %v", err)
+	}
+	started, err := manager.StartCommand(context.Background(), StartRequest{
+		SessionID: "session-1",
+		Argv: []string{
+			os.Args[0],
+			"-test.run=TestHelperProcess",
+			"--",
+			"session",
+			"linger",
+		},
+		Env: map[string]string{"GO_WANT_HELPER_PROCESS": "1"},
+	})
+	if err != nil {
+		t.Fatalf("StartCommand returned error: %v", err)
+	}
+	defer func() {
+		_, _ = manager.StopCommand(context.Background(), StopRequest{SessionID: "session-1", ID: started.ID, Force: true})
+	}()
+	swept, err := manager.SweepPersistedRunningCommands(context.Background())
+	if err != nil {
+		t.Fatalf("SweepPersistedRunningCommands returned error: %v", err)
+	}
+	if swept != 0 {
+		t.Fatalf("swept = %d, want 0 while live session exists", swept)
+	}
+	persisted, err := store.CommandSession(context.Background(), started.ID)
+	if err != nil {
+		t.Fatalf("CommandSession(started) returned error: %v", err)
+	}
+	if persisted.Status != SessionRunning {
+		t.Fatalf("persisted = %#v, want running status", persisted)
+	}
+}
+
+func TestOSSessionManagerSweepPersistedRunningCommandsWithoutStore(t *testing.T) {
+	manager, err := NewOSSessionManager(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewOSSessionManager returned error: %v", err)
+	}
+	swept, err := manager.SweepPersistedRunningCommands(context.Background())
+	if err != nil {
+		t.Fatalf("SweepPersistedRunningCommands returned error: %v", err)
+	}
+	if swept != 0 {
+		t.Fatalf("swept = %d, want 0 without transcript store", swept)
+	}
+}
+
+func TestOSSessionManagerSweepPersistedRunningCommandsGlobalScope(t *testing.T) {
+	store := NewMemoryCommandTranscriptStore()
+	now := time.Now().UTC()
+	for _, session := range []CommandSession{
+		{ID: "cmd-a", SessionID: "session-1", Status: SessionRunning, StartedAt: now, NextSeq: 1},
+		{ID: "cmd-b", SessionID: "session-2", Status: SessionRunning, StartedAt: now.Add(time.Second), NextSeq: 1},
+	} {
+		if err := store.SaveCommandSession(context.Background(), session); err != nil {
+			t.Fatalf("SaveCommandSession(%s) returned error: %v", session.ID, err)
+		}
+	}
+	manager, err := NewOSSessionManager(t.TempDir(), WithOSSessionManagerTranscriptStore(store))
+	if err != nil {
+		t.Fatalf("NewOSSessionManager returned error: %v", err)
+	}
+	swept, err := manager.SweepPersistedRunningCommands(context.Background())
+	if err != nil {
+		t.Fatalf("SweepPersistedRunningCommands returned error: %v", err)
+	}
+	if swept != 2 {
+		t.Fatalf("swept = %d, want 2 for global sweep scope", swept)
+	}
+	for _, id := range []string{"cmd-a", "cmd-b"} {
+		session, err := store.CommandSession(context.Background(), id)
+		if err != nil {
+			t.Fatalf("CommandSession(%s) returned error: %v", id, err)
+		}
+		if session.Status != SessionOrphaned {
+			t.Fatalf("session %s = %#v, want orphaned after sweep", id, session)
+		}
+	}
+}
+
+func TestOSSessionManagerTranscriptOnlySessionReturnsNotRunningForLiveOps(t *testing.T) {
+	store := NewMemoryCommandTranscriptStore()
+	now := time.Now().UTC()
+	persisted := CommandSession{
+		ID:        "persisted-running",
+		SessionID: "session-1",
+		Status:    SessionRunning,
+		TTY:       true,
+		Cols:      80,
+		Rows:      24,
+		StartedAt: now,
+		NextSeq:   1,
+	}
+	if err := store.SaveCommandSession(context.Background(), persisted); err != nil {
+		t.Fatalf("SaveCommandSession returned error: %v", err)
+	}
+	manager, err := NewOSSessionManager(t.TempDir(), WithOSSessionManagerTranscriptStore(store))
+	if err != nil {
+		t.Fatalf("NewOSSessionManager returned error: %v", err)
+	}
+
+	if _, err := manager.WriteCommandInput(context.Background(), WriteRequest{
+		SessionID: "session-1",
+		ID:        persisted.ID,
+		Input:     "hello\n",
+	}); !errors.Is(err, ErrCommandSessionNotRunning) {
+		t.Fatalf("WriteCommandInput error = %v, want ErrCommandSessionNotRunning", err)
+	}
+	if _, err := manager.ResizeCommandTerminal(context.Background(), ResizeRequest{
+		SessionID: "session-1",
+		ID:        persisted.ID,
+		Cols:      100,
+		Rows:      30,
+	}); !errors.Is(err, ErrCommandSessionNotRunning) {
+		t.Fatalf("ResizeCommandTerminal error = %v, want ErrCommandSessionNotRunning", err)
+	}
+	if _, err := manager.StopCommand(context.Background(), StopRequest{
+		SessionID: "session-1",
+		ID:        persisted.ID,
+		Force:     true,
+	}); !errors.Is(err, ErrCommandSessionNotRunning) {
+		t.Fatalf("StopCommand error = %v, want ErrCommandSessionNotRunning", err)
+	}
+}
+
+func TestOSSessionManagerTranscriptOnlySessionPreservesVisibility(t *testing.T) {
+	store := NewMemoryCommandTranscriptStore()
+	now := time.Now().UTC()
+	persisted := CommandSession{
+		ID:        "persisted-running",
+		SessionID: "session-1",
+		Status:    SessionRunning,
+		StartedAt: now,
+		NextSeq:   1,
+	}
+	if err := store.SaveCommandSession(context.Background(), persisted); err != nil {
+		t.Fatalf("SaveCommandSession returned error: %v", err)
+	}
+	manager, err := NewOSSessionManager(t.TempDir(), WithOSSessionManagerTranscriptStore(store))
+	if err != nil {
+		t.Fatalf("NewOSSessionManager returned error: %v", err)
+	}
+	if _, err := manager.StopCommand(context.Background(), StopRequest{
+		SessionID: "session-2",
+		ID:        persisted.ID,
+		Force:     true,
+	}); !errors.Is(err, ErrCommandSessionNotVisible) {
+		t.Fatalf("StopCommand error = %v, want ErrCommandSessionNotVisible", err)
+	}
+}
+
+func TestOSSessionManagerTranscriptOnlyTerminalSessionStillNotRunning(t *testing.T) {
+	store := NewMemoryCommandTranscriptStore()
+	now := time.Now().UTC()
+	persisted := CommandSession{
+		ID:         "persisted-exited",
+		SessionID:  "session-1",
+		Status:     SessionExited,
+		StartedAt:  now.Add(-time.Minute),
+		FinishedAt: ptrTime(now),
+		ExitCode:   ptrInt(0),
+		NextSeq:    3,
+	}
+	if err := store.SaveCommandSession(context.Background(), persisted); err != nil {
+		t.Fatalf("SaveCommandSession returned error: %v", err)
+	}
+	manager, err := NewOSSessionManager(t.TempDir(), WithOSSessionManagerTranscriptStore(store))
+	if err != nil {
+		t.Fatalf("NewOSSessionManager returned error: %v", err)
+	}
+	if _, err := manager.StopCommand(context.Background(), StopRequest{
+		SessionID: "session-1",
+		ID:        persisted.ID,
+		Force:     true,
+	}); !errors.Is(err, ErrCommandSessionNotRunning) {
+		t.Fatalf("StopCommand error = %v, want ErrCommandSessionNotRunning", err)
+	}
+}
+
 func TestOSSessionManagerWriteInputEchoesAndExits(t *testing.T) {
 	manager, err := NewOSSessionManager(t.TempDir())
 	if err != nil {
@@ -586,6 +837,14 @@ func max(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func ptrInt(v int) *int {
+	return &v
+}
+
+func ptrTime(v time.Time) *time.Time {
+	return &v
 }
 
 type stubCommandProcess struct {

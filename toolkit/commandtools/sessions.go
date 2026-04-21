@@ -118,6 +118,9 @@ const (
 	SessionRunning SessionStatus = "running"
 	SessionExited  SessionStatus = "exited"
 	SessionStopped SessionStatus = "stopped"
+	// SessionOrphaned marks persisted command state that was running when a
+	// previous manager instance stopped and no live process claim remains.
+	SessionOrphaned SessionStatus = "orphaned"
 )
 
 // CommandSession describes one managed command session.

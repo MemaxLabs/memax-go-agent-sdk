@@ -297,7 +297,12 @@ patches, snapshots, restore, reviewable mutations, and sandbox boundaries.
   kernel conversation store. `OSSessionManager` can stream live sessions into
   that seam and recover read/list inspection from persisted transcripts after a
   manager restart, with persisted snapshots representing the last durable
-  state rather than post-restart process liveness. A reusable
+  state rather than post-restart process liveness. Hosts can now explicitly
+  reconcile unclaimed persisted `running` records to `orphaned` with
+  `SweepPersistedRunningCommands`, and live-only operations now return
+  `ErrCommandSessionNotRunning` when only transcript state remains. Swept
+  records use sweep time as `finished_at` and do not imply an `exit_code`.
+  A reusable
   `commandtools/sessiontest` conformance harness now verifies the public
   lifecycle contract across session adapters.
 - More isolated execution can stay outside the core loop through adapter seams

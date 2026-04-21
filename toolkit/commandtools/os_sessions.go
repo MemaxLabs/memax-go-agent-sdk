@@ -489,7 +489,7 @@ func (m *OSSessionManager) WriteCommandInput(ctx context.Context, req WriteReque
 	}
 	state, err := m.lookupSession(req.SessionID, req.ID)
 	if err != nil {
-		return WriteResult{}, err
+		return WriteResult{}, m.transcriptOnlySessionError(ctx, req.SessionID, req.ID, err)
 	}
 	return state.writeInput(ctx, req)
 }
@@ -506,7 +506,7 @@ func (m *OSSessionManager) ResizeCommandTerminal(ctx context.Context, req Resize
 	}
 	state, err := m.lookupSession(req.SessionID, req.ID)
 	if err != nil {
-		return CommandSession{}, err
+		return CommandSession{}, m.transcriptOnlySessionError(ctx, req.SessionID, req.ID, err)
 	}
 	return state.resizeTerminal(ctx, req)
 }
@@ -520,7 +520,7 @@ func (m *OSSessionManager) StopCommand(ctx context.Context, req StopRequest) (Co
 	}
 	state, err := m.lookupSession(req.SessionID, req.ID)
 	if err != nil {
-		return CommandSession{}, err
+		return CommandSession{}, m.transcriptOnlySessionError(ctx, req.SessionID, req.ID, err)
 	}
 	return state.stop(ctx, req.Force)
 }
@@ -616,6 +616,70 @@ func (m *OSSessionManager) CleanupSession(ctx context.Context, sessionID string)
 	return joined
 }
 
+// SweepPersistedRunningCommands marks persisted running transcripts as
+// SessionOrphaned when this manager has no matching live in-memory session.
+// This helps hosts reconcile durable transcript state after a manager restart.
+// The sweep is explicit and host-controlled; it does not run automatically.
+func (m *OSSessionManager) SweepPersistedRunningCommands(ctx context.Context) (int, error) {
+	if m == nil {
+		return 0, fmt.Errorf("commandtools: nil OSSessionManager")
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if m.transcriptStore == nil {
+		return 0, nil
+	}
+	// Snapshot live session IDs once at sweep start. Sessions that were live
+	// when the sweep began are skipped for this pass so a concurrent graceful
+	// stop cannot be clobbered back to orphaned by a stale running snapshot.
+	m.mu.RLock()
+	liveAtStart := make(map[string]struct{}, len(m.sessions))
+	for id := range m.sessions {
+		liveAtStart[id] = struct{}{}
+	}
+	m.mu.RUnlock()
+	stored, err := m.transcriptStore.ListCommands(ctx, ListRequest{IncludeCompleted: false})
+	if err != nil {
+		return 0, err
+	}
+	swept := 0
+	for _, session := range stored {
+		if session.Status != SessionRunning {
+			continue
+		}
+		if _, exists := liveAtStart[session.ID]; exists {
+			continue
+		}
+		current, err := m.transcriptStore.CommandSession(ctx, session.ID)
+		if err != nil {
+			if errors.Is(err, ErrCommandSessionUnknown) {
+				continue
+			}
+			return swept, err
+		}
+		if current.Status != SessionRunning {
+			continue
+		}
+		m.mu.RLock()
+		_, exists := m.sessions[current.ID]
+		m.mu.RUnlock()
+		if exists {
+			continue
+		}
+		finishedAt := time.Now().UTC()
+		current.Status = SessionOrphaned
+		if current.FinishedAt == nil {
+			current.FinishedAt = &finishedAt
+		}
+		if err := m.transcriptStore.SaveCommandSession(ctx, current); err != nil {
+			return swept, err
+		}
+		swept++
+	}
+	return swept, nil
+}
+
 func (m *OSSessionManager) lookupSession(sessionID, id string) (*osSessionState, error) {
 	m.mu.RLock()
 	state, ok := m.sessions[id]
@@ -628,6 +692,23 @@ func (m *OSSessionManager) lookupSession(sessionID, id string) (*osSessionState,
 		return nil, commandSessionError(ErrCommandSessionNotVisible, "commandtools: command session %s is not visible in this agent session", id)
 	}
 	return state, nil
+}
+
+func (m *OSSessionManager) transcriptOnlySessionError(ctx context.Context, sessionID, id string, lookupErr error) error {
+	if m == nil || m.transcriptStore == nil || !errors.Is(lookupErr, ErrCommandSessionUnknown) {
+		return lookupErr
+	}
+	session, err := m.transcriptStore.CommandSession(ctx, id)
+	if err != nil {
+		if errors.Is(err, ErrCommandSessionUnknown) {
+			return lookupErr
+		}
+		return fmt.Errorf("commandtools: check transcript store for command session %s: %w", id, err)
+	}
+	if sessionID != "" && session.SessionID != "" && session.SessionID != sessionID {
+		return commandSessionError(ErrCommandSessionNotVisible, "commandtools: command session %s is not visible in this agent session", id)
+	}
+	return commandSessionError(ErrCommandSessionNotRunning, "commandtools: command session %s is persisted transcript state (%s) and has no live process", id, session.Status)
 }
 
 func cleanupFailedSessionRuntime(runtime sessionRuntime) {

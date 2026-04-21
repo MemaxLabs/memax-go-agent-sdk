@@ -102,6 +102,7 @@ func TestMemoryCommandTranscriptStoreVisibilityListAndDelete(t *testing.T) {
 		{ID: "cmd-b", SessionID: "agent-1", Status: SessionRunning, StartedAt: now.Add(time.Second), NextSeq: 1},
 		{ID: "cmd-a", SessionID: "agent-1", Status: SessionRunning, StartedAt: now, NextSeq: 1},
 		{ID: "cmd-c", SessionID: "agent-1", Status: SessionExited, StartedAt: now.Add(2 * time.Second), NextSeq: 1},
+		{ID: "cmd-d", SessionID: "agent-1", Status: SessionOrphaned, StartedAt: now.Add(3 * time.Second), NextSeq: 1},
 		{ID: "cmd-other", SessionID: "agent-2", Status: SessionRunning, StartedAt: now, NextSeq: 1},
 	}
 	for _, session := range sessions {
@@ -125,7 +126,7 @@ func TestMemoryCommandTranscriptStoreVisibilityListAndDelete(t *testing.T) {
 		t.Fatalf("ListCommands all returned error: %v", err)
 	}
 	got = commandSessionIDs(all)
-	want = []string{"cmd-a", "cmd-b", "cmd-c"}
+	want = []string{"cmd-a", "cmd-b", "cmd-c", "cmd-d"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("all IDs = %#v, want %#v", got, want)
 	}
