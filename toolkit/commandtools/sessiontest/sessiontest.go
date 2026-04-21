@@ -318,46 +318,45 @@ func Run(t *testing.T, contract Contract) {
 		if err != nil {
 			t.Fatalf("StartCommand returned error: %v", err)
 		}
-
-		first, err := waiter.WaitCommandOutput(context.Background(), commandtools.WaitRequest{
-			SessionID: req.SessionID,
-			ID:        started.ID,
-			Timeout:   c.WaitTimeout,
-		})
-		if err != nil {
-			t.Fatalf("WaitCommandOutput first returned error: %v", err)
+		deadline := time.Now().Add(c.WaitTimeout)
+		waitStep := c.PollEvery
+		if waitStep <= 0 {
+			waitStep = 20 * time.Millisecond
 		}
-		assertMonotonicChunks(t, first.Chunks)
-
-		observed := joinChunks(first.Chunks)
-		if first.Session.Status == commandtools.SessionExited && strings.Contains(observed, c.DoneText) {
-			if first.Session.ExitCode == nil || *first.Session.ExitCode != 0 || first.Session.FinishedAt == nil {
-				t.Fatalf("first session = %#v, want clean exited terminal session", first.Session)
+		afterSeq := 0
+		lastSeq := 0
+		observed := ""
+		var last commandtools.ReadResult
+		for time.Now().Before(deadline) {
+			result, err := waiter.WaitCommandOutput(context.Background(), commandtools.WaitRequest{
+				SessionID: req.SessionID,
+				ID:        started.ID,
+				AfterSeq:  afterSeq,
+				Timeout:   waitStep,
+			})
+			if err != nil {
+				t.Fatalf("WaitCommandOutput returned error: %v", err)
 			}
-			return
+			last = result
+			assertMonotonicChunks(t, result.Chunks)
+			for _, chunk := range result.Chunks {
+				if chunk.Seq <= lastSeq {
+					t.Fatalf("wait chunks not strictly increasing across calls: last_seq=%d chunks=%#v", lastSeq, result.Chunks)
+				}
+				lastSeq = chunk.Seq
+			}
+			observed += joinChunks(result.Chunks)
+			afterSeq = max(afterSeq, result.NextSeq-1)
+			if result.Session.Status == commandtools.SessionExited &&
+				strings.Contains(observed, c.ReadyText) &&
+				strings.Contains(observed, c.DoneText) {
+				if result.Session.ExitCode == nil || *result.Session.ExitCode != 0 || result.Session.FinishedAt == nil {
+					t.Fatalf("wait session = %#v, want clean exited terminal session", result.Session)
+				}
+				return
+			}
 		}
-
-		second, err := waiter.WaitCommandOutput(context.Background(), commandtools.WaitRequest{
-			SessionID: req.SessionID,
-			ID:        started.ID,
-			AfterSeq:  max(0, first.NextSeq-1),
-			Timeout:   c.WaitTimeout,
-		})
-		if err != nil {
-			t.Fatalf("WaitCommandOutput second returned error: %v", err)
-		}
-		assertMonotonicChunks(t, second.Chunks)
-		assertChunkBoundaryAdvances(t, first.Chunks, second.Chunks)
-		observed += joinChunks(second.Chunks)
-		if second.Session.Status != commandtools.SessionExited {
-			t.Fatalf("second session = %#v, want exited session after natural exit", second.Session)
-		}
-		if !strings.Contains(observed, c.ReadyText) || !strings.Contains(observed, c.DoneText) {
-			t.Fatalf("wait output = %q, want both ready and done markers", observed)
-		}
-		if second.Session.ExitCode == nil || *second.Session.ExitCode != 0 || second.Session.FinishedAt == nil {
-			t.Fatalf("second session = %#v, want clean exited terminal session", second.Session)
-		}
+		t.Fatalf("timed out waiting for wait-output completion; last session=%#v observed=%q", last.Session, observed)
 	})
 
 	t.Run("write-input", func(t *testing.T) {
@@ -576,18 +575,6 @@ func assertMonotonicChunks(t testing.TB, chunks []commandtools.OutputChunk) {
 		if chunk.Seq <= prev {
 			t.Fatalf("chunks = %#v, want strictly increasing sequence numbers", chunks)
 		}
-	}
-}
-
-func assertChunkBoundaryAdvances(t testing.TB, prior []commandtools.OutputChunk, next []commandtools.OutputChunk) {
-	t.Helper()
-	if len(prior) == 0 || len(next) == 0 {
-		return
-	}
-	lastPrior := prior[len(prior)-1].Seq
-	firstNext := next[0].Seq
-	if firstNext <= lastPrior {
-		t.Fatalf("chunk boundary did not advance: prior=%#v next=%#v", prior, next)
 	}
 }
 
