@@ -12,8 +12,8 @@ func TestScenariosPass(t *testing.T) {
 	if err := report.Error(); err != nil {
 		t.Fatalf("scenario report error = %v", err)
 	}
-	if !report.Passed() || len(report.Results) != 92 {
-		t.Fatalf("report = %#v, want ninety-two passing scenarios", report)
+	if !report.Passed() || len(report.Results) != 93 {
+		t.Fatalf("report = %#v, want ninety-three passing scenarios", report)
 	}
 }
 
@@ -95,6 +95,7 @@ func TestScenarioNamesAreStable(t *testing.T) {
 		"workspace_verification_rollback",
 		"command_test_repair_loop",
 		"command_session_repair_loop",
+		"command_session_wait_repair_loop",
 		"command_session_interactive_repair_loop",
 		"command_session_tty_resize",
 		"command_approval_policy_recovery",

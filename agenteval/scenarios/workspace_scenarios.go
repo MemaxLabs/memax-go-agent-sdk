@@ -387,6 +387,150 @@ func CommandSessionRepairLoop() agenteval.Case {
 	}
 }
 
+// CommandSessionWaitRepairLoop returns a single-use scenario where the model
+// waits for managed command output instead of polling reads, repairs the
+// workspace on failure, waits for passing output, then stops the session.
+func CommandSessionWaitRepairLoop() agenteval.Case {
+	store := workspace.NewMemoryStore(map[string]string{
+		"README.md": "status: broken",
+	})
+	workspaceTools, workspaceErr := workspacetools.NewTools(store)
+	manager := commandtools.NewScriptedSessionManager(commandtools.ScriptedCommand{
+		ID:  "watch-1",
+		PID: 5152,
+		Pages: []commandtools.ScriptedOutputPage{
+			{
+				Chunks: []commandtools.OutputChunk{{
+					Seq:    1,
+					Stream: "stdout",
+					Text:   "watch: README.md status must be fixed\n",
+				}},
+				Running: true,
+			},
+			{
+				Chunks: []commandtools.OutputChunk{{
+					Seq:    2,
+					Stream: "stdout",
+					Text:   "watch: ok\n",
+				}},
+				Running:  false,
+				ExitCode: intPtr(0),
+			},
+		},
+		StopExitCode: intPtr(0),
+	})
+	tools := append(workspaceTools,
+		commandtools.NewStartTool(manager),
+		commandtools.NewWaitTool(manager),
+		commandtools.NewStopTool(manager),
+	)
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "start-1",
+				Name:  commandtools.StartToolName,
+				Input: json.RawMessage(`{"id":"watch-1","command":["npm","run","test:watch"],"purpose":"start watch mode"}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "wait-1",
+				Name:  commandtools.WaitOutputToolName,
+				Input: json.RawMessage(`{"id":"watch-1","timeout_ms":1000}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "patch-1",
+				Name: workspacetools.ApplyPatchToolName,
+				Input: json.RawMessage(`{"operations":[
+					{"path":"README.md","old_content":"status: broken","new_content":"status: fixed"}
+				]}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "wait-2",
+				Name:  commandtools.WaitOutputToolName,
+				Input: json.RawMessage(`{"id":"watch-1","after_seq":1,"timeout_ms":1000}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "stop-1",
+				Name:  commandtools.StopToolName,
+				Input: json.RawMessage(`{"id":"watch-1","force":true}`),
+			},
+		}},
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "Watch mode passed after wait-driven repair."}},
+	)
+
+	return agenteval.Case{
+		Name:   "command_session_wait_repair_loop",
+		Prompt: "Start a watch command, wait for output, repair README.md if needed, wait for pass output, then stop it.",
+		Options: memaxagent.Options{
+			Model: modelClient,
+			Tools: tool.NewRegistry(tools...),
+		},
+		Assertions: []agenteval.Assertion{
+			toolConstructionSucceeded(workspaceErr),
+			agenteval.ToolUsed(commandtools.StartToolName),
+			agenteval.ToolUsed(commandtools.WaitOutputToolName),
+			agenteval.ToolUsed(commandtools.StopToolName),
+			agenteval.ToolUsed(workspacetools.ApplyPatchToolName),
+			agenteval.EventKindEmitted(memaxagent.EventCommandStarted),
+			agenteval.EventKindEmitted(memaxagent.EventCommandOutput),
+			agenteval.EventKindEmitted(memaxagent.EventCommandStopped),
+			agenteval.EventKindEmitted(memaxagent.EventWorkspacePatch),
+			agenteval.FinalEquals("Watch mode passed after wait-driven repair."),
+			requestCountEquals(modelClient, 6),
+			{
+				Name: "wait-driven command output drives repair loop",
+				Check: func(result agenteval.Result) error {
+					content, err := store.ReadFile(context.Background(), "README.md")
+					if err != nil {
+						return err
+					}
+					if content != "status: fixed" {
+						return fmt.Errorf("README.md = %q, want repaired content", content)
+					}
+					readRequests := manager.ReadRequests()
+					if len(readRequests) != 2 || readRequests[1].AfterSeq != 1 {
+						return fmt.Errorf("read requests = %#v, want wait path to read twice with second after_seq=1", readRequests)
+					}
+					stopRequests := manager.StopRequests()
+					if len(stopRequests) != 1 || stopRequests[0].ID != "watch-1" {
+						return fmt.Errorf("stop requests = %#v, want stop watch-1", stopRequests)
+					}
+					results := result.ToolResults()
+					sawFail := false
+					sawPass := false
+					for _, toolResult := range results {
+						if toolResult.Name != commandtools.WaitOutputToolName {
+							continue
+						}
+						if strings.Contains(toolResult.Content, "status must be fixed") {
+							sawFail = true
+						}
+						if strings.Contains(toolResult.Content, "watch: ok") {
+							sawPass = true
+						}
+					}
+					if !sawFail || !sawPass {
+						return fmt.Errorf("tool results = %#v, want failing and passing wait output", results)
+					}
+					return nil
+				},
+			},
+		},
+	}
+}
+
 // CommandSessionInteractiveRepairLoop returns a single-use scenario where the
 // model interacts with a managed command session through stdin writes, repairs
 // the workspace, observes passing output, and exits the session.

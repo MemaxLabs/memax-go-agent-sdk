@@ -2067,7 +2067,7 @@ func emitCommandToolEvent(ctx context.Context, emit func(Event) bool, opts Optio
 	case "write":
 		kind = EventCommandInput
 		meterName = "memax.command.input"
-	case "read":
+	case "read", "wait":
 		kind = EventCommandOutput
 		meterName = "memax.command.output"
 	case "stop":

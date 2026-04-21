@@ -82,8 +82,8 @@ const (
 	// EventCommandStarted is emitted when start_command creates a managed
 	// command session.
 	EventCommandStarted EventKind = "command_started"
-	// EventCommandOutput is emitted when read_command_output returns buffered
-	// output for a managed command session.
+	// EventCommandOutput is emitted when read_command_output or
+	// wait_command_output returns buffered output for a managed command session.
 	EventCommandOutput EventKind = "command_output"
 	// EventCommandInput is emitted when write_command_input writes stdin to a
 	// managed command session and optionally observes fresh output.

@@ -100,6 +100,7 @@ func All() []agenteval.Case {
 		WorkspaceVerificationRollback(),
 		CommandTestRepairLoop(),
 		CommandSessionRepairLoop(),
+		CommandSessionWaitRepairLoop(),
 		CommandSessionInteractiveRepairLoop(),
 		CommandSessionTTYResize(),
 		CommandApprovalPolicyRecovery(),

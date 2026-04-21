@@ -286,23 +286,23 @@ patches, snapshots, restore, reviewable mutations, and sandbox boundaries.
   inputs, timeout/output caps, structured status metadata, and approval-summary
   support; the core SDK never gets implicit shell access.
 - Longer-lived command sessions are explicit tools over host-owned lifecycle
-  interfaces rather than hidden background shell state. Initial start/read/stop
-  support exists, including a reference OS-backed managed-session adapter with
-  rooted cwd resolution, bounded buffered output, explicit PTY terminal
-  geometry, live resize, Unix process-group cleanup for descendants, and
-  session cleanup hooks. Command transcript persistence now has an initial
-  host-owned `CommandTranscriptStore` seam with both a reference in-memory
-  store and a durable SQLite adapter, so command-session snapshots and ordered
-  output chunks can survive manager restarts without coupling tool state to the
-  kernel conversation store. `OSSessionManager` can stream live sessions into
-  that seam and recover read/list inspection from persisted transcripts after a
-  manager restart, with persisted snapshots representing the last durable
-  state rather than post-restart process liveness. Hosts can now explicitly
-  reconcile unclaimed persisted `running` records to `orphaned` with
-  `SweepPersistedRunningCommands`, and live-only operations now return
-  `ErrCommandSessionNotRunning` when only transcript state remains. Swept
-  records use sweep time as `finished_at` and do not imply an `exit_code`.
-  A reusable
+  interfaces rather than hidden background shell state. Initial
+  start/read/wait/stop support exists, including a reference OS-backed
+  managed-session adapter with rooted cwd resolution, bounded buffered output,
+  explicit PTY terminal geometry, live resize, Unix process-group cleanup for
+  descendants, and session cleanup hooks. Command transcript persistence now
+  has an initial host-owned `CommandTranscriptStore` seam with both a
+  reference in-memory store and a durable SQLite adapter, so command-session
+  snapshots and ordered output chunks can survive manager restarts without
+  coupling tool state to the kernel conversation store. `OSSessionManager` can
+  stream live sessions into that seam and recover read/list inspection from
+  persisted transcripts after a manager restart, with persisted snapshots
+  representing the last durable state rather than post-restart process
+  liveness. Hosts can now explicitly reconcile unclaimed persisted `running`
+  records to `orphaned` with `SweepPersistedRunningCommands`, and live-only
+  operations now return `ErrCommandSessionNotRunning` when only transcript
+  state remains. Swept records use sweep time as `finished_at` and do not imply
+  an `exit_code`. A reusable
   `commandtools/sessiontest` conformance harness now verifies the public
   lifecycle contract across session adapters.
 - More isolated execution can stay outside the core loop through adapter seams
@@ -327,15 +327,15 @@ patches, snapshots, restore, reviewable mutations, and sandbox boundaries.
 - Command failure returns process diagnostics, the model repairs workspace state,
   and the command passes on rerun. Initial coverage exists.
 - Managed command session output can drive a repair loop across turns, and the
-  model can either read buffered output or interact through stdin writes before
-  stopping or exiting the session explicitly after success. PTY-backed starts
-  now cover shells and REPLs that require terminal behavior instead of plain
-  pipes, and dedicated PTY resize coverage exists so terminal geometry is part
-  of the eval contract. Unix stop and timeout paths now cover ordinary
-  descendant process cleanup through process groups; shells can still create
-  separate job-control process groups that require sandbox-level cleanup.
-  Initial coverage exists. Shared session adapter conformance coverage now
-  exists for OS-backed and scripted managers.
+  model can read buffered output, wait for fresh output with explicit timeout,
+  or interact through stdin writes before stopping or exiting the session
+  explicitly after success. PTY-backed starts now cover shells and REPLs that
+  require terminal behavior instead of plain pipes, and dedicated PTY resize
+  coverage exists so terminal geometry is part of the eval contract. Unix stop
+  and timeout paths now cover ordinary descendant process cleanup through
+  process groups; shells can still create separate job-control process groups
+  that require sandbox-level cleanup. Initial coverage exists. Shared session
+  adapter conformance coverage now exists for OS-backed and scripted managers.
 - Command approval denial drives an exact-input `request_approval` call and a
   single-use approved retry. Initial coverage exists.
 - Command verification policy denial prevents finalization after a matching
