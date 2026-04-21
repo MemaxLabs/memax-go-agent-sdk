@@ -26,6 +26,11 @@ func NewJSONLStore(dir string) *JSONLStore {
 	return &JSONLStore{dir: dir}
 }
 
+// ValidID reports whether id is a syntactically valid SDK session ID.
+func ValidID(id string) bool {
+	return sessionIDPattern.MatchString(id)
+}
+
 type transcriptEntry struct {
 	Type      string         `json:"type"`
 	Timestamp time.Time      `json:"timestamp"`
@@ -112,6 +117,23 @@ func (s *JSONLStore) Messages(ctx context.Context, id string) ([]model.Message, 
 func (s *JSONLStore) Get(ctx context.Context, id string) (Session, error) {
 	session, _, err := s.readTranscript(ctx, id)
 	return session, err
+}
+
+// Exists reports whether a transcript exists for id without reading the full
+// transcript. Invalid IDs return an error so callers can distinguish malformed
+// input from a missing session.
+func (s *JSONLStore) Exists(_ context.Context, id string) (bool, error) {
+	path, err := s.path(id)
+	if err != nil {
+		return false, err
+	}
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("stat transcript: %w", err)
+	}
+	return true, nil
 }
 
 func (s *JSONLStore) List(ctx context.Context) ([]Session, error) {

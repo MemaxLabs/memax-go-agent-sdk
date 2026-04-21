@@ -149,6 +149,43 @@ func TestJSONLStoreListMissingDirectory(t *testing.T) {
 	}
 }
 
+func TestValidID(t *testing.T) {
+	if !ValidID("0123456789abcdef0123456789abcdef") {
+		t.Fatal("ValidID returned false for generated-id shape")
+	}
+	if ValidID("../escape") {
+		t.Fatal("ValidID returned true for path traversal")
+	}
+}
+
+func TestJSONLStoreExists(t *testing.T) {
+	ctx := context.Background()
+	store := NewJSONLStore(t.TempDir())
+	sess, err := store.Create(ctx)
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	exists, err := store.Exists(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("Exists returned error: %v", err)
+	}
+	if !exists {
+		t.Fatal("Exists returned false for created session")
+	}
+
+	exists, err = store.Exists(ctx, "fedcba9876543210fedcba9876543210")
+	if err != nil {
+		t.Fatalf("Exists missing returned error: %v", err)
+	}
+	if exists {
+		t.Fatal("Exists returned true for missing session")
+	}
+
+	if _, err := store.Exists(ctx, "../escape"); err == nil {
+		t.Fatal("Exists returned nil error for invalid session id")
+	}
+}
+
 func TestJSONLStoreRejectsInvalidParentSessionID(t *testing.T) {
 	_, err := NewJSONLStore(t.TempDir()).CreateWithOptions(context.Background(), CreateOptions{
 		ParentID: "../escape",
