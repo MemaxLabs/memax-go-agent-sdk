@@ -54,6 +54,15 @@ cfg.Policies.RequirePatchApproval = true
 stack, err := coding.New(cfg)
 ```
 
+Coding-model depth is intentionally separate from workflow presets. Use
+`coding.ParseModelProfile` for CLI/config values, then map the parsed profile to
+provider-owned options through `coding.OpenAIModelOptions` or
+`coding.AnthropicModelOptions`. Empty profile input resolves to
+`coding.DefaultModelProfile` (`balanced`), which lets hosts pass unset flag or
+environment values directly. See
+[`examples/coding_model_profiles`](../examples/coding_model_profiles/main.go)
+for the runnable mapping example.
+
 Common sources of confusion:
 
 - A patch can still be denied under `safe_local` or `ci_repair` even when no

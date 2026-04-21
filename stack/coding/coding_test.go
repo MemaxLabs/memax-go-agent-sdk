@@ -554,6 +554,9 @@ func TestWithModel(t *testing.T) {
 func TestModelProfiles(t *testing.T) {
 	t.Parallel()
 
+	if DefaultModelProfile != ModelProfileBalanced {
+		t.Fatalf("DefaultModelProfile = %q, want %q", DefaultModelProfile, ModelProfileBalanced)
+	}
 	profiles := ModelProfiles()
 	want := []ModelProfile{ModelProfileFast, ModelProfileBalanced, ModelProfileDeep}
 	if fmt.Sprint(profiles) != fmt.Sprint(want) {
@@ -570,6 +573,42 @@ func TestModelProfiles(t *testing.T) {
 	}
 	if got := ModelProfile("unknown").Description(); got != "" {
 		t.Fatalf("unknown Description() = %q, want empty", got)
+	}
+	if got := ModelProfileDeep.String(); got != "deep" {
+		t.Fatalf("ModelProfileDeep.String() = %q, want deep", got)
+	}
+}
+
+func TestParseModelProfile(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		raw  string
+		want ModelProfile
+	}{
+		{raw: "", want: DefaultModelProfile},
+		{raw: "  ", want: DefaultModelProfile},
+		{raw: "fast", want: ModelProfileFast},
+		{raw: "BALANCED", want: ModelProfileBalanced},
+		{raw: " Deep ", want: ModelProfileDeep},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(fmt.Sprintf("%q", tc.raw), func(t *testing.T) {
+			t.Parallel()
+
+			got, err := ParseModelProfile(tc.raw)
+			if err != nil {
+				t.Fatalf("ParseModelProfile() error = %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("ParseModelProfile() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+
+	if _, err := ParseModelProfile("experimental"); err == nil || !strings.Contains(err.Error(), `unknown model profile "experimental"`) {
+		t.Fatalf("ParseModelProfile() error = %v, want unknown profile", err)
 	}
 }
 

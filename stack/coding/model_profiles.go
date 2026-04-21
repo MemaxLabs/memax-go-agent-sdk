@@ -2,6 +2,7 @@ package coding
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/providers/anthropic"
 	"github.com/MemaxLabs/memax-go-agent-sdk/providers/openai"
@@ -16,6 +17,10 @@ import (
 type ModelProfile string
 
 const (
+	// DefaultModelProfile is the coding stack's default model depth when a CLI
+	// or config file leaves the profile unset.
+	DefaultModelProfile = ModelProfileBalanced
+
 	// ModelProfileFast favors latency and cost for small edits and quick
 	// inspection loops.
 	ModelProfileFast ModelProfile = "fast"
@@ -36,6 +41,27 @@ var modelProfiles = []ModelProfile{
 // ModelProfiles returns the supported coding-model depth presets.
 func ModelProfiles() []ModelProfile {
 	return append([]ModelProfile(nil), modelProfiles...)
+}
+
+// ParseModelProfile parses a CLI/config profile value. Empty input resolves to
+// DefaultModelProfile so hosts can pass unset flag or environment values
+// directly.
+func ParseModelProfile(raw string) (ModelProfile, error) {
+	normalized := strings.ToLower(strings.TrimSpace(raw))
+	if normalized == "" {
+		return DefaultModelProfile, nil
+	}
+	for _, profile := range modelProfiles {
+		if normalized == string(profile) {
+			return profile, nil
+		}
+	}
+	return "", fmt.Errorf("coding stack: unknown model profile %q", raw)
+}
+
+// String returns the profile's stable CLI/config spelling.
+func (p ModelProfile) String() string {
+	return string(p)
 }
 
 // Description returns short user-facing help text for the profile. It is
