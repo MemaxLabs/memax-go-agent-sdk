@@ -267,6 +267,9 @@ func TestClientOptions(t *testing.T) {
 		WithMaxOutputTokens(123),
 		WithTemperature(0.2),
 		WithTopP(0.9),
+		WithReasoningEffort(ReasoningEffortHigh),
+		WithTextVerbosity(TextVerbosityLow),
+		WithServiceTier(ServiceTierPriority),
 		nil,
 	)
 
@@ -296,6 +299,37 @@ func TestClientOptions(t *testing.T) {
 	}
 	if client.TopP == nil || *client.TopP != 0.9 {
 		t.Fatalf("TopP = %#v, want 0.9", client.TopP)
+	}
+	if client.Reasoning == nil || client.Reasoning.Effort != ReasoningEffortHigh {
+		t.Fatalf("Reasoning = %#v, want high effort", client.Reasoning)
+	}
+	if client.Text == nil || client.Text.Verbosity != TextVerbosityLow {
+		t.Fatalf("Text = %#v, want low verbosity", client.Text)
+	}
+	if client.ServiceTier != ServiceTierPriority {
+		t.Fatalf("ServiceTier = %q, want priority", client.ServiceTier)
+	}
+}
+
+func TestClientSerializesModelControlOptions(t *testing.T) {
+	body := New("key", "gpt-5.4",
+		WithReasoningEffort(ReasoningEffortXHigh),
+		WithTextVerbosity(TextVerbosityHigh),
+		WithServiceTier(ServiceTierPriority),
+	).requestBody(model.Request{})
+
+	data, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("Marshal returned error: %v", err)
+	}
+	if !strings.Contains(string(data), `"reasoning":{"effort":"xhigh"}`) {
+		t.Fatalf("request missing reasoning effort: %s", data)
+	}
+	if !strings.Contains(string(data), `"text":{"verbosity":"high"}`) {
+		t.Fatalf("request missing text verbosity: %s", data)
+	}
+	if !strings.Contains(string(data), `"service_tier":"priority"`) {
+		t.Fatalf("request missing service tier: %s", data)
 	}
 }
 

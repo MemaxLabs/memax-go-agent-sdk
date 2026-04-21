@@ -35,7 +35,55 @@ type Client struct {
 	MaxOutputTokens int
 	Temperature     *float64
 	TopP            *float64
+	Reasoning       *ReasoningConfig
+	Text            *TextConfig
+	ServiceTier     ServiceTier
 }
+
+// ReasoningEffort controls OpenAI reasoning token spend for models that
+// support the Responses API reasoning parameter.
+type ReasoningEffort string
+
+const (
+	// ReasoningEffortNone explicitly sends "none" for models that accept it.
+	// Omit WithReasoningEffort to leave the provider default unchanged.
+	ReasoningEffortNone    ReasoningEffort = "none"
+	ReasoningEffortMinimal ReasoningEffort = "minimal"
+	ReasoningEffortLow     ReasoningEffort = "low"
+	ReasoningEffortMedium  ReasoningEffort = "medium"
+	ReasoningEffortHigh    ReasoningEffort = "high"
+	ReasoningEffortXHigh   ReasoningEffort = "xhigh"
+)
+
+// ReasoningConfig maps to the OpenAI Responses API reasoning object.
+type ReasoningConfig struct {
+	Effort ReasoningEffort `json:"effort,omitempty"`
+}
+
+// TextVerbosity controls OpenAI text verbosity for models that support it.
+type TextVerbosity string
+
+const (
+	TextVerbosityLow    TextVerbosity = "low"
+	TextVerbosityMedium TextVerbosity = "medium"
+	TextVerbosityHigh   TextVerbosity = "high"
+)
+
+// TextConfig maps to the OpenAI Responses API text object.
+type TextConfig struct {
+	Verbosity TextVerbosity `json:"verbosity,omitempty"`
+}
+
+// ServiceTier controls OpenAI service_tier for deployments that support it.
+type ServiceTier string
+
+const (
+	ServiceTierAuto     ServiceTier = "auto"
+	ServiceTierDefault  ServiceTier = "default"
+	ServiceTierFlex     ServiceTier = "flex"
+	ServiceTierPriority ServiceTier = "priority"
+	ServiceTierScale    ServiceTier = "scale"
+)
 
 // New creates a Responses API model client.
 func New(apiKey string, modelName string, opts ...Option) *Client {
@@ -115,6 +163,46 @@ func WithTemperature(temperature float64) Option {
 func WithTopP(topP float64) Option {
 	return func(c *Client) {
 		c.TopP = &topP
+	}
+}
+
+// WithReasoning sets request-side OpenAI Responses API reasoning controls. It
+// is omitted by default. OpenAI model families differ in accepted effort values
+// and in compatibility with temperature/top_p, so hosts should choose values
+// that match the configured model.
+//
+// This option does not preserve provider-specific reasoning items or encrypted
+// reasoning content across turns; that transcript policy is a separate SDK
+// capability tracked in docs/agent-runtime-quality.md.
+func WithReasoning(reasoning ReasoningConfig) Option {
+	return func(c *Client) {
+		c.Reasoning = &reasoning
+	}
+}
+
+// WithReasoningEffort sets reasoning.effort for OpenAI reasoning-capable
+// models. Use ReasoningEffortNone only when you want to explicitly send
+// "none"; omit this option to use the provider default.
+func WithReasoningEffort(effort ReasoningEffort) Option {
+	return WithReasoning(ReasoningConfig{Effort: effort})
+}
+
+// WithText sets the OpenAI Responses API text object. It is omitted by default.
+func WithText(text TextConfig) Option {
+	return func(c *Client) {
+		c.Text = &text
+	}
+}
+
+// WithTextVerbosity sets text.verbosity for OpenAI GPT-5-family models.
+func WithTextVerbosity(verbosity TextVerbosity) Option {
+	return WithText(TextConfig{Verbosity: verbosity})
+}
+
+// WithServiceTier sets OpenAI's service_tier request value.
+func WithServiceTier(tier ServiceTier) Option {
+	return func(c *Client) {
+		c.ServiceTier = tier
 	}
 }
 
@@ -214,6 +302,9 @@ func (c *Client) requestBody(req model.Request) responsesRequest {
 		MaxOutputTokens: optionalInt(c.MaxOutputTokens),
 		Temperature:     c.Temperature,
 		TopP:            c.TopP,
+		Reasoning:       c.Reasoning,
+		Text:            c.Text,
+		ServiceTier:     c.ServiceTier,
 	}
 }
 
@@ -239,15 +330,18 @@ func joinInstructions(parts ...string) string {
 }
 
 type responsesRequest struct {
-	Model           string          `json:"model"`
-	Instructions    string          `json:"instructions,omitempty"`
-	Input           []responsesItem `json:"input"`
-	Tools           []responsesTool `json:"tools,omitempty"`
-	Stream          bool            `json:"stream"`
-	Store           bool            `json:"store"`
-	MaxOutputTokens *int            `json:"max_output_tokens,omitempty"`
-	Temperature     *float64        `json:"temperature,omitempty"`
-	TopP            *float64        `json:"top_p,omitempty"`
+	Model           string           `json:"model"`
+	Instructions    string           `json:"instructions,omitempty"`
+	Input           []responsesItem  `json:"input"`
+	Tools           []responsesTool  `json:"tools,omitempty"`
+	Stream          bool             `json:"stream"`
+	Store           bool             `json:"store"`
+	MaxOutputTokens *int             `json:"max_output_tokens,omitempty"`
+	Temperature     *float64         `json:"temperature,omitempty"`
+	TopP            *float64         `json:"top_p,omitempty"`
+	Reasoning       *ReasoningConfig `json:"reasoning,omitempty"`
+	Text            *TextConfig      `json:"text,omitempty"`
+	ServiceTier     ServiceTier      `json:"service_tier,omitempty"`
 }
 
 type responsesItem map[string]any

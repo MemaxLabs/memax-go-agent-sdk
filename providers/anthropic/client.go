@@ -37,6 +37,51 @@ type Client struct {
 	MaxTokens   int
 	Temperature *float64
 	TopP        *float64
+	Effort      Effort
+	Thinking    *ThinkingConfig
+}
+
+// Effort controls Anthropic output_config.effort for models that support it.
+type Effort string
+
+const (
+	EffortLow    Effort = "low"
+	EffortMedium Effort = "medium"
+	EffortHigh   Effort = "high"
+	EffortXHigh  Effort = "xhigh"
+	EffortMax    Effort = "max"
+)
+
+// ThinkingType controls Anthropic's thinking mode.
+type ThinkingType string
+
+const (
+	ThinkingAdaptive ThinkingType = "adaptive"
+	ThinkingEnabled  ThinkingType = "enabled"
+	ThinkingDisabled ThinkingType = "disabled"
+)
+
+// ThinkingDisplay controls whether Anthropic returns thinking content blocks
+// when a model supports summarized or omitted thinking display.
+type ThinkingDisplay string
+
+const (
+	ThinkingDisplaySummarized ThinkingDisplay = "summarized"
+	ThinkingDisplayOmitted    ThinkingDisplay = "omitted"
+)
+
+// ThinkingConfig maps to Anthropic's thinking request object. Newer Claude
+// models prefer Type "adaptive" with output_config.effort; older models may
+// use Type "enabled" with BudgetTokens.
+type ThinkingConfig struct {
+	Type         ThinkingType    `json:"type,omitempty"`
+	BudgetTokens int             `json:"budget_tokens,omitempty"`
+	Display      ThinkingDisplay `json:"display,omitempty"`
+}
+
+// OutputConfig maps to Anthropic's output_config request object.
+type OutputConfig struct {
+	Effort Effort `json:"effort,omitempty"`
 }
 
 // New creates a Messages API model client.
@@ -111,6 +156,36 @@ func WithTopP(topP float64) Option {
 	return func(c *Client) {
 		c.TopP = &topP
 	}
+}
+
+// WithEffort sets Anthropic output_config.effort. It is omitted by default,
+// which lets Anthropic apply the model default.
+func WithEffort(effort Effort) Option {
+	return func(c *Client) {
+		c.Effort = effort
+	}
+}
+
+// WithThinking sets Anthropic's thinking object. It is omitted by default.
+// If Type is empty but BudgetTokens is set, the adapter treats the config as
+// manual extended thinking and sends Type "enabled".
+func WithThinking(thinking ThinkingConfig) Option {
+	return func(c *Client) {
+		c.Thinking = &thinking
+	}
+}
+
+// WithAdaptiveThinking enables Anthropic adaptive thinking. Pair this with
+// WithEffort to control thinking depth on models that support adaptive
+// thinking.
+func WithAdaptiveThinking() Option {
+	return WithThinking(ThinkingConfig{Type: ThinkingAdaptive})
+}
+
+// WithExtendedThinkingBudget enables manual extended thinking with a token
+// budget. Anthropic recommends adaptive thinking plus effort on newer models.
+func WithExtendedThinkingBudget(tokens int) Option {
+	return WithThinking(ThinkingConfig{Type: ThinkingEnabled, BudgetTokens: tokens})
 }
 
 func applyOptions(client *Client, opts []Option) {
@@ -201,15 +276,39 @@ func (c *Client) endpoint() string {
 
 func (c *Client) requestBody(req model.Request) messagesRequest {
 	return messagesRequest{
-		Model:       c.Model,
-		System:      joinSystem(req.SystemPrompt, req.AppendSystemPrompt),
-		Messages:    mapMessages(req.Messages),
-		Tools:       mapTools(req.Tools),
-		MaxTokens:   maxTokens(c.MaxTokens),
-		Stream:      true,
-		Temperature: c.Temperature,
-		TopP:        c.TopP,
+		Model:        c.Model,
+		System:       joinSystem(req.SystemPrompt, req.AppendSystemPrompt),
+		Messages:     mapMessages(req.Messages),
+		Tools:        mapTools(req.Tools),
+		MaxTokens:    maxTokens(c.MaxTokens),
+		Stream:       true,
+		Temperature:  c.Temperature,
+		TopP:         c.TopP,
+		OutputConfig: outputConfig(c.Effort),
+		Thinking:     thinkingConfig(c.Thinking),
 	}
+}
+
+func outputConfig(effort Effort) *OutputConfig {
+	if effort == "" {
+		return nil
+	}
+	return &OutputConfig{Effort: effort}
+}
+
+func thinkingConfig(thinking *ThinkingConfig) *ThinkingConfig {
+	if thinking == nil {
+		return nil
+	}
+	if thinking.Type == "" && thinking.BudgetTokens == 0 && thinking.Display == "" {
+		return nil
+	}
+	if thinking.Type == "" && thinking.BudgetTokens > 0 {
+		normalized := *thinking
+		normalized.Type = ThinkingEnabled
+		return &normalized
+	}
+	return thinking
 }
 
 func joinSystem(parts ...string) string {
@@ -234,14 +333,16 @@ func maxTokens(v int) int {
 }
 
 type messagesRequest struct {
-	Model       string     `json:"model"`
-	System      string     `json:"system,omitempty"`
-	Messages    []message  `json:"messages"`
-	Tools       []toolSpec `json:"tools,omitempty"`
-	MaxTokens   int        `json:"max_tokens"`
-	Stream      bool       `json:"stream"`
-	Temperature *float64   `json:"temperature,omitempty"`
-	TopP        *float64   `json:"top_p,omitempty"`
+	Model        string          `json:"model"`
+	System       string          `json:"system,omitempty"`
+	Messages     []message       `json:"messages"`
+	Tools        []toolSpec      `json:"tools,omitempty"`
+	MaxTokens    int             `json:"max_tokens"`
+	Stream       bool            `json:"stream"`
+	Temperature  *float64        `json:"temperature,omitempty"`
+	TopP         *float64        `json:"top_p,omitempty"`
+	OutputConfig *OutputConfig   `json:"output_config,omitempty"`
+	Thinking     *ThinkingConfig `json:"thinking,omitempty"`
 }
 
 type message struct {

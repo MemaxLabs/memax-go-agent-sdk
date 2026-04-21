@@ -212,8 +212,8 @@ remote-execution backends remain follow-on work.
 
 ### Capability Adapter Packages
 
-- `providers/openai`: optional Responses API adapter for hosted model streaming and function calls. Supports constructor options, default hosted endpoints, OpenAI-style `OPENAI_BASE_URL` API-version bases such as `/v1`, and explicit full-endpoint overrides.
-- `providers/anthropic`: optional Messages API adapter for hosted model streaming and tool-use blocks. Supports constructor options, default hosted endpoints, Anthropic-style `ANTHROPIC_BASE_URL` service roots without `/v1`, and explicit full-endpoint overrides.
+- `providers/openai`: optional Responses API adapter for hosted model streaming and function calls. Supports constructor options, default hosted endpoints, OpenAI-style `OPENAI_BASE_URL` API-version bases such as `/v1`, explicit full-endpoint overrides, and OpenAI-specific model controls such as reasoning effort, text verbosity, and service tier.
+- `providers/anthropic`: optional Messages API adapter for hosted model streaming and tool-use blocks. Supports constructor options, default hosted endpoints, Anthropic-style `ANTHROPIC_BASE_URL` service roots without `/v1`, explicit full-endpoint overrides, and Anthropic-specific model controls such as output effort and adaptive or manual thinking configuration.
 
 Provider base URL semantics intentionally follow each provider ecosystem rather
 than a single SDK-wide rule: OpenAI `BaseURL` is the API-version base and

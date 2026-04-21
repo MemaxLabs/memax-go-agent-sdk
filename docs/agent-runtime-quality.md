@@ -438,24 +438,45 @@ verify, ask the user, or stop.
 
 ### 7. Provider Fidelity and Compatibility
 
-**Current state:** OpenAI and Anthropic adapters exist with streaming and usage
-mapping.
+**Current state:** OpenAI and Anthropic adapters exist with streaming, usage
+mapping, and provider-specific model-control options. OpenAI exposes
+Responses API reasoning effort, text verbosity, and service tier controls.
+Anthropic exposes Messages API output effort plus adaptive/manual thinking
+configuration. These controls intentionally stay in provider packages instead
+of becoming provider-specific fields on `model.Request`.
 
 **Gap:** Provider SDK conventions and edge cases must be exact.
+The next provider-fidelity gap is durable reasoning-item handling: OpenAI
+Responses reasoning items and Anthropic thinking blocks can improve multi-turn
+agent performance when preserved according to provider rules, but the current
+SDK only exposes request-side effort/thinking controls and does not yet model
+those provider-specific reasoning artifacts in the transcript. For OpenAI this
+means adding a transcript policy for reasoning items, including encrypted
+reasoning content when requested through the provider `include` mechanism, and
+replaying those items only according to OpenAI's conversation-state rules.
 
 **Target behavior:**
 
 - OpenAI adapter follows OpenAI ecosystem conventions exactly.
 - Anthropic adapter follows Anthropic ecosystem conventions exactly.
 - Tests cover base URL semantics, endpoint overrides, stream deltas, tool-call
-  fragments, usage deltas, provider errors, and cancellation.
+  fragments, usage deltas, model-control request fields, provider errors, and
+  cancellation.
 - Provider-specific behavior stays outside core packages.
+- CLI-facing presets can map `fast`, `balanced`, and `deep` modes onto
+  provider-specific model controls without leaking provider JSON into the
+  runtime kernel.
+- Reasoning or thinking artifacts that providers require for best multi-turn
+  performance are preserved or intentionally summarized through a documented
+  transcript policy, rather than silently dropped.
 
 **Eval coverage:**
 
 - HTTP fixture scenarios for every supported provider wire feature.
 - Error payloads map to actionable SDK errors.
 - Tool use round trips match provider wire contracts.
+- Model reasoning/thinking controls serialize when configured and are omitted
+  by default.
 
 ### 8. Eval Suite Upgrade
 

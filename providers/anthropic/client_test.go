@@ -256,6 +256,8 @@ func TestClientOptions(t *testing.T) {
 		WithMaxTokens(123),
 		WithTemperature(0.2),
 		WithTopP(0.9),
+		WithEffort(EffortMedium),
+		WithAdaptiveThinking(),
 		nil,
 	)
 
@@ -282,6 +284,72 @@ func TestClientOptions(t *testing.T) {
 	}
 	if client.TopP == nil || *client.TopP != 0.9 {
 		t.Fatalf("TopP = %#v, want 0.9", client.TopP)
+	}
+	if client.Effort != EffortMedium {
+		t.Fatalf("Effort = %q, want medium", client.Effort)
+	}
+	if client.Thinking == nil || client.Thinking.Type != ThinkingAdaptive {
+		t.Fatalf("Thinking = %#v, want adaptive", client.Thinking)
+	}
+}
+
+func TestClientSerializesModelControlOptions(t *testing.T) {
+	body := New("key", "claude-opus-4-7",
+		WithEffort(EffortXHigh),
+		WithAdaptiveThinking(),
+	).requestBody(model.Request{})
+
+	data, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("Marshal returned error: %v", err)
+	}
+	if !strings.Contains(string(data), `"output_config":{"effort":"xhigh"}`) {
+		t.Fatalf("request missing output_config effort: %s", data)
+	}
+	if !strings.Contains(string(data), `"thinking":{"type":"adaptive"}`) {
+		t.Fatalf("request missing adaptive thinking: %s", data)
+	}
+}
+
+func TestClientSerializesManualThinkingBudget(t *testing.T) {
+	body := New("key", "claude-sonnet-4",
+		WithExtendedThinkingBudget(4096),
+	).requestBody(model.Request{})
+
+	data, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("Marshal returned error: %v", err)
+	}
+	if !strings.Contains(string(data), `"thinking":{"type":"enabled","budget_tokens":4096}`) {
+		t.Fatalf("request missing manual thinking budget: %s", data)
+	}
+}
+
+func TestClientNormalizesThinkingBudgetWithoutType(t *testing.T) {
+	body := New("key", "claude-sonnet-4",
+		WithThinking(ThinkingConfig{BudgetTokens: 4096}),
+	).requestBody(model.Request{})
+
+	data, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("Marshal returned error: %v", err)
+	}
+	if !strings.Contains(string(data), `"thinking":{"type":"enabled","budget_tokens":4096}`) {
+		t.Fatalf("request did not normalize manual thinking budget: %s", data)
+	}
+}
+
+func TestClientOmitsEmptyThinkingConfig(t *testing.T) {
+	body := New("key", "claude-sonnet-4",
+		WithThinking(ThinkingConfig{}),
+	).requestBody(model.Request{})
+
+	data, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("Marshal returned error: %v", err)
+	}
+	if strings.Contains(string(data), `"thinking"`) {
+		t.Fatalf("request included empty thinking config: %s", data)
 	}
 }
 

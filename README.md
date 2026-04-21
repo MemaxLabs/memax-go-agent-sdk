@@ -340,6 +340,8 @@ client := openai.NewFromEnv("",
     openai.WithBaseURL("https://gateway.example.com/v1"),
     openai.WithTimeout(60*time.Second),
     openai.WithMaxOutputTokens(4096),
+    openai.WithReasoningEffort(openai.ReasoningEffortMedium),
+    openai.WithTextVerbosity(openai.TextVerbosityMedium),
 )
 events, err := memaxagent.Query(ctx, "Inspect the workspace.", memaxagent.Options{
     Model: client,
@@ -354,7 +356,10 @@ the adapter sends requests to `BaseURL + "/responses"`. Use
 `openai.WithEndpoint` only when you need to override the full Responses API
 endpoint directly; `Endpoint` takes precedence over `BaseURL`.
 `openai.WithTimeout` applies a request-scoped timeout and can be combined with
-`openai.WithHTTPClient` when you need a custom transport.
+`openai.WithHTTPClient` when you need a custom transport. Reasoning effort,
+text verbosity, and service tier stay as OpenAI-specific options on the
+adapter; the provider-neutral `model.Request` contract does not grow
+OpenAI-only fields.
 
 To use the Anthropic adapter:
 
@@ -363,6 +368,8 @@ client := anthropic.NewFromEnv("",
     anthropic.WithBaseURL("https://gateway.example.com"),
     anthropic.WithTimeout(60*time.Second),
     anthropic.WithMaxTokens(4096),
+    anthropic.WithEffort(anthropic.EffortMedium),
+    anthropic.WithAdaptiveThinking(),
 )
 events, err := memaxagent.Query(ctx, "Inspect the workspace.", memaxagent.Options{
     Model: client,
@@ -377,7 +384,10 @@ include `/v1`; the adapter sends requests to `BaseURL + "/v1/messages"`. Use
 `anthropic.WithEndpoint` only when you need to override the full Messages API
 endpoint directly; `Endpoint` takes precedence over `BaseURL`.
 `anthropic.WithTimeout` applies a request-scoped timeout and can be combined
-with `anthropic.WithHTTPClient` when you need a custom transport.
+with `anthropic.WithHTTPClient` when you need a custom transport. Anthropic
+effort and thinking controls stay on the Anthropic adapter; use adaptive
+thinking with effort for models that support adaptive thinking, or manual
+thinking budgets for older model families that still support them.
 
 Runnable live-provider examples are available behind explicit environment variables:
 
