@@ -95,6 +95,7 @@ func All() []agenteval.Case {
 		CodingPresetCIRepair(),
 		CodingPresetCIRepairApprovalRecovery(),
 		CodingPresetInteractiveDev(),
+		CodingPresetInteractiveDevWaitRepair(),
 		CodingPresetInteractiveDevSessionCleanup(),
 		WorkspaceVerificationRepair(),
 		WorkspaceVerificationRollback(),

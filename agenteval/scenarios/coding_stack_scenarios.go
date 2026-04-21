@@ -911,6 +911,237 @@ func CodingPresetInteractiveDev() agenteval.Case {
 	}
 }
 
+// CodingPresetInteractiveDevWaitRepair returns a single-use scenario that
+// exercises the interactive_dev preset's monitor loop: start a watcher, wait
+// for failing output, checkpoint and patch, wait for fresh passing output,
+// stop the live session, verify, and only then finalize.
+func CodingPresetInteractiveDevWaitRepair() agenteval.Case {
+	workspaceStore := workspace.NewMemoryStore(map[string]string{
+		"README.md": "status: broken",
+	})
+	taskStore := tasktools.NewMemoryStore([]tasktools.Task{{
+		ID:     "task-1",
+		Title:  "repair README status from wait-driven watcher feedback",
+		Status: tasktools.StatusInProgress,
+		Notes:  "wait for fresh watcher output, checkpoint before edits, stop the watcher, and verify before final answer",
+	}})
+	manager := commandtools.NewScriptedSessionManager(commandtools.ScriptedCommand{
+		ID:  "watch-1",
+		PID: 5152,
+		Pages: []commandtools.ScriptedOutputPage{
+			{
+				Chunks: []commandtools.OutputChunk{{
+					Seq:    1,
+					Stream: "stderr",
+					Text:   "watch: README.md status must be fixed\n",
+				}},
+				Running: true,
+			},
+			{
+				Chunks: []commandtools.OutputChunk{
+					{
+						Seq:    1,
+						Stream: "stderr",
+						Text:   "watch: README.md status must be fixed\n",
+					},
+					{
+						Seq:    2,
+						Stream: "stdout",
+						Text:   "watch: ok\n",
+					},
+				},
+				Running: true,
+			},
+		},
+		StopExitCode: intPtr(0),
+	})
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "start-1",
+				Name:  commandtools.StartToolName,
+				Input: json.RawMessage(`{"id":"watch-1","command":["npm","run","test:watch"],"purpose":"run README status watcher"}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "wait-1",
+				Name:  commandtools.WaitOutputToolName,
+				Input: json.RawMessage(`{"id":"watch-1","timeout_ms":1000}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "checkpoint-1",
+				Name:  "workspace_checkpoint",
+				Input: json.RawMessage(`{"label":"before wait-driven README repair"}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "patch-1",
+				Name: "workspace_apply_patch",
+				Input: json.RawMessage(`{"operations":[
+					{"path":"README.md","old_content":"status: broken","new_content":"status: fixed"}
+				]}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "wait-2",
+				Name:  commandtools.WaitOutputToolName,
+				Input: json.RawMessage(`{"id":"watch-1","after_seq":1,"timeout_ms":1000}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "stop-1",
+				Name:  commandtools.StopToolName,
+				Input: json.RawMessage(`{"id":"watch-1","force":true}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "verify-1",
+				Name: verifytools.ToolName,
+				Input: json.RawMessage(`{
+					"name":"test",
+					"target":"README.md",
+					"metadata":{"task_id":"task-1"}
+				}`),
+			},
+		}},
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "Interactive dev preset completed wait-driven repair."}},
+	)
+
+	config, configErr := coding.PresetInteractiveDev.Config()
+	config.Workspace = workspaceStore
+	config.Tasks = taskStore
+	config.CommandSessions = manager
+	config.Verifier.Verifier = verifierForReadmeStatus(workspaceStore, "status: fixed")
+	stack, stackErr := coding.New(config)
+
+	return agenteval.Case{
+		Name:    "coding_preset_interactive_dev_wait_repair",
+		Prompt:  "Use watch mode to repair README.md. Wait for fresh output, patch only after checkpointing, stop the live watcher, verify, and finish the task.",
+		Options: stack.WithModel(modelClient),
+		Assertions: []agenteval.Assertion{
+			toolConstructionSucceeded(configErr, stackErr),
+			agenteval.ToolUsed(commandtools.StartToolName),
+			agenteval.ToolUsed(commandtools.WaitOutputToolName),
+			agenteval.ToolUsed("workspace_checkpoint"),
+			agenteval.ToolUsed("workspace_apply_patch"),
+			agenteval.ToolUsed(commandtools.StopToolName),
+			agenteval.ToolUsed(verifytools.ToolName),
+			agenteval.NoToolErrors(),
+			agenteval.EventKindEmitted(memaxagent.EventCommandStarted),
+			agenteval.EventKindEmitted(memaxagent.EventCommandOutput),
+			agenteval.EventKindEmitted(memaxagent.EventCommandStopped),
+			agenteval.EventKindEmitted(memaxagent.EventWorkspaceCheckpoint),
+			agenteval.EventKindEmitted(memaxagent.EventWorkspacePatch),
+			agenteval.EventKindEmitted(memaxagent.EventVerification),
+			agenteval.FinalEquals("Interactive dev preset completed wait-driven repair."),
+			requestCountEquals(modelClient, 8),
+			{
+				Name: "interactive dev wait path drives repair loop",
+				Check: func(result agenteval.Result) error {
+					toolResults := result.ToolResults()
+					if len(toolResults) != 7 {
+						return fmt.Errorf("tool results = %#v, want 7 tool results", toolResults)
+					}
+					if toolResults[1].IsError || !strings.Contains(toolResults[1].Content, "status must be fixed") {
+						return fmt.Errorf("first wait result = %#v, want failing watcher output", toolResults[1])
+					}
+					if toolResults[2].IsError || !strings.Contains(toolResults[2].Content, "created workspace checkpoint checkpoint-1") {
+						return fmt.Errorf("checkpoint result = %#v, want checkpoint success", toolResults[2])
+					}
+					if toolResults[3].IsError || !strings.Contains(toolResults[3].Content, "modified README.md") {
+						return fmt.Errorf("patch result = %#v, want successful patch", toolResults[3])
+					}
+					if toolResults[4].IsError || !strings.Contains(toolResults[4].Content, "watch: ok") {
+						return fmt.Errorf("second wait result = %#v, want passing watcher output", toolResults[4])
+					}
+					if strings.Contains(toolResults[4].Content, "status must be fixed") {
+						return fmt.Errorf("second wait result = %#v, want after_seq to suppress stale failing output", toolResults[4])
+					}
+					if toolResults[4].Metadata[commandtools.MetadataCommandOutputChunks] != 1 ||
+						toolResults[4].Metadata[commandtools.MetadataCommandNextSeq] != 3 {
+						return fmt.Errorf("second wait metadata = %#v, want one fresh chunk and next_seq=3", toolResults[4].Metadata)
+					}
+					if toolResults[5].IsError || !strings.Contains(toolResults[5].Content, "status: stopped") {
+						return fmt.Errorf("stop result = %#v, want live watcher stopped", toolResults[5])
+					}
+					if toolResults[6].IsError || !strings.Contains(toolResults[6].Content, "verification test passed") {
+						return fmt.Errorf("verification result = %#v, want verification success", toolResults[6])
+					}
+					startRequests := manager.StartRequests()
+					if len(startRequests) != 1 || startRequests[0].Purpose != "run README status watcher" {
+						return fmt.Errorf("start requests = %#v, want one README watcher start", startRequests)
+					}
+					readRequests := manager.ReadRequests()
+					if len(readRequests) != 2 || readRequests[1].AfterSeq != 1 {
+						return fmt.Errorf("wait/read requests = %#v, want second wait after_seq=1", readRequests)
+					}
+					stopRequests := manager.StopRequests()
+					if len(stopRequests) != 1 || !stopRequests[0].Force || stopRequests[0].ID != "watch-1" {
+						return fmt.Errorf("stop requests = %#v, want forced stop for watch-1", stopRequests)
+					}
+					waitEvents := 0
+					for _, event := range result.Events {
+						if event.Kind != memaxagent.EventCommandOutput || event.Command == nil {
+							continue
+						}
+						if event.Command.Operation != "wait" {
+							return fmt.Errorf("command output event operation = %q, want wait", event.Command.Operation)
+						}
+						if event.Command.Status != string(commandtools.SessionRunning) {
+							return fmt.Errorf("wait event status = %q, want running before stop", event.Command.Status)
+						}
+						waitEvents++
+					}
+					if waitEvents != 2 {
+						return fmt.Errorf("wait command output events = %d, want 2", waitEvents)
+					}
+					initialPrompt := modelClient.Requests()[0].SystemPrompt
+					for _, want := range []string{
+						"Wait for fresh output from watchers",
+						"[in_progress] task-1",
+						commandtools.StartToolName,
+						commandtools.WaitOutputToolName,
+						commandtools.StopToolName,
+						verifytools.ToolName,
+					} {
+						if !strings.Contains(initialPrompt, want) {
+							return fmt.Errorf("initial prompt missing %q:\n%s", want, initialPrompt)
+						}
+					}
+					finalPrompt := modelClient.Requests()[7].SystemPrompt
+					for _, want := range []string{"[completed] task-1", "verification:test"} {
+						if !strings.Contains(finalPrompt, want) {
+							return fmt.Errorf("final prompt missing %q:\n%s", want, finalPrompt)
+						}
+					}
+					content, err := workspaceStore.ReadFile(context.Background(), "README.md")
+					if err != nil {
+						return err
+					}
+					if content != "status: fixed" {
+						return fmt.Errorf("README.md = %q, want repaired content", content)
+					}
+					return nil
+				},
+			},
+		},
+	}
+}
+
 // CodingPresetInteractiveDevSessionCleanup returns a single-use scenario that
 // exercises the interactive_dev preset with a long-lived session that must be
 // read incrementally, force-stopped explicitly, and confirmed absent from the
