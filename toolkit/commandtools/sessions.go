@@ -30,6 +30,9 @@ const (
 	// ReadOutputToolName is the default tool name for reading buffered output
 	// from a managed command session.
 	ReadOutputToolName = "read_command_output"
+	// WaitOutputToolName is the default tool name for waiting for fresh output
+	// or lifecycle changes from a managed command session.
+	WaitOutputToolName = "wait_command_output"
 	// StopToolName is the default tool name for stopping a managed command
 	// session.
 	StopToolName = "stop_command"
@@ -40,6 +43,7 @@ const (
 	defaultReadChunks     = 32
 	defaultReadBytes      = 16 * 1024
 	defaultWriteYield     = 250 * time.Millisecond
+	defaultWaitTimeout    = 5 * time.Second
 	defaultSessionTimeout = time.Hour
 	defaultTTYCols        = 80
 	defaultTTYRows        = 24
@@ -198,6 +202,18 @@ type ReadResult struct {
 	NextSeq int
 }
 
+// WaitRequest waits for fresh output from a managed command session.
+type WaitRequest struct {
+	ID              string
+	SessionID       string
+	ParentSessionID string
+	Identity        identity.Identity
+	AfterSeq        int
+	Timeout         time.Duration
+	MaxChunks       int
+	MaxBytes        int
+}
+
 // WriteRequest writes stdin to a managed command session and can optionally
 // wait briefly for fresh output produced after the write.
 type WriteRequest struct {
@@ -262,6 +278,11 @@ type Writer interface {
 	WriteCommandInput(context.Context, WriteRequest) (WriteResult, error)
 }
 
+// Waiter waits for managed command output or lifecycle updates.
+type Waiter interface {
+	WaitCommandOutput(context.Context, WaitRequest) (ReadResult, error)
+}
+
 // Resizer changes terminal geometry for a PTY-backed managed command session.
 type Resizer interface {
 	ResizeCommandTerminal(context.Context, ResizeRequest) (CommandSession, error)
@@ -309,6 +330,9 @@ func NewSessionTools(manager SessionManager) ([]tool.Tool, error) {
 		NewReadOutputTool(manager),
 		NewStopTool(manager),
 		NewListTool(manager),
+	}
+	if waiter, ok := any(manager).(Waiter); ok {
+		tools = append(tools, NewWaitTool(waiter))
 	}
 	if writer, ok := any(manager).(Writer); ok {
 		tools = append(tools, NewWriteInputTool(writer))
@@ -400,6 +424,50 @@ func NewReadOutputTool(reader Reader) tool.Tool {
 				return model.ToolResult{}, err
 			}
 			return readResult(result), nil
+		},
+	}
+}
+
+// NewWaitTool returns a tool that waits for fresh buffered output or lifecycle
+// changes from a managed command session.
+func NewWaitTool(waiter Waiter) tool.Tool {
+	return tool.Definition{
+		ToolSpec: model.ToolSpec{
+			Name:            WaitOutputToolName,
+			Description:     "Wait for fresh output or status changes from a managed command session.",
+			SearchHint:      "wait monitor command output logs session process watcher server",
+			ReadOnly:        true,
+			ConcurrencySafe: true,
+			MaxResultBytes:  32 * 1024,
+			InputSchema:     waitInputSchema(),
+		},
+		Handler: func(ctx context.Context, call tool.Call) (model.ToolResult, error) {
+			input, err := tool.DecodeInput[waitInput](call.Use)
+			if err != nil {
+				return model.ToolResult{}, err
+			}
+			req := WaitRequest{
+				ID:              strings.TrimSpace(input.ID),
+				SessionID:       call.Runtime.SessionID,
+				ParentSessionID: call.Runtime.ParentSessionID,
+				Identity:        call.Runtime.Identity,
+				AfterSeq:        input.AfterSeq,
+				MaxChunks:       input.Limit,
+				MaxBytes:        input.MaxBytes,
+			}
+			if req.ID == "" {
+				return model.ToolResult{}, fmt.Errorf("commandtools: id is required")
+			}
+			if input.TimeoutMS == nil {
+				req.Timeout = defaultWaitTimeout
+			} else {
+				req.Timeout = time.Duration(*input.TimeoutMS) * time.Millisecond
+			}
+			result, err := waiter.WaitCommandOutput(ctx, req)
+			if err != nil {
+				return model.ToolResult{}, err
+			}
+			return waitResult(result), nil
 		},
 	}
 }
@@ -674,6 +742,14 @@ type writeInput struct {
 	MaxBytes      int    `json:"max_bytes"`
 }
 
+type waitInput struct {
+	ID        string `json:"id"`
+	AfterSeq  int    `json:"after_seq"`
+	TimeoutMS *int   `json:"timeout_ms"`
+	Limit     int    `json:"limit"`
+	MaxBytes  int    `json:"max_bytes"`
+}
+
 type resizeInput struct {
 	ID   string `json:"id"`
 	Cols int    `json:"cols"`
@@ -784,6 +860,41 @@ func readInputSchema() map[string]any {
 	}
 }
 
+func waitInputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"required":             []any{"id"},
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"id": map[string]any{
+				"type":        "string",
+				"description": "Command session ID returned by start_command.",
+				"minLength":   1,
+			},
+			"after_seq": map[string]any{
+				"type":        "integer",
+				"description": "Wait until output with a sequence number greater than this value appears.",
+				"minimum":     0,
+			},
+			"timeout_ms": map[string]any{
+				"type":        "integer",
+				"description": "Maximum time to wait for output or status changes. Defaults to a short wait; set to 0 for a non-blocking snapshot read.",
+				"minimum":     0,
+			},
+			"limit": map[string]any{
+				"type":        "integer",
+				"description": "Optional maximum number of chunks to return.",
+				"minimum":     1,
+			},
+			"max_bytes": map[string]any{
+				"type":        "integer",
+				"description": "Optional approximate retained byte budget for returned chunk text.",
+				"minimum":     1,
+			},
+		},
+	}
+}
+
 // ApprovalSummaryFromStartInput returns a host-facing approval summary for a
 // start_command tool input. It is intentionally input-only: it does not inspect
 // manager state or classify process side effects.
@@ -874,6 +985,17 @@ func writeResult(result WriteResult) model.ToolResult {
 	metadata[MetadataCommandOutputChunks] = len(result.Chunks)
 	return model.ToolResult{
 		Content:  formatSessionWrite(result),
+		Metadata: metadata,
+	}
+}
+
+func waitResult(result ReadResult) model.ToolResult {
+	metadata := sessionMetadata(result.Session)
+	metadata[MetadataCommandOperation] = "wait"
+	metadata[MetadataCommandNextSeq] = result.NextSeq
+	metadata[MetadataCommandOutputChunks] = len(result.Chunks)
+	return model.ToolResult{
+		Content:  formatSessionRead(result),
 		Metadata: metadata,
 	}
 }
@@ -1267,6 +1389,21 @@ func (m *ScriptedSessionManager) ReadCommandOutput(ctx context.Context, req Read
 		Chunks:  cloneOutputChunks(chunks),
 		NextSeq: state.session.NextSeq,
 	}, nil
+}
+
+func (m *ScriptedSessionManager) WaitCommandOutput(ctx context.Context, req WaitRequest) (ReadResult, error) {
+	if req.Timeout < 0 {
+		return ReadResult{}, fmt.Errorf("commandtools: timeout must be non-negative")
+	}
+	return m.ReadCommandOutput(ctx, ReadRequest{
+		ID:              req.ID,
+		SessionID:       req.SessionID,
+		ParentSessionID: req.ParentSessionID,
+		Identity:        req.Identity,
+		AfterSeq:        req.AfterSeq,
+		MaxChunks:       req.MaxChunks,
+		MaxBytes:        req.MaxBytes,
+	})
 }
 
 func (m *ScriptedSessionManager) WriteCommandInput(ctx context.Context, req WriteRequest) (WriteResult, error) {

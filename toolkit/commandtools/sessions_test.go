@@ -474,6 +474,7 @@ func TestStartReadStopToolsReturnMetadata(t *testing.T) {
 	})
 	startTool := NewStartTool(manager)
 	readTool := NewReadOutputTool(manager)
+	waitTool := NewWaitTool(manager)
 	writeTool := NewWriteInputTool(manager)
 	resizeTool := NewResizeTool(manager)
 	stopTool := NewStopTool(manager)
@@ -513,6 +514,22 @@ func TestStartReadStopToolsReturnMetadata(t *testing.T) {
 	}
 	if !strings.Contains(read.Content, "[pty #1]") || !strings.Contains(read.Content, "listening on :3000") {
 		t.Fatalf("read content = %q, want output chunk", read.Content)
+	}
+	waited, err := waitTool.(tool.Definition).Handler(context.Background(), tool.Call{
+		Runtime: runtime,
+		Use: model.ToolUse{
+			Name:  WaitOutputToolName,
+			Input: json.RawMessage(`{"id":"dev-1","after_seq":1}`),
+		},
+	})
+	if err != nil {
+		t.Fatalf("wait handler returned error: %v", err)
+	}
+	if waited.Metadata[MetadataCommandOperation] != "wait" || waited.Metadata[MetadataCommandOutputChunks] != 0 {
+		t.Fatalf("wait metadata = %#v, want command wait metadata", waited.Metadata)
+	}
+	if !strings.Contains(waited.Content, "no new output") {
+		t.Fatalf("wait content = %q, want no new output marker", waited.Content)
 	}
 	wrote, err := writeTool.(tool.Definition).Handler(context.Background(), tool.Call{
 		Runtime: runtime,
@@ -710,11 +727,58 @@ func TestNewSessionToolsIncludesWriteWhenSupported(t *testing.T) {
 		ReadOutputToolName,
 		StopToolName,
 		ListToolName,
+		WaitOutputToolName,
 		WriteInputToolName,
 		ResizeToolName,
 	}
 	if !sameStrings(names, want) {
 		t.Fatalf("tool names = %#v, want %#v", names, want)
+	}
+}
+
+type waitRecorder struct {
+	reqs   []WaitRequest
+	result ReadResult
+	err    error
+}
+
+func (r *waitRecorder) WaitCommandOutput(_ context.Context, req WaitRequest) (ReadResult, error) {
+	r.reqs = append(r.reqs, req)
+	if r.err != nil {
+		return ReadResult{}, r.err
+	}
+	return r.result, nil
+}
+
+func TestWaitToolDefaultsTimeout(t *testing.T) {
+	recorder := &waitRecorder{
+		result: ReadResult{
+			Session: CommandSession{
+				ID:        "cmd-1",
+				Argv:      []string{"npm", "run", "dev"},
+				Status:    SessionRunning,
+				StartedAt: time.Unix(1, 0).UTC(),
+				NextSeq:   1,
+			},
+			NextSeq: 1,
+		},
+	}
+	waitTool := NewWaitTool(recorder)
+	_, err := waitTool.(tool.Definition).Handler(context.Background(), tool.Call{
+		Runtime: tool.Runtime{SessionID: "session-1"},
+		Use: model.ToolUse{
+			Name:  WaitOutputToolName,
+			Input: json.RawMessage(`{"id":"cmd-1"}`),
+		},
+	})
+	if err != nil {
+		t.Fatalf("wait handler returned error: %v", err)
+	}
+	if len(recorder.reqs) != 1 {
+		t.Fatalf("wait requests = %#v, want one request", recorder.reqs)
+	}
+	if recorder.reqs[0].Timeout != defaultWaitTimeout {
+		t.Fatalf("wait timeout = %s, want default %s", recorder.reqs[0].Timeout, defaultWaitTimeout)
 	}
 }
 

@@ -381,9 +381,9 @@ truncation status, and argv metadata, which drive `EventCommandFinished` and
 The same package also supports managed command sessions for longer-lived work
 such as dev servers, watchers, or background checks. `start_command`,
 `write_command_input`, `resize_command_terminal`, `read_command_output`,
-`stop_command`, and `list_commands` sit on top of host-owned `Starter`,
-`Writer`, `Resizer`, `Reader`, `Stopper`, and `Lister` interfaces. Session
-tools remain argv-only,
+`wait_command_output`, `stop_command`, and `list_commands` sit on top of
+host-owned `Starter`, `Writer`, `Resizer`, `Reader`, `Waiter`, `Stopper`, and
+`Lister` interfaces. Session tools remain argv-only,
 transcript-visible, and metadata-driven. They do not introduce hidden shell
 state into the core loop. `commandtools.SessionCleanupOptions`
 adapts a `Cleaner` into a `SessionEnded` hook so host-managed processes can be

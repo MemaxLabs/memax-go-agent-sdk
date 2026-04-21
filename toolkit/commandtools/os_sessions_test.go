@@ -451,6 +451,152 @@ func TestOSSessionManagerWriteInputEchoesAndExits(t *testing.T) {
 	}
 }
 
+func TestOSSessionManagerWaitCommandOutput(t *testing.T) {
+	manager, err := NewOSSessionManager(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewOSSessionManager returned error: %v", err)
+	}
+	started, err := manager.StartCommand(context.Background(), StartRequest{
+		SessionID: "session-1",
+		Argv: []string{
+			os.Args[0],
+			"-test.run=TestHelperProcess",
+			"--",
+			"session",
+			"ready-then-finish",
+			"300ms",
+		},
+		Env: map[string]string{"GO_WANT_HELPER_PROCESS": "1"},
+	})
+	if err != nil {
+		t.Fatalf("StartCommand returned error: %v", err)
+	}
+	first := waitForOutput(t, manager, ReadRequest{SessionID: "session-1", ID: started.ID}, func(result ReadResult) bool {
+		return strings.Contains(joinChunkText(result.Chunks), "ready\n")
+	})
+	waited, err := manager.WaitCommandOutput(context.Background(), WaitRequest{
+		SessionID: "session-1",
+		ID:        started.ID,
+		AfterSeq:  max(0, first.NextSeq-1),
+		Timeout:   2 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("WaitCommandOutput returned error: %v", err)
+	}
+	if !strings.Contains(joinChunkText(waited.Chunks), "done\n") {
+		t.Fatalf("waited chunks = %#v, want done output", waited.Chunks)
+	}
+	if waited.Session.Status != SessionExited || waited.Session.ExitCode == nil || *waited.Session.ExitCode != 0 {
+		t.Fatalf("waited session = %#v, want exited zero status", waited.Session)
+	}
+}
+
+func TestOSSessionManagerWaitCommandOutputTimeoutNoNewOutput(t *testing.T) {
+	manager, err := NewOSSessionManager(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewOSSessionManager returned error: %v", err)
+	}
+	started, err := manager.StartCommand(context.Background(), StartRequest{
+		SessionID: "session-1",
+		Argv: []string{
+			os.Args[0],
+			"-test.run=TestHelperProcess",
+			"--",
+			"session",
+			"linger",
+		},
+		Env: map[string]string{"GO_WANT_HELPER_PROCESS": "1"},
+	})
+	if err != nil {
+		t.Fatalf("StartCommand returned error: %v", err)
+	}
+	defer func() {
+		_, _ = manager.StopCommand(context.Background(), StopRequest{SessionID: "session-1", ID: started.ID, Force: true})
+	}()
+	first := waitForOutput(t, manager, ReadRequest{SessionID: "session-1", ID: started.ID}, func(result ReadResult) bool {
+		return strings.Contains(joinChunkText(result.Chunks), "ready\n")
+	})
+	waited, err := manager.WaitCommandOutput(context.Background(), WaitRequest{
+		SessionID: "session-1",
+		ID:        started.ID,
+		AfterSeq:  max(0, first.NextSeq-1),
+		Timeout:   50 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("WaitCommandOutput returned error: %v", err)
+	}
+	if len(waited.Chunks) != 0 || waited.Session.Status != SessionRunning {
+		t.Fatalf("waited = %#v, want timeout snapshot with no new chunks and running status", waited)
+	}
+}
+
+func TestOSSessionManagerWaitCommandOutputFallbackToTranscriptStore(t *testing.T) {
+	store := NewMemoryCommandTranscriptStore()
+	session := CommandSession{
+		ID:        "persisted-running",
+		SessionID: "session-1",
+		Status:    SessionRunning,
+		StartedAt: time.Now().UTC(),
+		NextSeq:   2,
+		Argv:      []string{"npm", "run", "watch"},
+	}
+	if err := store.SaveCommandSession(context.Background(), session); err != nil {
+		t.Fatalf("SaveCommandSession returned error: %v", err)
+	}
+	if err := store.AppendCommandOutput(context.Background(), session.ID, []OutputChunk{{
+		Seq:    1,
+		Stream: "stdout",
+		Text:   "persisted\n",
+		Time:   time.Now().UTC(),
+	}}); err != nil {
+		t.Fatalf("AppendCommandOutput returned error: %v", err)
+	}
+	manager, err := NewOSSessionManager(t.TempDir(), WithOSSessionManagerTranscriptStore(store))
+	if err != nil {
+		t.Fatalf("NewOSSessionManager returned error: %v", err)
+	}
+	waited, err := manager.WaitCommandOutput(context.Background(), WaitRequest{
+		SessionID: "session-1",
+		ID:        session.ID,
+		AfterSeq:  0,
+		Timeout:   time.Second,
+	})
+	if err != nil {
+		t.Fatalf("WaitCommandOutput returned error: %v", err)
+	}
+	if len(waited.Chunks) != 1 || waited.Chunks[0].Text != "persisted\n" {
+		t.Fatalf("waited chunks = %#v, want transcript store output", waited.Chunks)
+	}
+}
+
+func TestOSSessionManagerWaitCommandOutputUnknownWithoutStore(t *testing.T) {
+	manager, err := NewOSSessionManager(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewOSSessionManager returned error: %v", err)
+	}
+	_, err = manager.WaitCommandOutput(context.Background(), WaitRequest{
+		SessionID: "session-1",
+		ID:        "missing",
+		Timeout:   10 * time.Millisecond,
+	})
+	if !errors.Is(err, ErrCommandSessionUnknown) {
+		t.Fatalf("WaitCommandOutput error = %v, want ErrCommandSessionUnknown", err)
+	}
+}
+
+func TestOSSessionManagerWaitCommandOutputCanceledContext(t *testing.T) {
+	manager, err := NewOSSessionManager(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewOSSessionManager returned error: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = manager.WaitCommandOutput(ctx, WaitRequest{ID: "cmd-1"})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("WaitCommandOutput error = %v, want context canceled", err)
+	}
+}
+
 func TestOSSessionManagerClassifiesStateErrors(t *testing.T) {
 	manager, err := NewOSSessionManager(t.TempDir())
 	if err != nil {

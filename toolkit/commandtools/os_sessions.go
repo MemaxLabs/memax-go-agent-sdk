@@ -474,6 +474,37 @@ func (m *OSSessionManager) ReadCommandOutput(ctx context.Context, req ReadReques
 	return m.transcriptStore.ReadCommandOutput(ctx, req)
 }
 
+func (m *OSSessionManager) WaitCommandOutput(ctx context.Context, req WaitRequest) (ReadResult, error) {
+	if err := ctx.Err(); err != nil {
+		return ReadResult{}, err
+	}
+	if m == nil {
+		return ReadResult{}, fmt.Errorf("commandtools: nil OSSessionManager")
+	}
+	if req.Timeout < 0 {
+		return ReadResult{}, fmt.Errorf("commandtools: timeout must be non-negative")
+	}
+	state, err := m.lookupSession(req.SessionID, req.ID)
+	if err == nil {
+		if err := state.waitForUpdate(ctx, req.AfterSeq, req.Timeout); err != nil {
+			return ReadResult{}, err
+		}
+		return state.read(req.AfterSeq, req.MaxChunks, req.MaxBytes), nil
+	}
+	if !errors.Is(err, ErrCommandSessionUnknown) || m.transcriptStore == nil {
+		return ReadResult{}, err
+	}
+	return m.transcriptStore.ReadCommandOutput(ctx, ReadRequest{
+		ID:              req.ID,
+		SessionID:       req.SessionID,
+		ParentSessionID: req.ParentSessionID,
+		Identity:        req.Identity,
+		AfterSeq:        req.AfterSeq,
+		MaxChunks:       req.MaxChunks,
+		MaxBytes:        req.MaxBytes,
+	})
+}
+
 func (m *OSSessionManager) WriteCommandInput(ctx context.Context, req WriteRequest) (WriteResult, error) {
 	if err := ctx.Err(); err != nil {
 		return WriteResult{}, err
