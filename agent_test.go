@@ -716,6 +716,75 @@ func TestQueryEmitsVerificationEventsAndMetrics(t *testing.T) {
 	}
 }
 
+func TestQueryEmitsReadCommandOutputEventAndMetric(t *testing.T) {
+	manager := commandtools.NewScriptedSessionManager(commandtools.ScriptedCommand{
+		ID:  "watch-1",
+		PID: 5152,
+		Pages: []commandtools.ScriptedOutputPage{{
+			Chunks: []commandtools.OutputChunk{{
+				Seq:    1,
+				Stream: "stdout",
+				Text:   "watch: ok\n",
+			}},
+			Running:  false,
+			ExitCode: intPtr(0),
+		}},
+	})
+	fake := &fakeModel{turns: [][]model.StreamEvent{
+		{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "start-1",
+				Name:  commandtools.StartToolName,
+				Input: json.RawMessage(`{"id":"watch-1","command":["npm","run","test:watch"],"purpose":"start watch mode"}`),
+			},
+		}},
+		{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "read-1",
+				Name:  commandtools.ReadOutputToolName,
+				Input: json.RawMessage(`{"id":"watch-1"}`),
+			},
+		}},
+		{{Kind: model.StreamText, Text: "watch completed"}},
+	}}
+	meter := &attributeRecordingMeter{}
+	stream, err := Query(context.Background(), "start and read watch output", Options{
+		Model: fake,
+		Tools: tool.NewRegistry(
+			commandtools.NewStartTool(manager),
+			commandtools.NewReadOutputTool(manager),
+		),
+		Meter: meter,
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+
+	var events []Event
+	for event := range stream {
+		if event.Kind == EventError {
+			t.Fatalf("unexpected error event: %v", event.Err)
+		}
+		events = append(events, event)
+	}
+
+	output := findCommandEvent(events, EventCommandOutput)
+	if output == nil {
+		t.Fatalf("command output event missing from %#v", events)
+	}
+	if output.Operation != "read" {
+		t.Fatalf("command output event operation = %q, want read", output.Operation)
+	}
+	if output.OutputChunks != 1 || output.NextSeq != 2 {
+		t.Fatalf("command output event = %#v, want one chunk and next_seq=2", output)
+	}
+	if !meter.hasAddWithAttribute("memax.command.output", "memax.command.operation", "read") {
+		t.Fatalf("meter adds = %#v, want memax.command.output with memax.command.operation=read", meter.snapshotAdds())
+	}
+}
+
 func TestQueryEmitsWaitCommandOutputEventAndMetric(t *testing.T) {
 	manager := commandtools.NewScriptedSessionManager(commandtools.ScriptedCommand{
 		ID:  "watch-1",
