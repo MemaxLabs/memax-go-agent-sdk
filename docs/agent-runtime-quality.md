@@ -449,7 +449,9 @@ and round-trips `thinking` and
 `redacted_thinking` content blocks as opaque provider artifacts. These controls
 and artifacts intentionally stay in provider packages or provider-neutral
 opaque envelopes instead of becoming provider-specific fields on
-`model.Request`.
+`model.Request`. The coding stack now adds a CLI-facing `fast`, `balanced`,
+and `deep` profile layer that maps to those provider options without making the
+runtime kernel understand provider JSON.
 
 **Gap:** Provider SDK conventions and edge cases must be exact. The reasoning
 artifact seam is still Foundation rather than Competitive: it preserves and
@@ -468,7 +470,8 @@ under reasoning continuity.
 - Provider-specific behavior stays outside core packages.
 - CLI-facing presets can map `fast`, `balanced`, and `deep` modes onto
   provider-specific model controls without leaking provider JSON into the
-  runtime kernel.
+  runtime kernel. Initial coding-stack mappings exist for OpenAI and
+  Anthropic.
 - Reasoning or thinking artifacts that providers require for best multi-turn
   performance are preserved or intentionally summarized through a documented
   transcript policy, rather than silently dropped. Initial opaque preservation

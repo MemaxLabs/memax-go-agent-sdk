@@ -91,7 +91,10 @@ embedding examples without introducing special-case logic into the kernel.
 Initial `stack/coding` and `stack/personal` packages now exist. `stack/coding`
 assembles workspace, command, verification, approval, task/planner, and policy
 defaults into a reusable coding runtime profile with named workflow presets
-(`safe_local`, `ci_repair`, `interactive_dev`). `stack/personal` assembles
+(`safe_local`, `ci_repair`, `interactive_dev`). It also provides CLI-facing
+model-depth profiles (`fast`, `balanced`, `deep`) that map to provider-specific
+OpenAI and Anthropic effort/thinking options outside the neutral runtime
+kernel. `stack/personal` assembles
 durable memory, note/document tools, message-thread tools, task/planner,
 approval, skill-disclosure, and scoped delegation defaults into
 personal-intelligence presets
@@ -243,9 +246,10 @@ gateway needs a nonstandard route.
 - `toolkit/agentpolicy`: optional hook-based policy presets for common agent
   safety workflows.
 
-### Planned Stack Packages
+### Stack Packages
 
-- `stack/coding`: batteries-included coding workflow assembly.
+- `stack/coding`: batteries-included coding workflow assembly with workflow
+  presets and provider-mapped model-depth profiles.
 - `stack/personal`: batteries-included personal intelligence workflow assembly.
 - `stack/cloudmanaged`: multi-tenant managed-agent assembly.
 

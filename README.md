@@ -119,6 +119,22 @@ cfg.Command.Runner = runner
 stack, err := coding.New(cfg)
 ```
 
+Coding-model depth stays explicit and provider-owned. The coding stack exposes
+stable `fast`, `balanced`, and `deep` profiles for CLI/product surfaces, then
+maps them to provider adapter options:
+
+```go
+modelOpts, err := coding.OpenAIModelOptions(coding.ModelProfileDeep)
+if err != nil {
+    panic(err)
+}
+client := openai.NewFromEnv("gpt-5.4", modelOpts...)
+opts := stack.WithModel(client)
+```
+
+Use `coding.AnthropicModelOptions` for Anthropic. Hosts can append provider
+options after the profile options when they need to override a concrete field.
+
 Preset intent is locked down by deterministic eval coverage. See
 [docs/coding-stack-presets.md](docs/coding-stack-presets.md) for the full
 preset contract, default policy posture, runnable examples, and the

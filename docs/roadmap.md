@@ -186,8 +186,10 @@ system prompt.
 - Initial `stack/coding` assembly now exists with workspace, command,
   verification, managed session, approval, checkpointing, and planner/task
   wiring, plus named workflow presets (`safe_local`, `ci_repair`,
-  `interactive_dev`). Initial deterministic eval coverage now exercises all
-  three presets end to end, with adversarial rollback recovery coverage for
+  `interactive_dev`) and provider-mapped model-depth profiles (`fast`,
+  `balanced`, `deep`) for OpenAI and Anthropic. Initial deterministic eval
+  coverage now exercises all three presets end to end, with adversarial
+  rollback recovery coverage for
   `safe_local`, approval-recovery coverage for `ci_repair`, wait-driven watcher
   repair and cursor-derived wait coverage for `interactive_dev`, and
   managed-session cleanup coverage for `interactive_dev`. Next steps are

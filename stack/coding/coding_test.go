@@ -11,6 +11,8 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/hook"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/planner"
+	"github.com/MemaxLabs/memax-go-agent-sdk/providers/anthropic"
+	"github.com/MemaxLabs/memax-go-agent-sdk/providers/openai"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/agentpolicy"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/approvaltools"
@@ -546,6 +548,108 @@ func TestWithModel(t *testing.T) {
 	opts := stack.WithModel(client)
 	if opts.Model != client {
 		t.Fatal("WithModel() did not install provided client")
+	}
+}
+
+func TestModelProfiles(t *testing.T) {
+	t.Parallel()
+
+	profiles := ModelProfiles()
+	want := []ModelProfile{ModelProfileFast, ModelProfileBalanced, ModelProfileDeep}
+	if fmt.Sprint(profiles) != fmt.Sprint(want) {
+		t.Fatalf("ModelProfiles() = %v, want %v", profiles, want)
+	}
+	profiles[0] = "mutated"
+	if got := ModelProfiles()[0]; got != ModelProfileFast {
+		t.Fatalf("ModelProfiles() returned shared backing array; first profile = %q", got)
+	}
+	for _, profile := range want {
+		if profile.Description() == "" {
+			t.Fatalf("%s Description() is empty", profile)
+		}
+	}
+	if got := ModelProfile("unknown").Description(); got != "" {
+		t.Fatalf("unknown Description() = %q, want empty", got)
+	}
+}
+
+func TestOpenAIModelOptions(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		profile      ModelProfile
+		effort       openai.ReasoningEffort
+		verbosity    openai.TextVerbosity
+		wantArtifact bool
+	}{
+		{profile: ModelProfileFast, effort: openai.ReasoningEffortLow, verbosity: openai.TextVerbosityLow, wantArtifact: true},
+		{profile: ModelProfileBalanced, effort: openai.ReasoningEffortMedium, verbosity: openai.TextVerbosityMedium, wantArtifact: true},
+		{profile: ModelProfileDeep, effort: openai.ReasoningEffortXHigh, verbosity: openai.TextVerbosityHigh, wantArtifact: true},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(string(tc.profile), func(t *testing.T) {
+			t.Parallel()
+
+			opts, err := OpenAIModelOptions(tc.profile)
+			if err != nil {
+				t.Fatalf("OpenAIModelOptions() error = %v", err)
+			}
+			client := openai.New("key", "model", opts...)
+			if client.Reasoning == nil || client.Reasoning.Effort != tc.effort {
+				t.Fatalf("Reasoning = %+v, want effort %q", client.Reasoning, tc.effort)
+			}
+			if client.Text == nil || client.Text.Verbosity != tc.verbosity {
+				t.Fatalf("Text = %+v, want verbosity %q", client.Text, tc.verbosity)
+			}
+			if got := contains(client.Include, "reasoning.encrypted_content"); got != tc.wantArtifact {
+				t.Fatalf("Include reasoning artifact = %v, want %v; include=%v", got, tc.wantArtifact, client.Include)
+			}
+		})
+	}
+}
+
+func TestAnthropicModelOptions(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		profile ModelProfile
+		effort  anthropic.Effort
+	}{
+		{profile: ModelProfileFast, effort: anthropic.EffortLow},
+		{profile: ModelProfileBalanced, effort: anthropic.EffortMedium},
+		{profile: ModelProfileDeep, effort: anthropic.EffortXHigh},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(string(tc.profile), func(t *testing.T) {
+			t.Parallel()
+
+			opts, err := AnthropicModelOptions(tc.profile)
+			if err != nil {
+				t.Fatalf("AnthropicModelOptions() error = %v", err)
+			}
+			client := anthropic.New("key", "model", opts...)
+			if client.Effort != tc.effort {
+				t.Fatalf("Effort = %q, want %q", client.Effort, tc.effort)
+			}
+			if client.Thinking == nil || client.Thinking.Type != anthropic.ThinkingAdaptive {
+				t.Fatalf("Thinking = %+v, want adaptive", client.Thinking)
+			}
+		})
+	}
+}
+
+func TestModelOptionsRejectUnknownProfile(t *testing.T) {
+	t.Parallel()
+
+	if _, err := OpenAIModelOptions("experimental"); err == nil || !strings.Contains(err.Error(), `unknown model profile "experimental"`) {
+		t.Fatalf("OpenAIModelOptions() error = %v, want unknown profile", err)
+	}
+	if _, err := AnthropicModelOptions("experimental"); err == nil || !strings.Contains(err.Error(), `unknown model profile "experimental"`) {
+		t.Fatalf("AnthropicModelOptions() error = %v, want unknown profile", err)
 	}
 }
 
