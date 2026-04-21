@@ -28,7 +28,7 @@ calendar, or OS permission model.
 ## Project Direction
 
 - Build a Go-native SDK, not a TypeScript port.
-- Use `.reference/ts-source-code` and `.reference/codex` as read-only architecture reference.
+- Use `.refs/ts-source-code` and `.refs/codex` as read-only architecture reference.
 - Do not copy upstream source into SDK implementation files.
 - Keep the runtime kernel provider-neutral, capability-neutral, and
   filesystem-neutral.
@@ -53,7 +53,7 @@ host-controlled.
 
 For every meaningful feature, behavior, or architecture change:
 
-- Inspect `.reference/ts-source-code` and `.reference/codex` first. Find how
+- Inspect `.refs/ts-source-code` and `.refs/codex` first. Find how
   comparable production agents handle the same capability, lifecycle, edge
   cases, prompt contract, and failure modes.
 - Do not copy code or implementation text from the references. Learn the design
@@ -104,7 +104,7 @@ When reviewing code changes (commits, PRs, or diffs), follow this process in ord
 Before forming any opinion, build a complete picture of what changed and why.
 
 - Check the author's reference comparison for comparable behavior in
-  `.reference/ts-source-code` and `.reference/codex`. For high-risk changes,
+  `.refs/ts-source-code` and `.refs/codex`. For high-risk changes,
   verify the comparison directly before deciding whether the Memax
   implementation should match, adapt, or intentionally diverge.
 - Read the full diff. Do not skip files. Read every changed line.
@@ -173,7 +173,7 @@ Structure the review output as follows.
 5. **Next steps** — What should be built next, based on the roadmap and what this change enables or reveals?
 
 6. **Reference comparison** — Verify the author's brief comparison of what
-   `.reference/ts-source-code` and `.reference/codex` do for the same feature.
+   `.refs/ts-source-code` and `.refs/codex` do for the same feature.
    The review should confirm whether this change matches, adapts, or
    intentionally diverges, and call out missing comparison work when the change
    affects core agent behavior.

@@ -32,7 +32,7 @@ Gather:
 - **What to focus on**: specific concerns (correctness, edge cases, concurrency, lifecycle, API contract, provider neutrality)
 - **What to ignore**: known issues, unrelated failures, pre-existing lint warnings, work-in-progress files
 - **What was verified**: commands already run locally, plus commands Claude may run if it wants to check its reasoning
-- **Reference comparison**: for non-trivial runtime changes, note what `.reference/ts-source-code` and `.reference/codex` do for the same capability and whether this change matches, adapts, or intentionally diverges
+- **Reference comparison**: for non-trivial runtime changes, note what `.refs/ts-source-code` and `.refs/codex` do for the same capability and whether this change matches, adapts, or intentionally diverges
 
 Structure the prompt as:
 
@@ -383,7 +383,7 @@ All other sections of this skill are project-agnostic. This section — and only
 ### Always-on (include on every review of this repo)
 
 - **Maturity claim is explicit** — the change declares Foundation, Competitive, or Leading in its description or code comments. Foundation is acceptable only when deliberately scoped and connected to a roadmap step. Reference: `AGENTS.md` § Market-Leading Agent Runtime Standard, `docs/agent-runtime-quality.md`.
-- **Reference comparison** — for core runtime changes (turn loop, compaction, context policy, tool lifecycle, permissions, hooks, session persistence, cancellation, prompt assembly), the author must have checked `.reference/ts-source-code` and `.reference/codex` for comparable behavior and noted match/adapt/diverge with a reason. No code copied from references.
+- **Reference comparison** — for core runtime changes (turn loop, compaction, context policy, tool lifecycle, permissions, hooks, session persistence, cancellation, prompt assembly), the author must have checked `.refs/ts-source-code` and `.refs/codex` for comparable behavior and noted match/adapt/diverge with a reason. No code copied from references.
 - **Backward compatibility** — existing code that sets no new fields behaves identically. New `Options` fields handled in `withDefaults()` and `Options.Merge()`. New features are opt-in. Reference: `AGENTS.md` § Backward compatibility.
 - **Format + vet + test** — `gofmt`, `go vet ./...`, and `go test ./...` must pass. Reference: `AGENTS.md` § Engineering Standards.
 
@@ -441,7 +441,7 @@ Context — what this change does and why:
 [1-3 paragraphs. Problem, root cause, approach. State the intended
  maturity (Foundation / Competitive / Leading) for this subsystem
  after the change. If this touches core runtime behavior, summarize
- how .reference/ts-source-code and .reference/codex handle the same
+ how .refs/ts-source-code and .refs/codex handle the same
  capability and whether this change matches, adapts, or diverges.]
 
 Files changed:
@@ -469,8 +469,8 @@ SDK invariants that apply to this diff:
 - Context cancellation checked at boundaries; goroutines have exit paths.
 - Backward compatibility — new fields opt-in, handled in withDefaults
   and Options.Merge, existing callers unaffected.
-- Reference comparison against .reference/ts-source-code and
-  .reference/codex is noted in the change description.
+- Reference comparison against .refs/ts-source-code and
+  .refs/codex is noted in the change description.
 
 Verification already run locally:
 - `gofmt -l .`

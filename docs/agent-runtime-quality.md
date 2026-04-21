@@ -15,8 +15,8 @@ cloud-agent stacks on the same foundation.
 
 Before changing any subsystem, compare against:
 
-- `.reference/ts-source-code`
-- `.reference/codex`
+- `.refs/ts-source-code`
+- `.refs/codex`
 
 Use those references to understand mature behavior, invariants, lifecycle
 boundaries, failure modes, prompts, evals, and ergonomics. Do not copy source

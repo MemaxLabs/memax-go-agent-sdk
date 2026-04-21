@@ -1,7 +1,7 @@
 .DS_Store
 
 # Local reference material. Do not vendor or publish upstream agent source.
-.reference/
+.refs/
 
 # Go build/test outputs.
 bin/
