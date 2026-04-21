@@ -2,6 +2,7 @@ package anthropic
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +16,7 @@ type stream struct {
 	body         io.ReadCloser
 	scan         *bufio.Scanner
 	blocks       map[int]*toolUseBlock
+	artifacts    map[int]*anthropicArtifactBlock
 	model        string
 	inputTokens  int
 	outputTokens int
@@ -26,10 +28,11 @@ func newStream(body io.ReadCloser, modelName string) *stream {
 	scan := bufio.NewScanner(body)
 	scan.Buffer(make([]byte, 64*1024), 16*1024*1024)
 	return &stream{
-		body:   body,
-		scan:   scan,
-		blocks: make(map[int]*toolUseBlock),
-		model:  modelName,
+		body:      body,
+		scan:      scan,
+		blocks:    make(map[int]*toolUseBlock),
+		artifacts: make(map[int]*anthropicArtifactBlock),
+		model:     modelName,
 	}
 }
 
@@ -141,8 +144,16 @@ func (s *stream) handleData(eventName string, data []byte) (model.StreamEvent, e
 		return s.usageEvent(anthropicUsage{OutputTokens: outputDelta}), nil
 	case "content_block_start":
 		block, ok, err := decodeToolUseBlock(envelope.ContentBlock)
-		if err != nil || !ok {
+		if err != nil {
 			return model.StreamEvent{}, err
+		}
+		if !ok {
+			artifact, ok, err := decodeAnthropicArtifactBlock(envelope.ContentBlock)
+			if err != nil || !ok {
+				return model.StreamEvent{}, err
+			}
+			s.artifacts[envelope.Index] = artifact
+			return model.StreamEvent{}, nil
 		}
 		s.blocks[envelope.Index] = block
 		return model.StreamEvent{
@@ -156,18 +167,23 @@ func (s *stream) handleData(eventName string, data []byte) (model.StreamEvent, e
 		return s.handleDelta(envelope.Index, envelope.Delta)
 	case "content_block_stop":
 		block := s.blocks[envelope.Index]
-		if block == nil {
+		if block != nil {
+			delete(s.blocks, envelope.Index)
+			return model.StreamEvent{
+				Kind: model.StreamToolUse,
+				ToolUse: model.ToolUse{
+					ID:    block.ID,
+					Name:  block.Name,
+					Input: block.input(),
+				},
+			}, nil
+		}
+		artifact := s.artifacts[envelope.Index]
+		if artifact == nil {
 			return model.StreamEvent{}, nil
 		}
-		delete(s.blocks, envelope.Index)
-		return model.StreamEvent{
-			Kind: model.StreamToolUse,
-			ToolUse: model.ToolUse{
-				ID:    block.ID,
-				Name:  block.Name,
-				Input: block.input(),
-			},
-		}, nil
+		delete(s.artifacts, envelope.Index)
+		return artifact.streamEvent()
 	case "message_stop":
 		return model.StreamEvent{}, model.ErrEndOfStream
 	case "error":
@@ -205,6 +221,8 @@ func (s *stream) handleDelta(index int, data json.RawMessage) (model.StreamEvent
 	var delta struct {
 		Type        string `json:"type"`
 		Text        string `json:"text"`
+		Thinking    string `json:"thinking"`
+		Signature   string `json:"signature"`
 		PartialJSON string `json:"partial_json"`
 	}
 	if err := json.Unmarshal(data, &delta); err != nil {
@@ -225,6 +243,17 @@ func (s *stream) handleDelta(index int, data json.RawMessage) (model.StreamEvent
 				},
 				ToolUseDelta: delta.PartialJSON,
 			}, nil
+		}
+	case "thinking_delta":
+		block := s.artifacts[index]
+		if block != nil {
+			thinking, _ := block.Fields["thinking"].(string)
+			block.Fields["thinking"] = thinking + delta.Thinking
+		}
+	case "signature_delta":
+		block := s.artifacts[index]
+		if block != nil {
+			block.Fields["signature"] = delta.Signature
 		}
 	}
 	return model.StreamEvent{}, nil
@@ -262,4 +291,43 @@ func decodeToolUseBlock(data json.RawMessage) (*toolUseBlock, bool, error) {
 		block.Input = append([]byte(nil), block.Input...)
 	}
 	return &block, true, nil
+}
+
+type anthropicArtifactBlock struct {
+	Type   string
+	Fields map[string]any
+}
+
+func decodeAnthropicArtifactBlock(data json.RawMessage) (*anthropicArtifactBlock, bool, error) {
+	if len(data) == 0 {
+		return nil, false, nil
+	}
+	var fields map[string]any
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if err := decoder.Decode(&fields); err != nil {
+		return nil, false, fmt.Errorf("anthropic: decode provider artifact: %w", err)
+	}
+	typ, _ := fields["type"].(string)
+	switch typ {
+	case "thinking", "redacted_thinking":
+		return &anthropicArtifactBlock{Type: typ, Fields: fields}, true, nil
+	default:
+		return nil, false, nil
+	}
+}
+
+func (b *anthropicArtifactBlock) streamEvent() (model.StreamEvent, error) {
+	data, err := json.Marshal(b.Fields)
+	if err != nil {
+		return model.StreamEvent{}, fmt.Errorf("anthropic: encode provider artifact: %w", err)
+	}
+	return model.StreamEvent{
+		Kind: model.StreamProviderArtifact,
+		ProviderArtifact: &model.ProviderArtifact{
+			Provider: "anthropic",
+			Type:     b.Type,
+			Data:     data,
+		},
+	}, nil
 }

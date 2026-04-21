@@ -341,6 +341,7 @@ client := openai.NewFromEnv("",
     openai.WithTimeout(60*time.Second),
     openai.WithMaxOutputTokens(4096),
     openai.WithReasoningEffort(openai.ReasoningEffortMedium),
+    openai.WithReasoningArtifacts(),
     openai.WithTextVerbosity(openai.TextVerbosityMedium),
 )
 events, err := memaxagent.Query(ctx, "Inspect the workspace.", memaxagent.Options{
@@ -359,7 +360,12 @@ endpoint directly; `Endpoint` takes precedence over `BaseURL`.
 `openai.WithHTTPClient` when you need a custom transport. Reasoning effort,
 text verbosity, and service tier stay as OpenAI-specific options on the
 adapter; the provider-neutral `model.Request` contract does not grow
-OpenAI-only fields.
+OpenAI-only fields. `openai.WithReasoningArtifacts` requests encrypted
+reasoning content from the Responses API and lets the SDK persist/replay those
+opaque reasoning items across stateless turns without exposing them as normal
+assistant text. Use it when the host owns transcript continuity, especially
+with `openai.WithStore(false)`; if you rely on OpenAI's stored response state,
+the encrypted artifact path is usually redundant.
 
 To use the Anthropic adapter:
 
@@ -387,7 +393,10 @@ endpoint directly; `Endpoint` takes precedence over `BaseURL`.
 with `anthropic.WithHTTPClient` when you need a custom transport. Anthropic
 effort and thinking controls stay on the Anthropic adapter; use adaptive
 thinking with effort for models that support adaptive thinking, or manual
-thinking budgets for older model families that still support them.
+thinking budgets for older model families that still support them. When
+Anthropic returns `thinking` or `redacted_thinking` blocks, the adapter
+persists and replays them as opaque provider artifacts so multi-turn tool-use
+continuity is not silently lost.
 
 Runnable live-provider examples are available behind explicit environment variables:
 

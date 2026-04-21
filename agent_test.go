@@ -267,6 +267,52 @@ func TestQueryAsyncReturnsBeforeStartupIOCompletes(t *testing.T) {
 	}
 }
 
+func TestQueryPersistsProviderArtifactsWithoutAssistantText(t *testing.T) {
+	store := session.NewMemoryStore()
+	sess, err := store.Create(context.Background())
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	artifact := &model.ProviderArtifact{
+		Provider: "openai",
+		Type:     "reasoning",
+		ID:       "rs_1",
+		Data:     json.RawMessage(`{"type":"reasoning","id":"rs_1","encrypted_content":"opaque"}`),
+	}
+	events, err := Query(context.Background(), "start", Options{
+		Model: &fakeModel{turns: [][]model.StreamEvent{{
+			{Kind: model.StreamProviderArtifact, ProviderArtifact: artifact},
+			{Kind: model.StreamText, Text: "done"},
+		}}},
+		Sessions:  store,
+		SessionID: sess.ID,
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+	result, err := Drain(events)
+	if err != nil {
+		t.Fatalf("Drain returned error: %v", err)
+	}
+	if result != "done" {
+		t.Fatalf("result = %q, want done", result)
+	}
+	messages, err := store.Messages(context.Background(), sess.ID)
+	if err != nil {
+		t.Fatalf("Messages returned error: %v", err)
+	}
+	assistant := messages[len(messages)-1]
+	if assistant.PlainText() != "done" {
+		t.Fatalf("PlainText() = %q, want done", assistant.PlainText())
+	}
+	if len(assistant.Content) != 2 || assistant.Content[0].ProviderArtifact == nil {
+		t.Fatalf("assistant content = %#v, want provider artifact followed by text", assistant.Content)
+	}
+	if got := assistant.Content[0].ProviderArtifact; got.Provider != "openai" || got.Type != "reasoning" || got.ID != "rs_1" {
+		t.Fatalf("provider artifact = %#v", got)
+	}
+}
+
 func TestQueryFeedsValidationErrorBackToModel(t *testing.T) {
 	registry := tool.NewRegistry(tool.Definition{
 		ToolSpec: model.ToolSpec{

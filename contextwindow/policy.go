@@ -337,6 +337,12 @@ func EstimateByRunes(msg model.Message) int {
 			total += utf8.RuneCountInString(block.ToolUse.Name)
 			total += len(block.ToolUse.Input)
 		}
+		if block.ProviderArtifact != nil {
+			total += utf8.RuneCountInString(block.ProviderArtifact.Provider)
+			total += utf8.RuneCountInString(block.ProviderArtifact.Type)
+			total += utf8.RuneCountInString(block.ProviderArtifact.ID)
+			total += len(block.ProviderArtifact.Data)
+		}
 	}
 	if msg.ToolResult != nil {
 		total += utf8.RuneCountInString(msg.ToolResult.Name)

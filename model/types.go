@@ -17,8 +17,9 @@ const (
 type ContentType string
 
 const (
-	ContentText    ContentType = "text"
-	ContentToolUse ContentType = "tool_use"
+	ContentText             ContentType = "text"
+	ContentToolUse          ContentType = "tool_use"
+	ContentProviderArtifact ContentType = "provider_artifact"
 )
 
 type Message struct {
@@ -33,6 +34,9 @@ type Message struct {
 	Metadata map[string]any `json:"metadata,omitempty"`
 }
 
+// PlainText concatenates text content only. Provider artifacts are
+// intentionally excluded because they are opaque transcript state, not model
+// text for prompts, summaries, or logs.
 func (m Message) PlainText() string {
 	var b strings.Builder
 	for _, block := range m.Content {
@@ -44,9 +48,21 @@ func (m Message) PlainText() string {
 }
 
 type ContentBlock struct {
-	Type    ContentType `json:"type"`
-	Text    string      `json:"text,omitempty"`
-	ToolUse *ToolUse    `json:"tool_use,omitempty"`
+	Type             ContentType       `json:"type"`
+	Text             string            `json:"text,omitempty"`
+	ToolUse          *ToolUse          `json:"tool_use,omitempty"`
+	ProviderArtifact *ProviderArtifact `json:"provider_artifact,omitempty"`
+}
+
+// ProviderArtifact carries opaque provider-native transcript state that must
+// round-trip across turns but must not be exposed as normal assistant text.
+// Provider adapters may replay artifacts for their own provider and must ignore
+// artifacts produced by other providers.
+type ProviderArtifact struct {
+	Provider string          `json:"provider"`
+	Type     string          `json:"type"`
+	ID       string          `json:"id,omitempty"`
+	Data     json.RawMessage `json:"data,omitempty"`
 }
 
 type ToolSpec struct {
@@ -298,6 +314,13 @@ func CloneContentBlocks(blocks []ContentBlock) []ContentBlock {
 			use := *block.ToolUse
 			use.Input = append([]byte(nil), block.ToolUse.Input...)
 			out[i].ToolUse = &use
+		}
+		if block.ProviderArtifact != nil {
+			artifact := *block.ProviderArtifact
+			if len(block.ProviderArtifact.Data) > 0 {
+				artifact.Data = append(json.RawMessage(nil), block.ProviderArtifact.Data...)
+			}
+			out[i].ProviderArtifact = &artifact
 		}
 	}
 	return out

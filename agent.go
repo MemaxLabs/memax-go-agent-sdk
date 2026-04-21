@@ -2192,6 +2192,18 @@ func collectAssistant(
 					earlyResults[index] = results
 				}
 			}
+		case model.StreamProviderArtifact:
+			if event.ProviderArtifact == nil {
+				continue
+			}
+			artifact := *event.ProviderArtifact
+			if len(event.ProviderArtifact.Data) > 0 {
+				artifact.Data = append([]byte(nil), event.ProviderArtifact.Data...)
+			}
+			blocks = append(blocks, model.ContentBlock{
+				Type:             model.ContentProviderArtifact,
+				ProviderArtifact: &artifact,
+			})
 		case model.StreamUsage:
 			if event.Usage == nil {
 				continue

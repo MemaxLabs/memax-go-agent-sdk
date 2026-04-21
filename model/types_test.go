@@ -61,6 +61,13 @@ func TestCloneMessagesReturnsDeepCopy(t *testing.T) {
 		Content: []ContentBlock{{
 			Type:    ContentToolUse,
 			ToolUse: &ToolUse{ID: "tool-1", Name: "read", Input: []byte(`{"path":"README.md"}`)},
+		}, {
+			Type: ContentProviderArtifact,
+			ProviderArtifact: &ProviderArtifact{
+				Provider: "openai",
+				Type:     "reasoning",
+				Data:     json.RawMessage(`{"type":"reasoning","encrypted_content":"secret"}`),
+			},
 		}},
 		Metadata: map[string]any{"context_summary": true},
 		ToolResult: &ToolResult{
@@ -73,11 +80,15 @@ func TestCloneMessagesReturnsDeepCopy(t *testing.T) {
 
 	got := CloneMessages(messages)
 	got[0].Content[0].ToolUse.Name = "mutated"
+	got[0].Content[1].ProviderArtifact.Data[0] = '['
 	got[0].Metadata["context_summary"] = false
 	got[0].ToolResult.Metadata["stored_result_id"] = "mutated"
 
 	if messages[0].Content[0].ToolUse.Name != "read" {
 		t.Fatalf("tool use mutated: %#v", messages[0].Content[0].ToolUse)
+	}
+	if string(messages[0].Content[1].ProviderArtifact.Data) != `{"type":"reasoning","encrypted_content":"secret"}` {
+		t.Fatalf("provider artifact mutated: %s", messages[0].Content[1].ProviderArtifact.Data)
 	}
 	if messages[0].Metadata["context_summary"] != true {
 		t.Fatalf("metadata mutated: %#v", messages[0].Metadata)

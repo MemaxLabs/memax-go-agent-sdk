@@ -113,9 +113,18 @@ func TestEstimateByRunesIncludesToolPayloads(t *testing.T) {
 		Content: []model.ContentBlock{
 			{Type: model.ContentText, Text: "é"},
 			{Type: model.ContentToolUse, ToolUse: &model.ToolUse{Name: "read", Input: []byte(`{"path":"x"}`)}},
+			{
+				Type: model.ContentProviderArtifact,
+				ProviderArtifact: &model.ProviderArtifact{
+					Provider: "openai",
+					Type:     "reasoning",
+					ID:       "rs_1",
+					Data:     []byte(`{"encrypted_content":"opaque"}`),
+				},
+			},
 		},
 	}
-	if got, want := EstimateByRunes(msg), 17; got != want {
+	if got, want := EstimateByRunes(msg), 66; got != want {
 		t.Fatalf("EstimateByRunes = %d, want %d", got, want)
 	}
 }

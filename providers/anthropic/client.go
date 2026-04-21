@@ -428,9 +428,25 @@ func mapAssistantBlocks(msg model.Message) []contentBlock {
 					"input": rawInputObject(block.ToolUse.Input),
 				})
 			}
+		case model.ContentProviderArtifact:
+			if artifactBlock, ok := providerArtifactBlock(block, "anthropic"); ok {
+				blocks = append(blocks, artifactBlock)
+			}
 		}
 	}
 	return blocks
+}
+
+func providerArtifactBlock(block model.ContentBlock, provider string) (contentBlock, bool) {
+	artifact := block.ProviderArtifact
+	if block.Type != model.ContentProviderArtifact || artifact == nil || artifact.Provider != provider || len(artifact.Data) == 0 {
+		return nil, false
+	}
+	var out contentBlock
+	if err := json.Unmarshal(artifact.Data, &out); err != nil || out["type"] == nil {
+		return nil, false
+	}
+	return out, true
 }
 
 func rawInputObject(input json.RawMessage) any {

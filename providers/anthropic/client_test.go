@@ -137,6 +137,68 @@ data: {"type":"message_stop"}
 	}
 }
 
+func TestClientStreamsThinkingArtifact(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(`event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":"","cache_control":{"type":"ephemeral"}}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"checked constraints"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig_old"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig_1"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":0}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"done"}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+`))
+	}))
+	defer server.Close()
+
+	stream, err := (&Client{APIKey: "test-key", Model: "test-model", Endpoint: server.URL}).Stream(context.Background(), model.Request{})
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	first, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("Recv artifact returned error: %v", err)
+	}
+	if first.Kind != model.StreamProviderArtifact || first.ProviderArtifact == nil {
+		t.Fatalf("first event = %#v, want provider artifact", first)
+	}
+	if first.ProviderArtifact.Provider != "anthropic" || first.ProviderArtifact.Type != "thinking" {
+		t.Fatalf("artifact = %#v", first.ProviderArtifact)
+	}
+	if !strings.Contains(string(first.ProviderArtifact.Data), `"thinking":"checked constraints"`) ||
+		!strings.Contains(string(first.ProviderArtifact.Data), `"signature":"sig_1"`) ||
+		!strings.Contains(string(first.ProviderArtifact.Data), `"cache_control":{"type":"ephemeral"}`) {
+		t.Fatalf("artifact data = %s", first.ProviderArtifact.Data)
+	}
+	if strings.Contains(string(first.ProviderArtifact.Data), "sig_oldsig_1") {
+		t.Fatalf("artifact signature delta was appended instead of replaced: %s", first.ProviderArtifact.Data)
+	}
+
+	second, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("Recv text returned error: %v", err)
+	}
+	if second.Kind != model.StreamText || second.Text != "done" {
+		t.Fatalf("second event = %#v, want text done", second)
+	}
+}
+
 func TestClientStreamsUsage(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -466,6 +528,39 @@ func TestClientMapsToolResultsToToolResultBlocks(t *testing.T) {
 	}
 	if body.Messages[1].Role != "user" || body.Messages[1].Content[0]["type"] != "tool_result" {
 		t.Fatalf("tool result message = %#v", body.Messages[1])
+	}
+}
+
+func TestClientReplaysAnthropicProviderArtifactsOnly(t *testing.T) {
+	body := (&Client{Model: "test"}).requestBody(model.Request{
+		Messages: []model.Message{{
+			Role: model.RoleAssistant,
+			Content: []model.ContentBlock{
+				{
+					Type: model.ContentProviderArtifact,
+					ProviderArtifact: &model.ProviderArtifact{
+						Provider: "anthropic",
+						Type:     "thinking",
+						Data:     json.RawMessage(`{"type":"thinking","thinking":"","signature":"sig_1"}`),
+					},
+				},
+				{
+					Type: model.ContentProviderArtifact,
+					ProviderArtifact: &model.ProviderArtifact{
+						Provider: "openai",
+						Type:     "reasoning",
+						Data:     json.RawMessage(`{"type":"reasoning","encrypted_content":"opaque"}`),
+					},
+				},
+			},
+		}},
+	})
+
+	if len(body.Messages) != 1 || len(body.Messages[0].Content) != 1 {
+		t.Fatalf("messages = %#v, want one Anthropic artifact block", body.Messages)
+	}
+	if body.Messages[0].Content[0]["type"] != "thinking" || body.Messages[0].Content[0]["signature"] != "sig_1" {
+		t.Fatalf("content block = %#v, want thinking artifact", body.Messages[0].Content[0])
 	}
 }
 

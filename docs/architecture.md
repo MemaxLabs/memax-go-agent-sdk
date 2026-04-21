@@ -212,8 +212,8 @@ remote-execution backends remain follow-on work.
 
 ### Capability Adapter Packages
 
-- `providers/openai`: optional Responses API adapter for hosted model streaming and function calls. Supports constructor options, default hosted endpoints, OpenAI-style `OPENAI_BASE_URL` API-version bases such as `/v1`, explicit full-endpoint overrides, and OpenAI-specific model controls such as reasoning effort, text verbosity, and service tier.
-- `providers/anthropic`: optional Messages API adapter for hosted model streaming and tool-use blocks. Supports constructor options, default hosted endpoints, Anthropic-style `ANTHROPIC_BASE_URL` service roots without `/v1`, explicit full-endpoint overrides, and Anthropic-specific model controls such as output effort and adaptive or manual thinking configuration.
+- `providers/openai`: optional Responses API adapter for hosted model streaming and function calls. Supports constructor options, default hosted endpoints, OpenAI-style `OPENAI_BASE_URL` API-version bases such as `/v1`, explicit full-endpoint overrides, OpenAI-specific model controls such as reasoning effort, text verbosity, and service tier, and opaque encrypted reasoning-artifact round-tripping for stateless multi-turn continuity.
+- `providers/anthropic`: optional Messages API adapter for hosted model streaming and tool-use blocks. Supports constructor options, default hosted endpoints, Anthropic-style `ANTHROPIC_BASE_URL` service roots without `/v1`, explicit full-endpoint overrides, Anthropic-specific model controls such as output effort and adaptive or manual thinking configuration, and opaque thinking/redacted-thinking block round-tripping.
 
 Provider base URL semantics intentionally follow each provider ecosystem rather
 than a single SDK-wide rule: OpenAI `BaseURL` is the API-version base and
@@ -266,7 +266,10 @@ The target loop is:
 2. Normalize user input into session messages.
 3. Select active tool specs, build system prompt, user context, active skills, and model request.
 4. Stream model events to the caller.
-5. Collect assistant text and tool-use blocks. Provider adapters may emit
+5. Collect assistant text, provider artifacts, and tool-use blocks. Provider
+   artifacts are opaque transcript state such as encrypted reasoning or signed
+   thinking blocks; they persist for provider replay but are not assistant text.
+   Provider adapters may emit
    tool-use lifecycle events before the complete call; only the complete
    `tool_use` event is executable.
 6. Validate each tool input.

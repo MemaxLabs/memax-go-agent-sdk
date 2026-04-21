@@ -12,23 +12,25 @@ import (
 )
 
 type stream struct {
-	body         io.ReadCloser
-	scan         *bufio.Scanner
-	calls        map[int]*functionCall
-	model        string
-	pendingEvent string
-	pendingData  []string
-	pendingEOF   bool
+	body                     io.ReadCloser
+	scan                     *bufio.Scanner
+	calls                    map[int]*functionCall
+	model                    string
+	captureReasoningArtifact bool
+	pendingEvent             string
+	pendingData              []string
+	pendingEOF               bool
 }
 
-func newStream(body io.ReadCloser, modelName string) *stream {
+func newStream(body io.ReadCloser, modelName string, captureReasoningArtifact bool) *stream {
 	scan := bufio.NewScanner(body)
 	scan.Buffer(make([]byte, 64*1024), 16*1024*1024)
 	return &stream{
-		body:  body,
-		scan:  scan,
-		calls: make(map[int]*functionCall),
-		model: modelName,
+		body:                     body,
+		scan:                     scan,
+		calls:                    make(map[int]*functionCall),
+		model:                    modelName,
+		captureReasoningArtifact: captureReasoningArtifact,
 	}
 }
 
@@ -156,8 +158,18 @@ func (s *stream) handleData(eventName string, data []byte) (model.StreamEvent, e
 		}
 	case "response.output_item.done":
 		call, ok, err := decodeFunctionCall(envelope.Item)
-		if err != nil || !ok {
+		if err != nil {
 			return model.StreamEvent{}, err
+		}
+		if !ok {
+			if !s.captureReasoningArtifact {
+				return model.StreamEvent{}, nil
+			}
+			artifact, ok, err := decodeProviderArtifact(envelope.Item)
+			if err != nil || !ok {
+				return model.StreamEvent{}, err
+			}
+			return model.StreamEvent{Kind: model.StreamProviderArtifact, ProviderArtifact: artifact}, nil
 		}
 		if call.Arguments == "" && s.calls[envelope.OutputIndex] != nil {
 			call.Arguments = s.calls[envelope.OutputIndex].Arguments
@@ -227,6 +239,30 @@ func decodeFunctionCall(data json.RawMessage) (*functionCall, bool, error) {
 		return nil, false, nil
 	}
 	return &call, true, nil
+}
+
+func decodeProviderArtifact(data json.RawMessage) (*model.ProviderArtifact, bool, error) {
+	if len(data) == 0 {
+		return nil, false, nil
+	}
+	var item struct {
+		Type string `json:"type"`
+		ID   string `json:"id"`
+	}
+	if err := json.Unmarshal(data, &item); err != nil {
+		return nil, false, fmt.Errorf("openai: decode provider artifact: %w", err)
+	}
+	switch item.Type {
+	case "reasoning":
+		return &model.ProviderArtifact{
+			Provider: "openai",
+			Type:     item.Type,
+			ID:       item.ID,
+			Data:     append(json.RawMessage(nil), data...),
+		}, true, nil
+	default:
+		return nil, false, nil
+	}
 }
 
 func firstNonEmpty(values ...string) string {

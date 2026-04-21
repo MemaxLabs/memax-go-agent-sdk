@@ -38,6 +38,7 @@ type Client struct {
 	Reasoning       *ReasoningConfig
 	Text            *TextConfig
 	ServiceTier     ServiceTier
+	Include         []string
 }
 
 // ReasoningEffort controls OpenAI reasoning token spend for models that
@@ -171,9 +172,9 @@ func WithTopP(topP float64) Option {
 // and in compatibility with temperature/top_p, so hosts should choose values
 // that match the configured model.
 //
-// This option does not preserve provider-specific reasoning items or encrypted
-// reasoning content across turns; that transcript policy is a separate SDK
-// capability tracked in docs/agent-runtime-quality.md.
+// This option controls model behavior only. Pair it with
+// WithReasoningArtifacts when the host wants opaque encrypted reasoning state
+// preserved across stateless turns.
 func WithReasoning(reasoning ReasoningConfig) Option {
 	return func(c *Client) {
 		c.Reasoning = &reasoning
@@ -204,6 +205,26 @@ func WithServiceTier(tier ServiceTier) Option {
 	return func(c *Client) {
 		c.ServiceTier = tier
 	}
+}
+
+// WithReasoningArtifacts requests encrypted OpenAI reasoning items so the SDK
+// can persist and replay them in stateless multi-turn conversations. Stored
+// reasoning artifacts remain opaque provider transcript state and are not
+// exposed as normal assistant text. It is most useful with WithStore(false),
+// where the host, not OpenAI's response store, owns transcript continuity.
+func WithReasoningArtifacts() Option {
+	return func(c *Client) {
+		c.Include = appendInclude(c.Include, "reasoning.encrypted_content")
+	}
+}
+
+func includesReasoningArtifacts(include []string) bool {
+	for _, value := range include {
+		if value == "reasoning.encrypted_content" {
+			return true
+		}
+	}
+	return false
 }
 
 func applyOptions(client *Client, opts []Option) {
@@ -267,7 +288,7 @@ func (c *Client) Stream(ctx context.Context, req model.Request) (model.Stream, e
 	if cancel != nil {
 		responseBody = cancelReadCloser{ReadCloser: resp.Body, cancel: cancel}
 	}
-	return newStream(responseBody, c.Model), nil
+	return newStream(responseBody, c.Model, includesReasoningArtifacts(c.Include)), nil
 }
 
 type cancelReadCloser struct {
@@ -305,7 +326,17 @@ func (c *Client) requestBody(req model.Request) responsesRequest {
 		Reasoning:       c.Reasoning,
 		Text:            c.Text,
 		ServiceTier:     c.ServiceTier,
+		Include:         append([]string(nil), c.Include...),
 	}
+}
+
+func appendInclude(include []string, value string) []string {
+	for _, existing := range include {
+		if existing == value {
+			return include
+		}
+	}
+	return append(include, value)
 }
 
 func optionalInt(v int) *int {
@@ -342,6 +373,7 @@ type responsesRequest struct {
 	Reasoning       *ReasoningConfig `json:"reasoning,omitempty"`
 	Text            *TextConfig      `json:"text,omitempty"`
 	ServiceTier     ServiceTier      `json:"service_tier,omitempty"`
+	Include         []string         `json:"include,omitempty"`
 }
 
 type responsesItem map[string]any
@@ -379,24 +411,7 @@ func mapMessages(messages []model.Message) []responsesItem {
 				"content": msg.PlainText(),
 			})
 		case model.RoleAssistant:
-			text := msg.PlainText()
-			if text != "" {
-				items = append(items, responsesItem{
-					"role":    "assistant",
-					"content": text,
-				})
-			}
-			for _, block := range msg.Content {
-				if block.ToolUse == nil {
-					continue
-				}
-				items = append(items, responsesItem{
-					"type":      "function_call",
-					"call_id":   block.ToolUse.ID,
-					"name":      block.ToolUse.Name,
-					"arguments": string(block.ToolUse.Input),
-				})
-			}
+			items = appendAssistantItems(items, msg.Content)
 		case model.RoleTool:
 			if msg.ToolResult == nil {
 				continue
@@ -409,4 +424,64 @@ func mapMessages(messages []model.Message) []responsesItem {
 		}
 	}
 	return items
+}
+
+func appendAssistantItems(items []responsesItem, blocks []model.ContentBlock) []responsesItem {
+	var text strings.Builder
+	flushText := func() {
+		if text.Len() == 0 {
+			return
+		}
+		items = append(items, responsesItem{
+			"role":    "assistant",
+			"content": text.String(),
+		})
+		text.Reset()
+	}
+	for _, block := range blocks {
+		switch block.Type {
+		case model.ContentText:
+			text.WriteString(block.Text)
+		case model.ContentProviderArtifact:
+			if item, ok := providerArtifactItem(block, "openai"); ok {
+				flushText()
+				items = append(items, item)
+			}
+		case model.ContentToolUse:
+			if block.ToolUse == nil {
+				continue
+			}
+			flushText()
+			items = append(items, responsesItem{
+				"type":      "function_call",
+				"call_id":   block.ToolUse.ID,
+				"name":      block.ToolUse.Name,
+				"arguments": string(block.ToolUse.Input),
+			})
+		}
+	}
+	flushText()
+	return items
+}
+
+func providerArtifactItem(block model.ContentBlock, provider string) (responsesItem, bool) {
+	artifact := block.ProviderArtifact
+	if block.Type != model.ContentProviderArtifact || artifact == nil || artifact.Provider != provider || len(artifact.Data) == 0 {
+		return nil, false
+	}
+	var item responsesItem
+	if err := json.Unmarshal(artifact.Data, &item); err != nil || item["type"] == nil {
+		return nil, false
+	}
+	if item["type"] == "reasoning" {
+		sanitized := responsesItem{"type": "reasoning"}
+		if summary, ok := item["summary"]; ok {
+			sanitized["summary"] = summary
+		}
+		if encrypted, ok := item["encrypted_content"]; ok {
+			sanitized["encrypted_content"] = encrypted
+		}
+		return sanitized, true
+	}
+	return item, true
 }

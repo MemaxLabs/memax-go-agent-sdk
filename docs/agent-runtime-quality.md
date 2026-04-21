@@ -439,21 +439,24 @@ verify, ask the user, or stop.
 ### 7. Provider Fidelity and Compatibility
 
 **Current state:** OpenAI and Anthropic adapters exist with streaming, usage
-mapping, and provider-specific model-control options. OpenAI exposes
-Responses API reasoning effort, text verbosity, and service tier controls.
-Anthropic exposes Messages API output effort plus adaptive/manual thinking
-configuration. These controls intentionally stay in provider packages instead
-of becoming provider-specific fields on `model.Request`.
+mapping, provider-specific model-control options, and a Foundation transcript
+policy for provider reasoning artifacts. OpenAI exposes Responses API reasoning
+effort, text verbosity, service tier controls, and an opt-in
+`reasoning.encrypted_content` include path that persists/replays opaque
+reasoning items for host-owned stateless transcript continuity. Anthropic
+exposes Messages API output effort plus adaptive/manual thinking configuration,
+and round-trips `thinking` and
+`redacted_thinking` content blocks as opaque provider artifacts. These controls
+and artifacts intentionally stay in provider packages or provider-neutral
+opaque envelopes instead of becoming provider-specific fields on
+`model.Request`.
 
-**Gap:** Provider SDK conventions and edge cases must be exact.
-The next provider-fidelity gap is durable reasoning-item handling: OpenAI
-Responses reasoning items and Anthropic thinking blocks can improve multi-turn
-agent performance when preserved according to provider rules, but the current
-SDK only exposes request-side effort/thinking controls and does not yet model
-those provider-specific reasoning artifacts in the transcript. For OpenAI this
-means adding a transcript policy for reasoning items, including encrypted
-reasoning content when requested through the provider `include` mechanism, and
-replaying those items only according to OpenAI's conversation-state rules.
+**Gap:** Provider SDK conventions and edge cases must be exact. The reasoning
+artifact seam is still Foundation rather than Competitive: it preserves and
+replays provider-native artifacts, but it does not yet expose a richer
+provider-agnostic reasoning summary event model, context-pruning policy for
+old artifacts, or eval coverage proving improved multi-turn tool performance
+under reasoning continuity.
 
 **Target behavior:**
 
@@ -468,7 +471,9 @@ replaying those items only according to OpenAI's conversation-state rules.
   runtime kernel.
 - Reasoning or thinking artifacts that providers require for best multi-turn
   performance are preserved or intentionally summarized through a documented
-  transcript policy, rather than silently dropped.
+  transcript policy, rather than silently dropped. Initial opaque preservation
+  exists for OpenAI reasoning items and Anthropic thinking/redacted-thinking
+  blocks.
 
 **Eval coverage:**
 
@@ -477,6 +482,10 @@ replaying those items only according to OpenAI's conversation-state rules.
 - Tool use round trips match provider wire contracts.
 - Model reasoning/thinking controls serialize when configured and are omitted
   by default.
+- Provider reasoning/thinking artifacts are captured from provider streams,
+  persisted in assistant transcript state without becoming assistant text, and
+  replayed only to the provider that produced them. Initial unit coverage
+  exists.
 
 ### 8. Eval Suite Upgrade
 

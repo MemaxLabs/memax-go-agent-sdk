@@ -98,6 +98,13 @@ func cloneStreamEvents(events []model.StreamEvent) []model.StreamEvent {
 	for i, event := range events {
 		out[i] = event
 		out[i].ToolUse.Input = append([]byte(nil), event.ToolUse.Input...)
+		if event.ProviderArtifact != nil {
+			artifact := *event.ProviderArtifact
+			if len(event.ProviderArtifact.Data) > 0 {
+				artifact.Data = append([]byte(nil), event.ProviderArtifact.Data...)
+			}
+			out[i].ProviderArtifact = &artifact
+		}
 		if event.Usage != nil {
 			usage := *event.Usage
 			usage.Metadata = model.CloneMetadata(usage.Metadata)

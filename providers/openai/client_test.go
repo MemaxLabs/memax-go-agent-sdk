@@ -169,6 +169,76 @@ func TestClientParsesSSEEventAndDataPairs(t *testing.T) {
 	}
 }
 
+func TestClientStreamsReasoningArtifact(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(`data: {"type":"response.output_item.done","output_index":0,"item":{"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"checked constraints"}],"encrypted_content":"opaque"}}
+
+data: {"type":"response.output_text.delta","delta":"done"}
+
+data: {"type":"response.completed"}
+
+`))
+	}))
+	defer server.Close()
+
+	stream, err := New("test-key", "test-model", WithEndpoint(server.URL), WithReasoningArtifacts()).Stream(context.Background(), model.Request{})
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	first, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("Recv artifact returned error: %v", err)
+	}
+	if first.Kind != model.StreamProviderArtifact || first.ProviderArtifact == nil {
+		t.Fatalf("first event = %#v, want provider artifact", first)
+	}
+	if first.ProviderArtifact.Provider != "openai" || first.ProviderArtifact.Type != "reasoning" || first.ProviderArtifact.ID != "rs_1" {
+		t.Fatalf("artifact = %#v", first.ProviderArtifact)
+	}
+	if !strings.Contains(string(first.ProviderArtifact.Data), `"encrypted_content":"opaque"`) {
+		t.Fatalf("artifact data = %s", first.ProviderArtifact.Data)
+	}
+
+	second, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("Recv text returned error: %v", err)
+	}
+	if second.Kind != model.StreamText || second.Text != "done" {
+		t.Fatalf("second event = %#v, want text done", second)
+	}
+}
+
+func TestClientSkipsReasoningArtifactWithoutInclude(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(`data: {"type":"response.output_item.done","output_index":0,"item":{"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"checked constraints"}]}}
+
+data: {"type":"response.output_text.delta","delta":"done"}
+
+data: {"type":"response.completed"}
+
+`))
+	}))
+	defer server.Close()
+
+	stream, err := (&Client{APIKey: "test-key", Model: "test-model", Endpoint: server.URL}).Stream(context.Background(), model.Request{})
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	first, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("Recv returned error: %v", err)
+	}
+	if first.Kind != model.StreamText || first.Text != "done" {
+		t.Fatalf("first event = %#v, want text done", first)
+	}
+}
+
 func TestClientStreamsUsage(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -408,6 +478,7 @@ func TestClientRequestOptions(t *testing.T) {
 		Temperature:     &temperature,
 		TopP:            &topP,
 	}
+	WithReasoningArtifacts()(client)
 
 	body := client.requestBody(model.Request{})
 	if !body.Store {
@@ -421,6 +492,9 @@ func TestClientRequestOptions(t *testing.T) {
 	}
 	if body.TopP == nil || *body.TopP != topP {
 		t.Fatalf("TopP = %#v, want %v", body.TopP, topP)
+	}
+	if len(body.Include) != 1 || body.Include[0] != "reasoning.encrypted_content" {
+		t.Fatalf("Include = %#v, want reasoning.encrypted_content", body.Include)
 	}
 }
 
@@ -457,6 +531,64 @@ func TestClientMapsToolResultsToFunctionOutputs(t *testing.T) {
 	}
 	if body.Input[1]["type"] != "function_call_output" || body.Input[1]["output"] != "contents" {
 		t.Fatalf("function output item = %#v", body.Input[1])
+	}
+}
+
+func TestClientReplaysOpenAIProviderArtifactsOnly(t *testing.T) {
+	body := (&Client{Model: "test"}).requestBody(model.Request{
+		Messages: []model.Message{{
+			Role: model.RoleAssistant,
+			Content: []model.ContentBlock{
+				{
+					Type: model.ContentProviderArtifact,
+					ProviderArtifact: &model.ProviderArtifact{
+						Provider: "openai",
+						Type:     "reasoning",
+						ID:       "rs_1",
+						Data:     json.RawMessage(`{"type":"reasoning","id":"rs_1","encrypted_content":"opaque","status":"completed","content":[{"type":"reasoning_text","text":"raw chain"}]}`),
+					},
+				},
+				{Type: model.ContentText, Text: "after reasoning"},
+				{
+					Type: model.ContentProviderArtifact,
+					ProviderArtifact: &model.ProviderArtifact{
+						Provider: "anthropic",
+						Type:     "thinking",
+						Data:     json.RawMessage(`{"type":"thinking","signature":"sig"}`),
+					},
+				},
+				{
+					Type: model.ContentToolUse,
+					ToolUse: &model.ToolUse{
+						ID:    "call_1",
+						Name:  "read_file",
+						Input: json.RawMessage(`{"path":"README.md"}`),
+					},
+				},
+			},
+		}},
+	})
+
+	if len(body.Input) != 3 {
+		t.Fatalf("len(input) = %d, want 3", len(body.Input))
+	}
+	if body.Input[0]["type"] != "reasoning" || body.Input[0]["encrypted_content"] != "opaque" {
+		t.Fatalf("input item = %#v, want OpenAI reasoning artifact", body.Input[0])
+	}
+	if _, ok := body.Input[0]["id"]; ok {
+		t.Fatalf("reasoning replay serialized id: %#v", body.Input[0])
+	}
+	if _, ok := body.Input[0]["content"]; ok {
+		t.Fatalf("reasoning replay serialized raw content: %#v", body.Input[0])
+	}
+	if _, ok := body.Input[0]["status"]; ok {
+		t.Fatalf("reasoning replay serialized non-allowlisted field: %#v", body.Input[0])
+	}
+	if body.Input[1]["role"] != "assistant" || body.Input[1]["content"] != "after reasoning" {
+		t.Fatalf("assistant text item = %#v", body.Input[1])
+	}
+	if body.Input[2]["type"] != "function_call" || body.Input[2]["call_id"] != "call_1" {
+		t.Fatalf("function call item = %#v", body.Input[2])
 	}
 }
 

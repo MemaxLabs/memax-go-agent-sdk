@@ -48,15 +48,20 @@ const (
 	StreamToolUseDelta StreamEventKind = "tool_use_delta"
 	// StreamToolUse reports the complete executable tool call.
 	StreamToolUse StreamEventKind = "tool_use"
-	StreamUsage   StreamEventKind = "usage"
+	// StreamProviderArtifact reports opaque provider-native transcript state,
+	// such as encrypted reasoning or signed thinking blocks, that should be
+	// persisted and replayed but not surfaced as assistant text.
+	StreamProviderArtifact StreamEventKind = "provider_artifact"
+	StreamUsage            StreamEventKind = "usage"
 )
 
 type StreamEvent struct {
-	Kind         StreamEventKind
-	Text         string
-	ToolUse      ToolUse
-	ToolUseDelta string
-	Usage        *Usage
+	Kind             StreamEventKind
+	Text             string
+	ToolUse          ToolUse
+	ToolUseDelta     string
+	ProviderArtifact *ProviderArtifact
+	Usage            *Usage
 }
 
 // Usage is provider-neutral model token accounting for one model stream event
