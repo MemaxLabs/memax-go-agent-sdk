@@ -294,8 +294,12 @@ patches, snapshots, restore, reviewable mutations, and sandbox boundaries.
   host-owned `CommandTranscriptStore` seam with both a reference in-memory
   store and a durable SQLite adapter, so command-session snapshots and ordered
   output chunks can survive manager restarts without coupling tool state to the
-  kernel conversation store. A reusable `commandtools/sessiontest` conformance
-  harness now verifies the public lifecycle contract across session adapters.
+  kernel conversation store. `OSSessionManager` can stream live sessions into
+  that seam and recover read/list inspection from persisted transcripts after a
+  manager restart, with persisted snapshots representing the last durable
+  state rather than post-restart process liveness. A reusable
+  `commandtools/sessiontest` conformance harness now verifies the public
+  lifecycle contract across session adapters.
 - More isolated execution can stay outside the core loop through adapter seams
   that let hosts wire related sandbox-backed workspace, one-shot command, and
   managed command-session toolkits together.

@@ -418,6 +418,13 @@ does not hide background shell state inside the conversation store.
 seam, following the same SQLite transaction discipline used elsewhere in the
 SDK so transcript inspection survives manager restarts without changing the
 live command-session tool contract.
+`toolkit/commandtools.OSSessionManager` can now attach one of these stores as
+an optional durable backend, streaming snapshots and ordered output chunks into
+the store while a process runs and falling back to persisted transcripts for
+read/list inspection after manager restart. Those persisted records reflect the
+last durable session snapshot, not proof that a process is still live after a
+manager restart; hosts that need liveness must keep a live manager or apply
+their own stale-session sweep.
 The `sandbox` package complements these local adapters by adapting host-owned
 sandbox-backed command/session backends into the same commandtool interfaces
 plus hook cleanup, making remote or container-backed execution an adapter
