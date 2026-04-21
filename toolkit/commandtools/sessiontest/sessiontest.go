@@ -2,7 +2,8 @@
 // session adapters.
 //
 // The harness intentionally exercises only the public commandtools interfaces:
-// start, read, stop, list, and optional write, resize, and cleanup extensions.
+// start, read, stop, list, and optional wait, write, resize, and cleanup
+// extensions.
 // Sandbox, remote, or container-backed adapters can run the same contract tests
 // without depending on commandtools' local OS implementation.
 package sessiontest
@@ -304,6 +305,61 @@ func Run(t *testing.T, contract Contract) {
 		}
 	})
 
+	t.Run("wait-output", func(t *testing.T) {
+		c := contract.withDefaults()
+		manager := c.newManager(t, ScenarioNaturalExit)
+		waiter, ok := any(manager).(commandtools.Waiter)
+		if !ok {
+			t.Skip("manager does not implement commandtools.Waiter")
+		}
+		req := c.NaturalExitRequest(t)
+		req.SessionID = defaultString(req.SessionID, "contract-session-5")
+		started, err := manager.StartCommand(context.Background(), req)
+		if err != nil {
+			t.Fatalf("StartCommand returned error: %v", err)
+		}
+
+		first, err := waiter.WaitCommandOutput(context.Background(), commandtools.WaitRequest{
+			SessionID: req.SessionID,
+			ID:        started.ID,
+			Timeout:   c.WaitTimeout,
+		})
+		if err != nil {
+			t.Fatalf("WaitCommandOutput first returned error: %v", err)
+		}
+		assertMonotonicChunks(t, first.Chunks)
+
+		observed := joinChunks(first.Chunks)
+		if first.Session.Status == commandtools.SessionExited && strings.Contains(observed, c.DoneText) {
+			if first.Session.ExitCode == nil || *first.Session.ExitCode != 0 || first.Session.FinishedAt == nil {
+				t.Fatalf("first session = %#v, want clean exited terminal session", first.Session)
+			}
+			return
+		}
+
+		second, err := waiter.WaitCommandOutput(context.Background(), commandtools.WaitRequest{
+			SessionID: req.SessionID,
+			ID:        started.ID,
+			AfterSeq:  max(0, first.NextSeq-1),
+			Timeout:   c.WaitTimeout,
+		})
+		if err != nil {
+			t.Fatalf("WaitCommandOutput second returned error: %v", err)
+		}
+		assertMonotonicChunks(t, second.Chunks)
+		assertChunkBoundaryAdvances(t, first.Chunks, second.Chunks)
+		observed += joinChunks(second.Chunks)
+		if second.Session.Status != commandtools.SessionExited {
+			t.Fatalf("second session = %#v, want exited session after natural exit", second.Session)
+		}
+		if !strings.Contains(observed, c.ReadyText) || !strings.Contains(observed, c.DoneText) {
+			t.Fatalf("wait output = %q, want both ready and done markers", observed)
+		}
+		if second.Session.ExitCode == nil || *second.Session.ExitCode != 0 || second.Session.FinishedAt == nil {
+			t.Fatalf("second session = %#v, want clean exited terminal session", second.Session)
+		}
+	})
+
 	t.Run("write-input", func(t *testing.T) {
 		c := contract.withDefaults()
 		if c.InteractiveRequest == nil {
@@ -520,6 +576,18 @@ func assertMonotonicChunks(t testing.TB, chunks []commandtools.OutputChunk) {
 		if chunk.Seq <= prev {
 			t.Fatalf("chunks = %#v, want strictly increasing sequence numbers", chunks)
 		}
+	}
+}
+
+func assertChunkBoundaryAdvances(t testing.TB, prior []commandtools.OutputChunk, next []commandtools.OutputChunk) {
+	t.Helper()
+	if len(prior) == 0 || len(next) == 0 {
+		return
+	}
+	lastPrior := prior[len(prior)-1].Seq
+	firstNext := next[0].Seq
+	if firstNext <= lastPrior {
+		t.Fatalf("chunk boundary did not advance: prior=%#v next=%#v", prior, next)
 	}
 }
 
