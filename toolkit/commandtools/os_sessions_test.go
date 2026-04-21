@@ -486,8 +486,15 @@ func TestOSSessionManagerWaitCommandOutput(t *testing.T) {
 	if !strings.Contains(joinChunkText(waited.Chunks), "done\n") {
 		t.Fatalf("waited chunks = %#v, want done output", waited.Chunks)
 	}
-	if waited.Session.Status != SessionExited || waited.Session.ExitCode == nil || *waited.Session.ExitCode != 0 {
-		t.Fatalf("waited session = %#v, want exited zero status", waited.Session)
+	final := waitForOutput(t, manager, ReadRequest{
+		SessionID: "session-1",
+		ID:        started.ID,
+		AfterSeq:  max(0, waited.NextSeq-1),
+	}, func(result ReadResult) bool {
+		return result.Session.Status == SessionExited
+	})
+	if final.Session.ExitCode == nil || *final.Session.ExitCode != 0 {
+		t.Fatalf("final session = %#v, want exited zero status", final.Session)
 	}
 }
 
