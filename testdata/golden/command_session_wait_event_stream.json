@@ -52,6 +52,7 @@
     "command_status": "exited",
     "command_pid": 5152,
     "command_next_seq": 2,
+    "command_resume_after_seq": 1,
     "command_output_chunks": 1
   },
   {

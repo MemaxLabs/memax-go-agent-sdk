@@ -777,8 +777,8 @@ func TestQueryEmitsReadCommandOutputEventAndMetric(t *testing.T) {
 	if output.Operation != "read" {
 		t.Fatalf("command output event operation = %q, want read", output.Operation)
 	}
-	if output.OutputChunks != 1 || output.NextSeq != 2 {
-		t.Fatalf("command output event = %#v, want one chunk and next_seq=2", output)
+	if output.OutputChunks != 1 || output.NextSeq != 2 || output.ResumeAfterSeq != 1 {
+		t.Fatalf("command output event = %#v, want one chunk, next_seq=2, and resume_after_seq=1", output)
 	}
 	if !meter.hasAddWithAttribute("memax.command.output", "memax.command.operation", "read") {
 		t.Fatalf("meter adds = %#v, want memax.command.output with memax.command.operation=read", meter.snapshotAdds())
@@ -846,8 +846,8 @@ func TestQueryEmitsWaitCommandOutputEventAndMetric(t *testing.T) {
 	if output.Operation != "wait" {
 		t.Fatalf("command output event operation = %q, want wait", output.Operation)
 	}
-	if output.OutputChunks != 1 || output.NextSeq != 2 {
-		t.Fatalf("command output event = %#v, want one chunk and next_seq=2", output)
+	if output.OutputChunks != 1 || output.NextSeq != 2 || output.ResumeAfterSeq != 1 {
+		t.Fatalf("command output event = %#v, want one chunk, next_seq=2, and resume_after_seq=1", output)
 	}
 	if !meter.hasAddWithAttribute("memax.command.output", "memax.command.operation", "wait") {
 		t.Fatalf("meter adds = %#v, want memax.command.output with memax.command.operation=wait", meter.snapshotAdds())

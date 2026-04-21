@@ -110,6 +110,7 @@ const (
 	MetadataCommandFinishedAt         = model.MetadataCommandFinishedAt
 	MetadataCommandInputBytes         = model.MetadataCommandInputBytes
 	MetadataCommandNextSeq            = model.MetadataCommandNextSeq
+	MetadataCommandResumeAfterSeq     = model.MetadataCommandResumeAfterSeq
 	MetadataCommandOutputChunks       = model.MetadataCommandOutputChunks
 	MetadataCommandDroppedChunks      = model.MetadataCommandDroppedChunks
 	MetadataCommandDroppedBytes       = model.MetadataCommandDroppedBytes
@@ -970,6 +971,7 @@ func readResult(result ReadResult, afterSeq int) model.ToolResult {
 	metadata := sessionMetadata(result.Session)
 	metadata[MetadataCommandOperation] = "read"
 	metadata[MetadataCommandNextSeq] = result.NextSeq
+	metadata[MetadataCommandResumeAfterSeq] = resumeAfterSeq(result, afterSeq)
 	metadata[MetadataCommandOutputChunks] = len(result.Chunks)
 	return model.ToolResult{
 		Content:  formatSessionRead(result, afterSeq),
@@ -982,6 +984,7 @@ func writeResult(result WriteResult) model.ToolResult {
 	metadata[MetadataCommandOperation] = "write"
 	metadata[MetadataCommandInputBytes] = result.InputBytes
 	metadata[MetadataCommandNextSeq] = result.NextSeq
+	metadata[MetadataCommandResumeAfterSeq] = writeResumeAfterSeq(result)
 	metadata[MetadataCommandOutputChunks] = len(result.Chunks)
 	return model.ToolResult{
 		Content:  formatSessionWrite(result),
@@ -993,6 +996,7 @@ func waitResult(result ReadResult, afterSeq int) model.ToolResult {
 	metadata := sessionMetadata(result.Session)
 	metadata[MetadataCommandOperation] = "wait"
 	metadata[MetadataCommandNextSeq] = result.NextSeq
+	metadata[MetadataCommandResumeAfterSeq] = resumeAfterSeq(result, afterSeq)
 	metadata[MetadataCommandOutputChunks] = len(result.Chunks)
 	return model.ToolResult{
 		Content:  formatSessionRead(result, afterSeq),
@@ -1172,11 +1176,7 @@ func formatSessionWrite(result WriteResult) string {
 	}
 	fmt.Fprintf(&b, "\ninput_bytes: %d", result.InputBytes)
 	fmt.Fprintf(&b, "\nnext_seq: %d", result.NextSeq)
-	fmt.Fprintf(&b, "\nresume_after_seq: %d", resumeAfterSeq(ReadResult{
-		Session: result.Session,
-		Chunks:  result.Chunks,
-		NextSeq: result.NextSeq,
-	}, 0))
+	fmt.Fprintf(&b, "\nresume_after_seq: %d", writeResumeAfterSeq(result))
 	if result.Session.DroppedChunks > 0 {
 		fmt.Fprintf(&b, "\ndropped_chunks: %d", result.Session.DroppedChunks)
 	}
@@ -1188,6 +1188,14 @@ func formatSessionWrite(result WriteResult) string {
 		fmt.Fprintf(&b, "\n[%s #%d]\n%s", chunk.Stream, chunk.Seq, chunk.Text)
 	}
 	return b.String()
+}
+
+func writeResumeAfterSeq(result WriteResult) int {
+	return resumeAfterSeq(ReadResult{
+		Session: result.Session,
+		Chunks:  result.Chunks,
+		NextSeq: result.NextSeq,
+	}, 0)
 }
 
 func resumeAfterSeq(result ReadResult, afterSeq int) int {

@@ -389,7 +389,10 @@ state into the core loop. Read, write, and wait results include
 `resume_after_seq`, the prompt-visible value to pass back as `after_seq` when
 continuing a session without replaying already-seen output. Write results use
 the post-write output head as the resume cursor because writes do not accept a
-caller-supplied `after_seq`.
+caller-supplied `after_seq`. The same cursor is also carried in tool-result
+metadata as `command_resume_after_seq` for host observers and audit sinks that
+should not parse prompt text, and command observer events mirror it as
+`CommandEvent.ResumeAfterSeq`.
 `commandtools.SessionCleanupOptions`
 adapts a `Cleaner` into a `SessionEnded` hook so host-managed processes can be
 cleaned up when the parent agent session finishes. `commandtools.OSSessionManager`

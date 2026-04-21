@@ -244,7 +244,8 @@ type TenantEvent struct {
 // `run_command` uses Action "run" and populates process status fields.
 // Managed command sessions populate Action "start", "write", "read", "resize",
 // or "stop" plus CommandID, Status, PID, TTY, SignalsProcessTree, Cols, Rows,
-// NextSeq, OutputChunks, DroppedChunks, and DroppedBytes as appropriate.
+// NextSeq, ResumeAfterSeq, OutputChunks, DroppedChunks, and DroppedBytes as
+// appropriate.
 // "write" additionally sets InputBytes.
 // Command output text remains in the paired EventToolResult so
 // transcript-visible tool behavior stays explicit.
@@ -267,6 +268,7 @@ type CommandEvent struct {
 	StderrBytes        int
 	OutputTruncated    bool
 	NextSeq            int
+	ResumeAfterSeq     int
 	OutputChunks       int
 	DroppedChunks      int
 	DroppedBytes       int

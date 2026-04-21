@@ -235,6 +235,9 @@ const (
 	// MetadataCommandNextSeq carries the next output sequence number visible to
 	// a later read_command_output call.
 	MetadataCommandNextSeq = "command_next_seq"
+	// MetadataCommandResumeAfterSeq carries the sequence cursor callers should
+	// pass as after_seq when continuing a managed command session.
+	MetadataCommandResumeAfterSeq = "command_resume_after_seq"
 	// MetadataCommandOutputChunks carries the number of output chunks returned by
 	// a read_command_output result.
 	MetadataCommandOutputChunks = "command_output_chunks"

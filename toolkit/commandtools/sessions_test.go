@@ -496,6 +496,9 @@ func TestStartReadStopToolsReturnMetadata(t *testing.T) {
 	if started.Metadata[MetadataCommandOperation] != "start" || started.Metadata[MetadataCommandSessionID] != "dev-1" || started.Metadata[MetadataCommandTTY] != true || started.Metadata[MetadataCommandCols] != 120 || started.Metadata[MetadataCommandRows] != 40 {
 		t.Fatalf("started metadata = %#v, want command start metadata", started.Metadata)
 	}
+	if _, ok := started.Metadata[MetadataCommandResumeAfterSeq]; ok {
+		t.Fatalf("started metadata = %#v, should not carry resume cursor", started.Metadata)
+	}
 	if !strings.Contains(started.Content, "tty: true") || !strings.Contains(started.Content, "size: 120x40") {
 		t.Fatalf("start content = %q, want tty indicator", started.Content)
 	}
@@ -509,7 +512,7 @@ func TestStartReadStopToolsReturnMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read handler returned error: %v", err)
 	}
-	if read.Metadata[MetadataCommandOperation] != "read" || read.Metadata[MetadataCommandOutputChunks] != 1 {
+	if read.Metadata[MetadataCommandOperation] != "read" || read.Metadata[MetadataCommandOutputChunks] != 1 || read.Metadata[MetadataCommandResumeAfterSeq] != 1 {
 		t.Fatalf("read metadata = %#v, want command read metadata", read.Metadata)
 	}
 	if !strings.Contains(read.Content, "[pty #1]") || !strings.Contains(read.Content, "listening on :3000") ||
@@ -526,7 +529,7 @@ func TestStartReadStopToolsReturnMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("wait handler returned error: %v", err)
 	}
-	if waited.Metadata[MetadataCommandOperation] != "wait" || waited.Metadata[MetadataCommandOutputChunks] != 0 {
+	if waited.Metadata[MetadataCommandOperation] != "wait" || waited.Metadata[MetadataCommandOutputChunks] != 0 || waited.Metadata[MetadataCommandResumeAfterSeq] != 1 {
 		t.Fatalf("wait metadata = %#v, want command wait metadata", waited.Metadata)
 	}
 	if !strings.Contains(waited.Content, "no new output") || !strings.Contains(waited.Content, "resume_after_seq: 1") {
@@ -542,7 +545,7 @@ func TestStartReadStopToolsReturnMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("write handler returned error: %v", err)
 	}
-	if wrote.Metadata[MetadataCommandOperation] != "write" || wrote.Metadata[MetadataCommandInputBytes] != 5 || wrote.Metadata[MetadataCommandOutputChunks] != 1 || wrote.Metadata[MetadataCommandTTY] != true {
+	if wrote.Metadata[MetadataCommandOperation] != "write" || wrote.Metadata[MetadataCommandInputBytes] != 5 || wrote.Metadata[MetadataCommandOutputChunks] != 1 || wrote.Metadata[MetadataCommandResumeAfterSeq] != 2 || wrote.Metadata[MetadataCommandTTY] != true {
 		t.Fatalf("write metadata = %#v, want command write metadata", wrote.Metadata)
 	}
 	if !strings.Contains(wrote.Content, "[pty #2]") || !strings.Contains(wrote.Content, "pong") ||
@@ -562,6 +565,9 @@ func TestStartReadStopToolsReturnMetadata(t *testing.T) {
 	if resized.Metadata[MetadataCommandOperation] != "resize" || resized.Metadata[MetadataCommandCols] != 140 || resized.Metadata[MetadataCommandRows] != 50 {
 		t.Fatalf("resize metadata = %#v, want resize operation with geometry", resized.Metadata)
 	}
+	if _, ok := resized.Metadata[MetadataCommandResumeAfterSeq]; ok {
+		t.Fatalf("resize metadata = %#v, should not carry resume cursor", resized.Metadata)
+	}
 	if !strings.Contains(resized.Content, "size: 140x50") {
 		t.Fatalf("resize content = %q, want updated geometry", resized.Content)
 	}
@@ -577,6 +583,9 @@ func TestStartReadStopToolsReturnMetadata(t *testing.T) {
 	}
 	if stopped.Metadata[MetadataCommandOperation] != "stop" || stopped.Metadata[MetadataCommandTTY] != true || stopped.Metadata[MetadataCommandCols] != 140 || stopped.Metadata[MetadataCommandRows] != 50 {
 		t.Fatalf("stop metadata = %#v, want stop operation", stopped.Metadata)
+	}
+	if _, ok := stopped.Metadata[MetadataCommandResumeAfterSeq]; ok {
+		t.Fatalf("stop metadata = %#v, should not carry resume cursor", stopped.Metadata)
 	}
 }
 

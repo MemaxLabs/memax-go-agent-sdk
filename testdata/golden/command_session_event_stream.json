@@ -59,6 +59,7 @@
     "command_rows": 30,
     "command_input_bytes": 6,
     "command_next_seq": 2,
+    "command_resume_after_seq": 1,
     "command_output_chunks": 1
   },
   {

@@ -653,6 +653,7 @@ type goldenEvent struct {
 	CommandRows               int               `json:"command_rows,omitempty"`
 	CommandInputBytes         int               `json:"command_input_bytes,omitempty"`
 	CommandNextSeq            int               `json:"command_next_seq,omitempty"`
+	CommandResumeAfterSeq     int               `json:"command_resume_after_seq,omitempty"`
 	CommandOutputChunks       int               `json:"command_output_chunks,omitempty"`
 	CommandDroppedChunks      int               `json:"command_dropped_chunks,omitempty"`
 	CommandDroppedBytes       int               `json:"command_dropped_bytes,omitempty"`
@@ -769,6 +770,7 @@ func normalizeGoldenEvent(event Event) goldenEvent {
 			out.CommandRows = event.Command.Rows
 			out.CommandInputBytes = event.Command.InputBytes
 			out.CommandNextSeq = event.Command.NextSeq
+			out.CommandResumeAfterSeq = event.Command.ResumeAfterSeq
 			out.CommandOutputChunks = event.Command.OutputChunks
 			out.CommandDroppedChunks = event.Command.DroppedChunks
 			out.CommandDroppedBytes = event.Command.DroppedBytes

@@ -2053,6 +2053,7 @@ func emitCommandToolEvent(ctx context.Context, emit func(Event) bool, opts Optio
 		StderrBytes:        metadatavalues.Int(result.Metadata, model.MetadataCommandStderrBytes),
 		OutputTruncated:    metadatavalues.Bool(result.Metadata, model.MetadataCommandOutputTruncated),
 		NextSeq:            metadatavalues.Int(result.Metadata, model.MetadataCommandNextSeq),
+		ResumeAfterSeq:     metadatavalues.Int(result.Metadata, model.MetadataCommandResumeAfterSeq),
 		OutputChunks:       metadatavalues.Int(result.Metadata, model.MetadataCommandOutputChunks),
 		DroppedChunks:      metadatavalues.Int(result.Metadata, model.MetadataCommandDroppedChunks),
 		DroppedBytes:       metadatavalues.Int(result.Metadata, model.MetadataCommandDroppedBytes),
