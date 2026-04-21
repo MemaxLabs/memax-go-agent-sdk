@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/MemaxLabs/memax-go-agent-sdk/identity"
 )
 
 func TestMemoryCommandTranscriptStoreReadDefensiveCopiesAndPaging(t *testing.T) {
@@ -15,8 +17,13 @@ func TestMemoryCommandTranscriptStoreReadDefensiveCopiesAndPaging(t *testing.T) 
 	originalFinished := finished
 	exitCode := 0
 	session := CommandSession{
-		ID:         "cmd-1",
-		SessionID:  "agent-1",
+		ID:        "cmd-1",
+		SessionID: "agent-1",
+		Identity: identity.Identity{
+			Name:        "Build Agent",
+			Role:        "tester",
+			Constraints: []string{"never skip tests"},
+		},
 		Argv:       []string{"go", "test"},
 		CWD:        "/repo",
 		Status:     SessionExited,
@@ -29,6 +36,7 @@ func TestMemoryCommandTranscriptStoreReadDefensiveCopiesAndPaging(t *testing.T) 
 		t.Fatalf("SaveCommandSession returned error: %v", err)
 	}
 	session.Argv[0] = "mutated"
+	session.Identity.Constraints[0] = "mutated"
 	*session.ExitCode = 99
 	*session.FinishedAt = finished.Add(time.Hour)
 
@@ -52,7 +60,7 @@ func TestMemoryCommandTranscriptStoreReadDefensiveCopiesAndPaging(t *testing.T) 
 	if err != nil {
 		t.Fatalf("ReadCommandOutput returned error: %v", err)
 	}
-	if read.Session.Argv[0] != "go" || read.Session.ExitCode == nil || *read.Session.ExitCode != 0 || read.Session.FinishedAt == nil || !read.Session.FinishedAt.Equal(originalFinished) {
+	if read.Session.Argv[0] != "go" || read.Session.Identity.Constraints[0] != "never skip tests" || read.Session.ExitCode == nil || *read.Session.ExitCode != 0 || read.Session.FinishedAt == nil || !read.Session.FinishedAt.Equal(originalFinished) {
 		t.Fatalf("read.Session = %#v, want defensive copy of original snapshot", read.Session)
 	}
 	gotText := joinChunkText(read.Chunks)

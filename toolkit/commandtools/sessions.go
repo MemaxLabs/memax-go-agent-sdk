@@ -1632,6 +1632,9 @@ func cloneSession(session CommandSession) CommandSession {
 	if len(session.Argv) > 0 {
 		session.Argv = append([]string(nil), session.Argv...)
 	}
+	if len(session.Identity.Constraints) > 0 {
+		session.Identity.Constraints = append([]string(nil), session.Identity.Constraints...)
+	}
 	session.ExitCode = cloneIntPtr(session.ExitCode)
 	if session.FinishedAt != nil {
 		finished := *session.FinishedAt
