@@ -343,6 +343,11 @@ patches, snapshots, restore, reviewable mutations, and sandbox boundaries.
 - Verification failure can drive checkpoint restore, including opt-in policy
   guidance that recommends the latest session checkpoint without restoring
   hiddenly. Initial coverage exists.
+- A composed planner/workspace/managed-command loop now covers the harder
+  recovery path where a checkpointed edit passes mutation policy but fails
+  verification, the model follows rollback guidance, restores the checkpoint,
+  resumes managed command output from `resume_after_seq`, repairs again, and
+  completes task progress only after verification passes.
 - Read-only policies prevent mutation.
 - Symlink/path containment tests cover OS-backed adapters. Initial coverage
   exists.
@@ -415,7 +420,9 @@ verify, ask the user, or stop.
 - Checkpoint-before-patch policy denial drives checkpoint creation and retry
   through normal tool results.
 - Rollback-on-failed-verification policy guidance drives explicit checkpoint
-  restore through normal tool results.
+  restore through normal tool results, including a composed managed-command
+  scenario where rollback, cursor-based output continuation, repair, and
+  verification-to-task progress are all visible in the transcript.
 - Verify-before-final policy denial prevents premature final answers after
   workspace mutation, drives verification through normal tool results, and
   stops with an expected error when the finalization denial budget is exhausted.

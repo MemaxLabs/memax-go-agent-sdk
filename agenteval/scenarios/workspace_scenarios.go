@@ -2204,6 +2204,377 @@ func PlannerWorkspaceCommandRepairLoop() agenteval.Case {
 	}
 }
 
+// PlannerWorkspaceCommandRollbackRepairLoop returns a single-use scenario
+// where a planner-guided task uses managed command output, checkpoints before a
+// risky edit, receives rollback guidance from failed verification, restores the
+// checkpoint, and repairs again before completing the task.
+func PlannerWorkspaceCommandRollbackRepairLoop() agenteval.Case {
+	const goodReadme = "status: fixed\nowner: api\n"
+	workspaceStore := workspace.NewMemoryStore(map[string]string{
+		"README.md": "status: broken\nowner: api\n",
+	})
+	taskStore := tasktools.NewMemoryStore([]tasktools.Task{{
+		ID:     "task-1",
+		Title:  "repair README status without changing owner",
+		Status: tasktools.StatusInProgress,
+		Notes:  "use watch output, checkpoint before risky edits, rollback on failed verification",
+	}})
+	workspaceTools, toolsErr := workspacetools.NewTools(workspaceStore)
+	manager := commandtools.NewScriptedSessionManager(commandtools.ScriptedCommand{
+		ID:  "watch-1",
+		PID: 8282,
+		Pages: []commandtools.ScriptedOutputPage{
+			{
+				Chunks: []commandtools.OutputChunk{{
+					Seq:    1,
+					Stream: "stdout",
+					Text:   "watch: README.md status must be fixed\nhint: owner line must stay api\n",
+				}},
+				Running: true,
+			},
+			{
+				Chunks: []commandtools.OutputChunk{{
+					Seq:    2,
+					Stream: "stdout",
+					Text:   "watch: status fixed but owner changed\n",
+				}},
+				Running: true,
+			},
+			{
+				Chunks: []commandtools.OutputChunk{{
+					Seq:    3,
+					Stream: "stdout",
+					Text:   "watch: ok\n",
+				}},
+				Running: true,
+			},
+		},
+		StopExitCode: intPtr(0),
+	})
+	verifier := verifytools.VerifierFunc(func(ctx context.Context, req verifytools.Request) (verifytools.Result, error) {
+		content, err := workspaceStore.ReadFile(ctx, "README.md")
+		if err != nil {
+			return verifytools.Result{}, err
+		}
+		if content == goodReadme {
+			return verifytools.Result{
+				Name:   req.Name,
+				Passed: true,
+				Output: "README.md status fixed and owner preserved.",
+			}, nil
+		}
+		return verifytools.Result{
+			Name:   req.Name,
+			Passed: false,
+			Output: fmt.Sprintf("got %q; expected %q", content, goodReadme),
+			Diagnostics: []verifytools.Diagnostic{{
+				Path:     "README.md",
+				Severity: "error",
+				Message:  "status must be fixed and owner must remain api",
+			}},
+		}, nil
+	})
+	rollbackPolicy := agentpolicy.RecommendRollbackOnFailedVerification()
+	verifyTool := verifytools.NewTool(verifytools.Config{
+		Verifier: rollbackPolicy.WrapVerifier(tasktools.NewVerificationProgressVerifier(
+			taskStore,
+			verifier,
+			tasktools.WithVerificationFailStatus(tasktools.StatusInProgress),
+		)),
+	})
+	checkpointPolicy := agentpolicy.RequireCheckpointBeforePatch()
+	finalPolicy := agentpolicy.RequireVerificationBeforeFinal()
+	hookOptions := append(checkpointPolicy.Options(), finalPolicy.Options()...)
+	hookOptions = append(hookOptions, rollbackPolicy.Options()...)
+	modelClient := agenteval.NewScriptedModel(
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "start-1",
+				Name:  commandtools.StartToolName,
+				Input: json.RawMessage(`{"id":"watch-1","command":["npm","run","test:watch"],"purpose":"watch README status and owner"}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "read-1",
+				Name:  commandtools.ReadOutputToolName,
+				Input: json.RawMessage(`{"id":"watch-1"}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "patch-1",
+				Name: workspacetools.ApplyPatchToolName,
+				Input: json.RawMessage(`{"operations":[
+					{"path":"README.md","old_content":"status: broken\nowner: api\n","new_content":"status: fixed\nowner: ops\n"}
+				]}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "checkpoint-1",
+				Name:  workspacetools.CheckpointToolName,
+				Input: json.RawMessage(`{"label":"before README repair"}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "patch-2",
+				Name: workspacetools.ApplyPatchToolName,
+				Input: json.RawMessage(`{"operations":[
+					{"path":"README.md","old_content":"status: broken\nowner: api\n","new_content":"status: fixed\nowner: ops\n"}
+				]}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "read-2",
+				Name:  commandtools.ReadOutputToolName,
+				Input: json.RawMessage(`{"id":"watch-1","after_seq":1}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "verify-1",
+				Name: verifytools.ToolName,
+				Input: json.RawMessage(`{
+					"name":"test",
+					"target":"README.md",
+					"metadata":{"task_id":"task-1"}
+				}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "restore-1",
+				Name:  workspacetools.RestoreToolName,
+				Input: json.RawMessage(`{"id":"checkpoint-1"}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "patch-3",
+				Name: workspacetools.ApplyPatchToolName,
+				Input: json.RawMessage(`{"operations":[
+					{"path":"README.md","old_content":"status: broken\nowner: api\n","new_content":"status: fixed\nowner: api\n"}
+				]}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "read-3",
+				Name:  commandtools.ReadOutputToolName,
+				Input: json.RawMessage(`{"id":"watch-1","after_seq":2}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "stop-1",
+				Name:  commandtools.StopToolName,
+				Input: json.RawMessage(`{"id":"watch-1","force":true}`),
+			},
+		}},
+		[]model.StreamEvent{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:   "verify-2",
+				Name: verifytools.ToolName,
+				Input: json.RawMessage(`{
+					"name":"test",
+					"target":"README.md",
+					"metadata":{"task_id":"task-1"}
+				}`),
+			},
+		}},
+		[]model.StreamEvent{{Kind: model.StreamText, Text: "README restored, repaired, verified, and task completed."}},
+	)
+
+	return agenteval.Case{
+		Name:   "planner_workspace_command_rollback_repair_loop",
+		Prompt: "Use the watch command to diagnose README.md, repair it safely without changing the owner, verify it, and finish the active task.",
+		Options: memaxagent.Options{
+			Model: modelClient,
+			Tools: tool.NewRegistry(append(workspaceTools,
+				commandtools.NewStartTool(manager),
+				commandtools.NewReadOutputTool(manager),
+				commandtools.NewStopTool(manager),
+				verifyTool,
+			)...),
+			Hooks: hook.NewRunner(hookOptions...),
+			Planner: tasktools.Planner(taskStore,
+				planner.WithTaskGoal("repair README status using watch output, rollback guidance, and verified evidence"),
+				planner.WithTaskToolHints(
+					commandtools.StartToolName,
+					commandtools.ReadOutputToolName,
+					commandtools.StopToolName,
+					workspacetools.CheckpointToolName,
+					workspacetools.ApplyPatchToolName,
+					workspacetools.RestoreToolName,
+					verifytools.ToolName,
+				),
+				planner.WithTaskVerificationHints("call workspace_verify with metadata.task_id before final answer"),
+			),
+		},
+		Assertions: []agenteval.Assertion{
+			toolConstructionSucceeded(toolsErr),
+			agenteval.ToolUsed(commandtools.StartToolName),
+			agenteval.ToolUsed(commandtools.ReadOutputToolName),
+			agenteval.ToolUsed(workspacetools.ApplyPatchToolName),
+			agenteval.ToolUsed(workspacetools.CheckpointToolName),
+			agenteval.ToolUsed(workspacetools.RestoreToolName),
+			agenteval.ToolUsed(commandtools.StopToolName),
+			agenteval.ToolUsed(verifytools.ToolName),
+			agenteval.EventKindEmitted(memaxagent.EventCommandStarted),
+			agenteval.EventKindEmitted(memaxagent.EventCommandOutput),
+			agenteval.EventKindEmitted(memaxagent.EventCommandStopped),
+			agenteval.EventKindEmitted(memaxagent.EventWorkspaceCheckpoint),
+			agenteval.EventKindEmitted(memaxagent.EventWorkspacePatch),
+			agenteval.EventKindEmitted(memaxagent.EventWorkspaceRestore),
+			agenteval.EventKindEmitted(memaxagent.EventVerification),
+			agenteval.FinalEquals("README restored, repaired, verified, and task completed."),
+			requestCountEquals(modelClient, 13),
+			{
+				Name: "rollback loop restores checkpoint and resumes command output by cursor",
+				Check: func(result agenteval.Result) error {
+					results := result.ToolResults()
+					if len(results) < 12 {
+						return fmt.Errorf("tool results = %d (%#v), want at least 12 for rollback repair loop", len(results), results)
+					}
+					if results[1].IsError ||
+						!strings.Contains(results[1].Content, "owner line must stay api") ||
+						!strings.Contains(results[1].Content, "resume_after_seq: 1") {
+						return fmt.Errorf("first read result = %#v, want owner hint and resume cursor", results[1])
+					}
+					if !results[2].IsError || !strings.Contains(results[2].Content, agentpolicy.CheckpointBeforePatchReason()) {
+						return fmt.Errorf("first patch result = %#v, want checkpoint denial", results[2])
+					}
+					if results[3].IsError || !strings.Contains(results[3].Content, "created workspace checkpoint checkpoint-1") {
+						return fmt.Errorf("checkpoint result = %#v, want checkpoint success", results[3])
+					}
+					if results[4].IsError || !strings.Contains(results[4].Content, "modified README.md") {
+						return fmt.Errorf("bad patch result = %#v, want successful risky patch", results[4])
+					}
+					if results[5].IsError ||
+						!strings.Contains(results[5].Content, "owner changed") ||
+						!strings.Contains(results[5].Content, "resume_after_seq: 2") {
+						return fmt.Errorf("second read result = %#v, want cursor-derived owner warning", results[5])
+					}
+					if !results[6].IsError || !strings.Contains(results[6].Content, "Rollback policy: restore workspace checkpoint checkpoint-1") {
+						return fmt.Errorf("failed verification = %#v, want rollback guidance", results[6])
+					}
+					if results[6].Metadata[agentpolicy.MetadataRollbackRecommended] != true ||
+						results[6].Metadata[agentpolicy.MetadataRollbackCheckpointID] != "checkpoint-1" {
+						return fmt.Errorf("failed verification metadata = %#v, want rollback checkpoint", results[6].Metadata)
+					}
+					if results[6].Metadata[model.MetadataTaskStatus] != string(tasktools.StatusInProgress) {
+						return fmt.Errorf("failed verification metadata = %#v, want in-progress task", results[6].Metadata)
+					}
+					if results[7].IsError || !strings.Contains(results[7].Content, "restored workspace checkpoint checkpoint-1") {
+						return fmt.Errorf("restore result = %#v, want checkpoint restore", results[7])
+					}
+					if results[8].IsError || !strings.Contains(results[8].Content, "modified README.md") {
+						return fmt.Errorf("repair patch result = %#v, want successful repair", results[8])
+					}
+					if results[9].IsError ||
+						!strings.Contains(results[9].Content, "watch: ok") ||
+						!strings.Contains(results[9].Content, "resume_after_seq: 3") {
+						return fmt.Errorf("third read result = %#v, want ok output and resume cursor", results[9])
+					}
+					if results[10].IsError || !strings.Contains(results[10].Content, "status: stopped") {
+						return fmt.Errorf("stop result = %#v, want clean stop", results[10])
+					}
+					if results[11].IsError || !strings.Contains(results[11].Content, "verification test passed") {
+						return fmt.Errorf("passing verification = %#v, want success", results[11])
+					}
+					if results[11].Metadata[model.MetadataTaskStatus] != string(tasktools.StatusCompleted) {
+						return fmt.Errorf("passing verification metadata = %#v, want completed task", results[11].Metadata)
+					}
+					content, err := workspaceStore.ReadFile(context.Background(), "README.md")
+					if err != nil {
+						return err
+					}
+					if content != goodReadme {
+						return fmt.Errorf("README.md = %q, want repaired content", content)
+					}
+					readRequests := manager.ReadRequests()
+					if len(readRequests) != 3 ||
+						readRequests[0].AfterSeq != 0 ||
+						readRequests[1].AfterSeq != 1 ||
+						readRequests[2].AfterSeq != 2 {
+						return fmt.Errorf("read requests = %#v, want cursor progression 0,1,2", readRequests)
+					}
+					return nil
+				},
+			},
+			{
+				Name: "rollback loop keeps planner task and event history coherent",
+				Check: func(result agenteval.Result) error {
+					var patches, checkpoints, restores, verifications int
+					for _, event := range result.Events {
+						switch event.Kind {
+						case memaxagent.EventWorkspacePatch:
+							patches++
+						case memaxagent.EventWorkspaceCheckpoint:
+							checkpoints++
+						case memaxagent.EventWorkspaceRestore:
+							restores++
+						case memaxagent.EventVerification:
+							verifications++
+						}
+					}
+					if patches != 2 || checkpoints != 1 || restores != 1 || verifications != 2 {
+						return fmt.Errorf("events patch/checkpoint/restore/verify = %d/%d/%d/%d, want 2/1/1/2", patches, checkpoints, restores, verifications)
+					}
+					tasks, err := taskStore.List(context.Background())
+					if err != nil {
+						return err
+					}
+					if len(tasks) != 1 || tasks[0].Status != tasktools.StatusCompleted {
+						return fmt.Errorf("tasks = %#v, want completed task", tasks)
+					}
+					if !strings.Contains(strings.Join(tasks[0].Evidence, ","), "verification:test") {
+						return fmt.Errorf("task evidence = %#v, want verification evidence", tasks[0].Evidence)
+					}
+					requests := modelClient.Requests()
+					if len(requests) < 13 {
+						return fmt.Errorf("requests = %d, want 13", len(requests))
+					}
+					initialPrompt := requests[0].SystemPrompt
+					for _, want := range []string{
+						"repair README status using watch output, rollback guidance, and verified evidence",
+						"[in_progress] task-1",
+						"rollback on failed verification",
+						workspacetools.RestoreToolName,
+						verifytools.ToolName,
+					} {
+						if !strings.Contains(initialPrompt, want) {
+							return fmt.Errorf("initial prompt missing %q:\n%s", want, initialPrompt)
+						}
+					}
+					finalPrompt := requests[12].SystemPrompt
+					for _, want := range []string{"[completed] task-1", "verification:test", "README.md"} {
+						if !strings.Contains(finalPrompt, want) {
+							return fmt.Errorf("final prompt missing %q:\n%s", want, finalPrompt)
+						}
+					}
+					return nil
+				},
+			},
+		},
+	}
+}
+
 // PlannerVerificationGuidesRepair returns a single-use scenario where the
 // host plan names the verification phase, the model uses the verifier, and a
 // failed check drives a repair before the final answer.

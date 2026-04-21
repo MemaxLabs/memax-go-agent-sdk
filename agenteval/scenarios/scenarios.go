@@ -59,6 +59,7 @@ func All() []agenteval.Case {
 		PlannerVerificationGuidesRepair(),
 		PlannerTaskProgressFromVerification(),
 		PlannerWorkspaceCommandRepairLoop(),
+		PlannerWorkspaceCommandRollbackRepairLoop(),
 		PersonalPresetAssistant(),
 		PersonalPresetAssistantMemoryApprovalRecovery(),
 		PersonalPresetAssistantNoteRecall(),
