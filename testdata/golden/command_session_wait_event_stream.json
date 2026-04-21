@@ -1,0 +1,71 @@
+[
+  {
+    "kind": "session_started"
+  },
+  {
+    "kind": "model_request",
+    "turn": 1
+  },
+  {
+    "kind": "tool_use",
+    "turn": 1,
+    "tool_id": "start-1",
+    "tool_name": "start_command"
+  },
+  {
+    "kind": "tool_result",
+    "turn": 1,
+    "tool_id": "start-1",
+    "tool_name": "start_command",
+    "tool_result": "started command session watch-1: npm run test:watch\nstatus: running\npid: 5152\npurpose: start watch mode"
+  },
+  {
+    "kind": "command_started",
+    "turn": 1,
+    "command_operation": "start",
+    "command_id": "watch-1",
+    "command_status": "running",
+    "command_pid": 5152
+  },
+  {
+    "kind": "model_request",
+    "turn": 2
+  },
+  {
+    "kind": "tool_use",
+    "turn": 2,
+    "tool_id": "wait-1",
+    "tool_name": "wait_command_output"
+  },
+  {
+    "kind": "tool_result",
+    "turn": 2,
+    "tool_id": "wait-1",
+    "tool_name": "wait_command_output",
+    "tool_result": "command output for watch-1: npm run test:watch\nstatus: exited\nnext_seq: 2\n[stdout #1]\nwatch: ok\n"
+  },
+  {
+    "kind": "command_output",
+    "turn": 2,
+    "command_operation": "wait",
+    "command_id": "watch-1",
+    "command_status": "exited",
+    "command_pid": 5152,
+    "command_next_seq": 2,
+    "command_output_chunks": 1
+  },
+  {
+    "kind": "model_request",
+    "turn": 3
+  },
+  {
+    "kind": "assistant",
+    "turn": 3,
+    "text": "watch completed"
+  },
+  {
+    "kind": "result",
+    "turn": 3,
+    "result": "watch completed"
+  }
+]

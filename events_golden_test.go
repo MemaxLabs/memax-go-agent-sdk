@@ -284,6 +284,72 @@ func TestQueryCommandSessionEventStreamGolden(t *testing.T) {
 	}
 }
 
+func TestQueryCommandSessionWaitEventStreamGolden(t *testing.T) {
+	manager := commandtools.NewScriptedSessionManager(commandtools.ScriptedCommand{
+		ID:  "watch-1",
+		PID: 5152,
+		Pages: []commandtools.ScriptedOutputPage{{
+			Chunks: []commandtools.OutputChunk{{
+				Seq:    1,
+				Stream: "stdout",
+				Text:   "watch: ok\n",
+			}},
+			Running:  false,
+			ExitCode: intPtr(0),
+		}},
+	})
+	events, err := Query(context.Background(), "start and wait for watch output", Options{
+		Model: &fakeModel{turns: [][]model.StreamEvent{
+			{{
+				Kind: model.StreamToolUse,
+				ToolUse: model.ToolUse{
+					ID:    "start-1",
+					Name:  commandtools.StartToolName,
+					Input: json.RawMessage(`{"id":"watch-1","command":["npm","run","test:watch"],"purpose":"start watch mode"}`),
+				},
+			}},
+			{{
+				Kind: model.StreamToolUse,
+				ToolUse: model.ToolUse{
+					ID:    "wait-1",
+					Name:  commandtools.WaitOutputToolName,
+					Input: json.RawMessage(`{"id":"watch-1","timeout_ms":0}`),
+				},
+			}},
+			{{Kind: model.StreamText, Text: "watch completed"}},
+		}},
+		Tools: tool.NewRegistry(
+			commandtools.NewStartTool(manager),
+			commandtools.NewWaitTool(manager),
+		),
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+
+	var got []goldenEvent
+	for event := range events {
+		if event.Kind == EventError {
+			t.Fatalf("query error: %v", event.Err)
+		}
+		got = append(got, normalizeGoldenEvent(event))
+	}
+
+	data, err := json.MarshalIndent(got, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal golden events: %v", err)
+	}
+	data = append(data, '\n')
+
+	want, err := os.ReadFile("testdata/golden/command_session_wait_event_stream.json")
+	if err != nil {
+		t.Fatalf("read golden file: %v", err)
+	}
+	if strings.TrimSpace(string(data)) != strings.TrimSpace(string(want)) {
+		t.Fatalf("command session wait event stream golden mismatch\n got:\n%s\nwant:\n%s", data, want)
+	}
+}
+
 func TestQueryBudgetDenialEventStreamGolden(t *testing.T) {
 	registry := tool.NewRegistry(tool.Definition{
 		ToolSpec: model.ToolSpec{Name: "read", ReadOnly: true, ConcurrencySafe: true},

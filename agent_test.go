@@ -25,6 +25,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/agentpolicy"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/approvaltools"
+	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/commandtools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/skilltools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/verifytools"
 	"github.com/MemaxLabs/memax-go-agent-sdk/toolkit/workspacetools"
@@ -712,6 +713,75 @@ func TestQueryEmitsVerificationEventsAndMetrics(t *testing.T) {
 	}
 	if !meter.hasCounter("memax.verification.run") {
 		t.Fatalf("meter counters = %#v, missing verification counter", meter.counterNames())
+	}
+}
+
+func TestQueryEmitsWaitCommandOutputEventAndMetric(t *testing.T) {
+	manager := commandtools.NewScriptedSessionManager(commandtools.ScriptedCommand{
+		ID:  "watch-1",
+		PID: 5152,
+		Pages: []commandtools.ScriptedOutputPage{{
+			Chunks: []commandtools.OutputChunk{{
+				Seq:    1,
+				Stream: "stdout",
+				Text:   "watch: ok\n",
+			}},
+			Running:  false,
+			ExitCode: intPtr(0),
+		}},
+	})
+	fake := &fakeModel{turns: [][]model.StreamEvent{
+		{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "start-1",
+				Name:  commandtools.StartToolName,
+				Input: json.RawMessage(`{"id":"watch-1","command":["npm","run","test:watch"],"purpose":"start watch mode"}`),
+			},
+		}},
+		{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "wait-1",
+				Name:  commandtools.WaitOutputToolName,
+				Input: json.RawMessage(`{"id":"watch-1","timeout_ms":0}`),
+			},
+		}},
+		{{Kind: model.StreamText, Text: "watch completed"}},
+	}}
+	meter := &attributeRecordingMeter{}
+	stream, err := Query(context.Background(), "start and wait for watch output", Options{
+		Model: fake,
+		Tools: tool.NewRegistry(
+			commandtools.NewStartTool(manager),
+			commandtools.NewWaitTool(manager),
+		),
+		Meter: meter,
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+
+	var events []Event
+	for event := range stream {
+		if event.Kind == EventError {
+			t.Fatalf("unexpected error event: %v", event.Err)
+		}
+		events = append(events, event)
+	}
+
+	output := findCommandEvent(events, EventCommandOutput)
+	if output == nil {
+		t.Fatalf("command output event missing from %#v", events)
+	}
+	if output.Operation != "wait" {
+		t.Fatalf("command output event operation = %q, want wait", output.Operation)
+	}
+	if output.OutputChunks != 1 || output.NextSeq != 2 {
+		t.Fatalf("command output event = %#v, want one chunk and next_seq=2", output)
+	}
+	if !meter.hasAddWithAttribute("memax.command.output", "memax.command.operation", "wait") {
+		t.Fatalf("meter adds = %#v, want memax.command.output with memax.command.operation=wait", meter.snapshotAdds())
 	}
 }
 
@@ -2732,6 +2802,56 @@ func (m *recordingMeter) recordNames() []string {
 	return append([]string(nil), m.records...)
 }
 
+type metricAddObservation struct {
+	name  string
+	attrs []telemetry.Attribute
+}
+
+type attributeRecordingMeter struct {
+	mu   sync.Mutex
+	adds []metricAddObservation
+}
+
+func (m *attributeRecordingMeter) Add(_ context.Context, name string, _ int64, attrs ...telemetry.Attribute) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.adds = append(m.adds, metricAddObservation{
+		name:  name,
+		attrs: append([]telemetry.Attribute(nil), attrs...),
+	})
+}
+
+func (m *attributeRecordingMeter) Record(context.Context, string, float64, ...telemetry.Attribute) {}
+
+func (m *attributeRecordingMeter) hasAddWithAttribute(metricName, key string, want any) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, add := range m.adds {
+		if add.name != metricName {
+			continue
+		}
+		for _, attr := range add.attrs {
+			if attr.Key == key && attr.Value == want {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (m *attributeRecordingMeter) snapshotAdds() []metricAddObservation {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]metricAddObservation, len(m.adds))
+	for i, add := range m.adds {
+		out[i] = metricAddObservation{
+			name:  add.name,
+			attrs: append([]telemetry.Attribute(nil), add.attrs...),
+		}
+	}
+	return out
+}
+
 func sameStrings(a []string, b []string) bool {
 	if len(a) != len(b) {
 		return false
@@ -2775,6 +2895,15 @@ func findApprovalEvent(events []Event, kind EventKind) *ApprovalEvent {
 	for _, event := range events {
 		if event.Kind == kind && event.Approval != nil {
 			return event.Approval
+		}
+	}
+	return nil
+}
+
+func findCommandEvent(events []Event, kind EventKind) *CommandEvent {
+	for _, event := range events {
+		if event.Kind == kind && event.Command != nil {
+			return event.Command
 		}
 	}
 	return nil
