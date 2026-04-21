@@ -42,7 +42,7 @@
     "turn": 2,
     "tool_id": "wait-1",
     "tool_name": "wait_command_output",
-    "tool_result": "command output for watch-1: npm run test:watch\nstatus: exited\nnext_seq: 2\n[stdout #1]\nwatch: ok\n"
+    "tool_result": "command output for watch-1: npm run test:watch\nstatus: exited\nnext_seq: 2\nresume_after_seq: 1\n[stdout #1]\nwatch: ok\n"
   },
   {
     "kind": "command_output",

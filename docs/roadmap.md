@@ -111,8 +111,10 @@ system prompt.
   `read_command_output`, `wait_command_output`, `stop_command`,
   `list_commands`), command session cleanup hooks, scripted managed sessions,
   command session event coverage, buffered-read and interactive-write repair
-  eval coverage, PTY-backed terminal session support, explicit terminal
-  geometry and live resize support, Unix PTY plus Windows ConPTY support, Unix
+  eval coverage, prompt-visible `resume_after_seq` cursors for incremental
+  reads, waits, and post-write output heads, PTY-backed terminal session
+  support, explicit terminal geometry and live resize support, Unix PTY plus
+  Windows ConPTY support, Unix
   process-group stop/timeout cleanup for descendants, and a shared
   commandtools/sessiontest conformance harness now exist over host-owned
   lifecycle interfaces. Windows ConPTY is

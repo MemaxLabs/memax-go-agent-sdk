@@ -1249,7 +1249,7 @@ func CodingPresetInteractiveDevWaitCursorRepair() agenteval.Case {
 					if len(requests) != 8 {
 						return fmt.Errorf("model requests = %d, want 8", len(requests))
 					}
-					if !requestHasToolResult(requests[2], "wait-1", "[stderr #41]", "next_seq: 42") {
+					if !requestHasToolResult(requests[2], "wait-1", "[stderr #41]", "next_seq: 42", "resume_after_seq: 41") {
 						return fmt.Errorf("third request messages = %#v, want first wait result visible before cursor decision", requests[2].Messages)
 					}
 					if !strings.Contains(requests[0].SystemPrompt, "Wait for fresh output from watchers") {
@@ -1527,7 +1527,7 @@ func (m *codingWaitCursorModel) Stream(ctx context.Context, req model.Request) (
 			},
 		}), nil
 	case 3:
-		if !requestHasToolResult(req, "wait-1", "[stderr #41]", "next_seq: 42") {
+		if !requestHasToolResult(req, "wait-1", "[stderr #41]", "next_seq: 42", "resume_after_seq: 41") {
 			return codingStreamFromEvents(model.StreamEvent{Kind: model.StreamText, Text: "missing first wait cursor"}), nil
 		}
 		return codingStreamFromEvents(model.StreamEvent{
@@ -1550,9 +1550,9 @@ func (m *codingWaitCursorModel) Stream(ctx context.Context, req model.Request) (
 			},
 		}), nil
 	case 5:
-		afterSeq, ok := highestCommandOutputSeq(req)
+		afterSeq, ok := resumeAfterSeqFromToolResults(req)
 		if !ok {
-			return codingStreamFromEvents(model.StreamEvent{Kind: model.StreamText, Text: "missing wait output sequence"}), nil
+			return codingStreamFromEvents(model.StreamEvent{Kind: model.StreamText, Text: "missing wait resume cursor"}), nil
 		}
 		return codingStreamFromEvents(model.StreamEvent{
 			Kind: model.StreamToolUse,
@@ -1657,27 +1657,27 @@ func requestHasToolResult(req model.Request, toolUseID string, substrings ...str
 	return false
 }
 
-var commandOutputSeqPattern = regexp.MustCompile(`#([0-9]+)\]`)
+var resumeAfterSeqPattern = regexp.MustCompile(`(?m)^resume_after_seq: ([0-9]+)$`)
 
-func highestCommandOutputSeq(req model.Request) (int, bool) {
-	maxSeq := 0
+func resumeAfterSeqFromToolResults(req model.Request) (int, bool) {
+	resumeSeq := 0
 	found := false
 	for _, msg := range req.Messages {
 		if msg.ToolResult == nil {
 			continue
 		}
-		// This mirrors the prompt-visible "[stream #seq]" chunk format emitted by commandtools.
+		// This mirrors the prompt-visible cursor emitted by commandtools.
 		// The fake intentionally derives the next cursor from transcript text instead of metadata.
-		for _, match := range commandOutputSeqPattern.FindAllStringSubmatch(msg.ToolResult.Content, -1) {
+		for _, match := range resumeAfterSeqPattern.FindAllStringSubmatch(msg.ToolResult.Content, -1) {
 			seq, err := strconv.Atoi(match[1])
 			if err != nil {
 				continue
 			}
-			if !found || seq > maxSeq {
-				maxSeq = seq
+			if !found || seq > resumeSeq {
+				resumeSeq = seq
 				found = true
 			}
 		}
 	}
-	return maxSeq, found
+	return resumeSeq, found
 }

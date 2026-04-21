@@ -512,8 +512,9 @@ func TestStartReadStopToolsReturnMetadata(t *testing.T) {
 	if read.Metadata[MetadataCommandOperation] != "read" || read.Metadata[MetadataCommandOutputChunks] != 1 {
 		t.Fatalf("read metadata = %#v, want command read metadata", read.Metadata)
 	}
-	if !strings.Contains(read.Content, "[pty #1]") || !strings.Contains(read.Content, "listening on :3000") {
-		t.Fatalf("read content = %q, want output chunk", read.Content)
+	if !strings.Contains(read.Content, "[pty #1]") || !strings.Contains(read.Content, "listening on :3000") ||
+		!strings.Contains(read.Content, "resume_after_seq: 1") {
+		t.Fatalf("read content = %q, want output chunk and resume cursor", read.Content)
 	}
 	waited, err := waitTool.(tool.Definition).Handler(context.Background(), tool.Call{
 		Runtime: runtime,
@@ -528,8 +529,8 @@ func TestStartReadStopToolsReturnMetadata(t *testing.T) {
 	if waited.Metadata[MetadataCommandOperation] != "wait" || waited.Metadata[MetadataCommandOutputChunks] != 0 {
 		t.Fatalf("wait metadata = %#v, want command wait metadata", waited.Metadata)
 	}
-	if !strings.Contains(waited.Content, "no new output") {
-		t.Fatalf("wait content = %q, want no new output marker", waited.Content)
+	if !strings.Contains(waited.Content, "no new output") || !strings.Contains(waited.Content, "resume_after_seq: 1") {
+		t.Fatalf("wait content = %q, want no new output marker and resume cursor", waited.Content)
 	}
 	wrote, err := writeTool.(tool.Definition).Handler(context.Background(), tool.Call{
 		Runtime: runtime,
@@ -544,8 +545,9 @@ func TestStartReadStopToolsReturnMetadata(t *testing.T) {
 	if wrote.Metadata[MetadataCommandOperation] != "write" || wrote.Metadata[MetadataCommandInputBytes] != 5 || wrote.Metadata[MetadataCommandOutputChunks] != 1 || wrote.Metadata[MetadataCommandTTY] != true {
 		t.Fatalf("write metadata = %#v, want command write metadata", wrote.Metadata)
 	}
-	if !strings.Contains(wrote.Content, "[pty #2]") || !strings.Contains(wrote.Content, "pong") {
-		t.Fatalf("write content = %q, want write output chunk", wrote.Content)
+	if !strings.Contains(wrote.Content, "[pty #2]") || !strings.Contains(wrote.Content, "pong") ||
+		!strings.Contains(wrote.Content, "resume_after_seq: 2") {
+		t.Fatalf("write content = %q, want write output chunk and resume cursor", wrote.Content)
 	}
 	resized, err := resizeTool.(tool.Definition).Handler(context.Background(), tool.Call{
 		Runtime: runtime,
@@ -575,6 +577,54 @@ func TestStartReadStopToolsReturnMetadata(t *testing.T) {
 	}
 	if stopped.Metadata[MetadataCommandOperation] != "stop" || stopped.Metadata[MetadataCommandTTY] != true || stopped.Metadata[MetadataCommandCols] != 140 || stopped.Metadata[MetadataCommandRows] != 50 {
 		t.Fatalf("stop metadata = %#v, want stop operation", stopped.Metadata)
+	}
+}
+
+func TestFormatSessionReadResumeCursor(t *testing.T) {
+	content := formatSessionRead(ReadResult{
+		Session: CommandSession{
+			ID:      "dev-1",
+			Argv:    []string{"npm", "run", "watch"},
+			Status:  SessionExited,
+			NextSeq: 3,
+		},
+		NextSeq: 3,
+	}, 5)
+	if !strings.Contains(content, "resume_after_seq: 5") {
+		t.Fatalf("content = %q, want resume cursor to preserve caller after_seq", content)
+	}
+
+	content = formatSessionRead(ReadResult{
+		Session: CommandSession{
+			ID:      "dev-1",
+			Argv:    []string{"npm", "run", "watch"},
+			Status:  SessionRunning,
+			NextSeq: 13,
+		},
+		Chunks: []OutputChunk{
+			{Seq: 10, Stream: "stdout", Text: "first"},
+			{Seq: 12, Stream: "stdout", Text: "second"},
+		},
+		NextSeq: 13,
+	}, 5)
+	if !strings.Contains(content, "resume_after_seq: 12") {
+		t.Fatalf("content = %q, want resume cursor to follow highest returned chunk", content)
+	}
+}
+
+func TestFormatSessionWriteResumeCursorWithoutChunks(t *testing.T) {
+	content := formatSessionWrite(WriteResult{
+		Session: CommandSession{
+			ID:      "dev-1",
+			Argv:    []string{"npm", "run", "watch"},
+			Status:  SessionRunning,
+			NextSeq: 7,
+		},
+		NextSeq:    7,
+		InputBytes: 5,
+	})
+	if !strings.Contains(content, "resume_after_seq: 6") {
+		t.Fatalf("content = %q, want write resume cursor to follow post-write output head", content)
 	}
 }
 

@@ -423,7 +423,7 @@ func NewReadOutputTool(reader Reader) tool.Tool {
 			if err != nil {
 				return model.ToolResult{}, err
 			}
-			return readResult(result), nil
+			return readResult(result, req.AfterSeq), nil
 		},
 	}
 }
@@ -467,7 +467,7 @@ func NewWaitTool(waiter Waiter) tool.Tool {
 			if err != nil {
 				return model.ToolResult{}, err
 			}
-			return waitResult(result), nil
+			return waitResult(result, req.AfterSeq), nil
 		},
 	}
 }
@@ -843,7 +843,7 @@ func readInputSchema() map[string]any {
 			},
 			"after_seq": map[string]any{
 				"type":        "integer",
-				"description": "Return chunks whose sequence number is greater than this value.",
+				"description": "Return chunks whose sequence number is greater than this value. Use resume_after_seq from a prior read, wait, or write result to continue without replaying seen output.",
 				"minimum":     0,
 			},
 			"limit": map[string]any{
@@ -873,7 +873,7 @@ func waitInputSchema() map[string]any {
 			},
 			"after_seq": map[string]any{
 				"type":        "integer",
-				"description": "Wait until output with a sequence number greater than this value appears.",
+				"description": "Wait until output with a sequence number greater than this value appears. Use resume_after_seq from a prior read, wait, or write result to continue without replaying seen output.",
 				"minimum":     0,
 			},
 			"timeout_ms": map[string]any{
@@ -966,13 +966,13 @@ func startResult(session CommandSession) model.ToolResult {
 	}
 }
 
-func readResult(result ReadResult) model.ToolResult {
+func readResult(result ReadResult, afterSeq int) model.ToolResult {
 	metadata := sessionMetadata(result.Session)
 	metadata[MetadataCommandOperation] = "read"
 	metadata[MetadataCommandNextSeq] = result.NextSeq
 	metadata[MetadataCommandOutputChunks] = len(result.Chunks)
 	return model.ToolResult{
-		Content:  formatSessionRead(result),
+		Content:  formatSessionRead(result, afterSeq),
 		Metadata: metadata,
 	}
 }
@@ -989,13 +989,13 @@ func writeResult(result WriteResult) model.ToolResult {
 	}
 }
 
-func waitResult(result ReadResult) model.ToolResult {
+func waitResult(result ReadResult, afterSeq int) model.ToolResult {
 	metadata := sessionMetadata(result.Session)
 	metadata[MetadataCommandOperation] = "wait"
 	metadata[MetadataCommandNextSeq] = result.NextSeq
 	metadata[MetadataCommandOutputChunks] = len(result.Chunks)
 	return model.ToolResult{
-		Content:  formatSessionRead(result),
+		Content:  formatSessionRead(result, afterSeq),
 		Metadata: metadata,
 	}
 }
@@ -1135,7 +1135,7 @@ func formatSessionStart(session CommandSession) string {
 	return b.String()
 }
 
-func formatSessionRead(result ReadResult) string {
+func formatSessionRead(result ReadResult, afterSeq int) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "command output for %s: %s", result.Session.ID, strings.Join(result.Session.Argv, " "))
 	fmt.Fprintf(&b, "\nstatus: %s", result.Session.Status)
@@ -1146,6 +1146,7 @@ func formatSessionRead(result ReadResult) string {
 		}
 	}
 	fmt.Fprintf(&b, "\nnext_seq: %d", result.NextSeq)
+	fmt.Fprintf(&b, "\nresume_after_seq: %d", resumeAfterSeq(result, afterSeq))
 	if result.Session.DroppedChunks > 0 {
 		fmt.Fprintf(&b, "\ndropped_chunks: %d", result.Session.DroppedChunks)
 	}
@@ -1171,6 +1172,11 @@ func formatSessionWrite(result WriteResult) string {
 	}
 	fmt.Fprintf(&b, "\ninput_bytes: %d", result.InputBytes)
 	fmt.Fprintf(&b, "\nnext_seq: %d", result.NextSeq)
+	fmt.Fprintf(&b, "\nresume_after_seq: %d", resumeAfterSeq(ReadResult{
+		Session: result.Session,
+		Chunks:  result.Chunks,
+		NextSeq: result.NextSeq,
+	}, 0))
 	if result.Session.DroppedChunks > 0 {
 		fmt.Fprintf(&b, "\ndropped_chunks: %d", result.Session.DroppedChunks)
 	}
@@ -1182,6 +1188,19 @@ func formatSessionWrite(result WriteResult) string {
 		fmt.Fprintf(&b, "\n[%s #%d]\n%s", chunk.Stream, chunk.Seq, chunk.Text)
 	}
 	return b.String()
+}
+
+func resumeAfterSeq(result ReadResult, afterSeq int) int {
+	resume := afterSeq
+	if result.NextSeq > 0 {
+		resume = maxInt(resume, result.NextSeq-1)
+	}
+	for _, chunk := range result.Chunks {
+		if chunk.Seq > resume {
+			resume = chunk.Seq
+		}
+	}
+	return resume
 }
 
 func formatSessionResize(session CommandSession) string {

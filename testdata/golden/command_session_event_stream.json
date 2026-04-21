@@ -45,7 +45,7 @@
     "turn": 2,
     "tool_id": "write-1",
     "tool_name": "write_command_input",
-    "tool_result": "wrote input to command session server-1: npm run dev\nstatus: running\ntty: true\nsize: 100x30\ninput_bytes: 6\nnext_seq: 2\n[pty #1]\necho:hello\n"
+    "tool_result": "wrote input to command session server-1: npm run dev\nstatus: running\ntty: true\nsize: 100x30\ninput_bytes: 6\nnext_seq: 2\nresume_after_seq: 1\n[pty #1]\necho:hello\n"
   },
   {
     "kind": "command_input",

@@ -385,7 +385,12 @@ such as dev servers, watchers, or background checks. `start_command`,
 host-owned `Starter`, `Writer`, `Resizer`, `Reader`, `Waiter`, `Stopper`, and
 `Lister` interfaces. Session tools remain argv-only,
 transcript-visible, and metadata-driven. They do not introduce hidden shell
-state into the core loop. `commandtools.SessionCleanupOptions`
+state into the core loop. Read, write, and wait results include
+`resume_after_seq`, the prompt-visible value to pass back as `after_seq` when
+continuing a session without replaying already-seen output. Write results use
+the post-write output head as the resume cursor because writes do not accept a
+caller-supplied `after_seq`.
+`commandtools.SessionCleanupOptions`
 adapts a `Cleaner` into a `SessionEnded` hook so host-managed processes can be
 cleaned up when the parent agent session finishes. `commandtools.OSSessionManager`
 is the reference local adapter for real managed processes: rooted cwd
