@@ -414,6 +414,10 @@ chunks separately from `session.Store`. This mirrors the SDK boundary between
 conversation persistence and tool-owned state: a resumed agent can inspect
 durable command output through explicit tools or host UI, but the kernel still
 does not hide background shell state inside the conversation store.
+`toolkit/commandtools/sqlitestore` is the embedded durable adapter for that
+seam, following the same SQLite transaction discipline used elsewhere in the
+SDK so transcript inspection survives manager restarts without changing the
+live command-session tool contract.
 The `sandbox` package complements these local adapters by adapting host-owned
 sandbox-backed command/session backends into the same commandtool interfaces
 plus hook cleanup, making remote or container-backed execution an adapter
