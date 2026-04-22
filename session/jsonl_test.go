@@ -80,6 +80,23 @@ func TestJSONLStoreCanonicalizesInputSessionIDs(t *testing.T) {
 	}
 }
 
+func TestJSONLStoreCanonicalizesMissingTranscriptSessionIDFallback(t *testing.T) {
+	dir := t.TempDir()
+	id := "00000000-0000-7000-8000-000000000000"
+	path := filepath.Join(dir, id+transcriptExt)
+	if err := os.WriteFile(path, []byte("{\"type\":\"session\",\"session\":{}}\n"), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	got, err := NewJSONLStore(dir).Get(context.Background(), strings.ToUpper(id))
+	if err != nil {
+		t.Fatalf("Get returned error: %v", err)
+	}
+	if got.ID != id {
+		t.Fatalf("Get ID = %q, want canonical %q", got.ID, id)
+	}
+}
+
 func TestJSONLStoreCreateWithParent(t *testing.T) {
 	store := NewJSONLStore(t.TempDir())
 	sess, err := store.CreateWithOptions(context.Background(), CreateOptions{

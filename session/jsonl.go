@@ -218,7 +218,7 @@ func (s *JSONLStore) readTranscript(_ context.Context, id string) (Session, []mo
 		if entry.Type == "session" && entry.Session != nil {
 			session = *entry.Session
 			if session.ID == "" {
-				session.ID = id
+				session.ID = canonicalID
 			}
 			continue
 		}
