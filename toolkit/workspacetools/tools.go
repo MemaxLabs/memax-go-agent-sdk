@@ -48,6 +48,13 @@ type UnifiedDiffPatcher interface {
 	ApplyUnifiedDiff(context.Context, string, workspace.PatchOptions) (workspace.PatchResult, error)
 }
 
+// UnifiedDiffPatchStore is the workspace capability required by the
+// unified-diff-only patch tool.
+type UnifiedDiffPatchStore interface {
+	Patcher
+	UnifiedDiffPatcher
+}
+
 // PatchReviewRequest is sent to a reviewer after a patch has been validated
 // and previewed but before mutation.
 type PatchReviewRequest struct {
@@ -197,6 +204,14 @@ func NewApplyPatchTool(store Patcher) tool.Tool {
 	return NewApplyPatchToolWithReview(store, nil)
 }
 
+// NewUnifiedDiffApplyPatchTool returns a destructive tool for applying standard
+// unified diffs to the configured workspace. Use this narrower patch surface
+// for coding agents that perform better when there is exactly one patch input
+// shape.
+func NewUnifiedDiffApplyPatchTool(store UnifiedDiffPatchStore) tool.Tool {
+	return NewUnifiedDiffApplyPatchToolWithReview(store, nil)
+}
+
 // NewApplyPatchToolWithReview returns a destructive patch tool that validates
 // and previews the requested change, passes the summary to reviewer, and only
 // mutates the workspace when the reviewer allows it. Dry-run requests never
@@ -266,20 +281,57 @@ func NewApplyPatchToolWithReview(store Patcher, reviewer PatchReviewer) tool.Too
 			if err != nil {
 				return model.ToolResult{}, err
 			}
-			summary := workspace.SummarizeChanges(result.Changes)
-			return model.ToolResult{
-				Content: formatPatchResult(result),
-				Metadata: map[string]any{
-					model.MetadataWorkspaceOperation: "patch",
-					model.MetadataWorkspaceChanges:   summary.Files,
-					model.MetadataWorkspaceAdded:     summary.Added,
-					model.MetadataWorkspaceModified:  summary.Modified,
-					model.MetadataWorkspaceDeleted:   summary.Deleted,
-					model.MetadataWorkspaceByteDelta: summary.ByteDelta,
-					model.MetadataWorkspacePaths:     summary.Paths,
-					"dry_run":                        result.DryRun,
+			return patchToolResult(result), nil
+		},
+	}
+}
+
+// NewUnifiedDiffApplyPatchToolWithReview returns a destructive patch tool like
+// NewApplyPatchToolWithReview, but its model-facing schema accepts only
+// unified_diff plus dry_run. The tool name remains workspace_apply_patch so the
+// surrounding coding policies, approval summaries, and event handling stay the
+// same while hosts can choose the simpler patch input contract.
+func NewUnifiedDiffApplyPatchToolWithReview(store UnifiedDiffPatchStore, reviewer PatchReviewer) tool.Tool {
+	return tool.Definition{
+		ToolSpec: model.ToolSpec{
+			Name:           ApplyPatchToolName,
+			Description:    "Apply a standard unified diff to the configured workspace. Set dry_run to validate and preview without mutating files.",
+			SearchHint:     "apply unified diff patch edit write workspace files source code",
+			Destructive:    true,
+			MaxResultBytes: 32 * 1024,
+			InputSchema: map[string]any{
+				"type":                 "object",
+				"required":             []any{"unified_diff"},
+				"additionalProperties": false,
+				"properties": map[string]any{
+					"unified_diff": map[string]any{
+						"type":        "string",
+						"description": "Standard unified diff with ---/+++ file headers and @@ hunks. Do not pass structured operations to this tool.",
+						"minLength":   1,
+					},
+					"dry_run": map[string]any{
+						"type":        "boolean",
+						"description": "Validate and preview the patch without mutating workspace state.",
+					},
 				},
-			}, nil
+			},
+		},
+		Handler: func(ctx context.Context, call tool.Call) (model.ToolResult, error) {
+			input, err := tool.DecodeInput[unifiedDiffPatchInput](call.Use)
+			if err != nil {
+				return model.ToolResult{}, err
+			}
+			if strings.TrimSpace(input.UnifiedDiff) == "" {
+				return model.ToolResult{}, fmt.Errorf("workspacetools: unified_diff is required")
+			}
+			result, err := applyPatchInput(ctx, store, call.Use, patchInput{
+				UnifiedDiff: input.UnifiedDiff,
+				DryRun:      input.DryRun,
+			}, reviewer)
+			if err != nil {
+				return model.ToolResult{}, err
+			}
+			return patchToolResult(result), nil
 		},
 	}
 }
@@ -444,6 +496,11 @@ type patchInput struct {
 	Operations  []patchOperationInput `json:"operations"`
 	UnifiedDiff string                `json:"unified_diff"`
 	DryRun      bool                  `json:"dry_run"`
+}
+
+type unifiedDiffPatchInput struct {
+	UnifiedDiff string `json:"unified_diff"`
+	DryRun      bool   `json:"dry_run"`
 }
 
 type patchOperationInput struct {
@@ -652,6 +709,23 @@ func reviewPatch(ctx context.Context, reviewer PatchReviewer, use model.ToolUse,
 		reason = "workspace patch denied by reviewer"
 	}
 	return workspace.PatchResult{}, fmt.Errorf("workspacetools: %s", reason)
+}
+
+func patchToolResult(result workspace.PatchResult) model.ToolResult {
+	summary := workspace.SummarizeChanges(result.Changes)
+	return model.ToolResult{
+		Content: formatPatchResult(result),
+		Metadata: map[string]any{
+			model.MetadataWorkspaceOperation: "patch",
+			model.MetadataWorkspaceChanges:   summary.Files,
+			model.MetadataWorkspaceAdded:     summary.Added,
+			model.MetadataWorkspaceModified:  summary.Modified,
+			model.MetadataWorkspaceDeleted:   summary.Deleted,
+			model.MetadataWorkspaceByteDelta: summary.ByteDelta,
+			model.MetadataWorkspacePaths:     summary.Paths,
+			"dry_run":                        result.DryRun,
+		},
+	}
 }
 
 func formatPatchResult(result workspace.PatchResult) string {

@@ -233,6 +233,70 @@ func TestNewAssemblesCodingRuntime(t *testing.T) {
 	}
 }
 
+func TestNewCanExposeUnifiedDiffOnlyPatchTool(t *testing.T) {
+	t.Parallel()
+
+	stack, err := New(Config{
+		Workspace:               workspace.NewMemoryStore(map[string]string{"README.md": "before\n"}),
+		WorkspacePatchInputMode: WorkspacePatchInputUnifiedDiff,
+		Policies: Policies{
+			RequireCheckpointBeforePatch: false,
+		},
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	patchSpec, ok := toolSpec(stack.Registry(), workspacetools.ApplyPatchToolName)
+	if !ok {
+		t.Fatalf("registry missing %q", workspacetools.ApplyPatchToolName)
+	}
+	properties, ok := patchSpec.InputSchema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("patch input schema properties = %#v, want object", patchSpec.InputSchema["properties"])
+	}
+	if _, ok := properties["unified_diff"]; !ok {
+		t.Fatalf("patch input schema = %#v, want unified_diff property", patchSpec.InputSchema)
+	}
+	if _, ok := properties["operations"]; ok {
+		t.Fatalf("patch input schema = %#v, did not want operations property", patchSpec.InputSchema)
+	}
+
+	result := runTool(t, tool.Executor{Registry: stack.Registry()}, workspacetools.ApplyPatchToolName, map[string]any{
+		"operations": []map[string]any{{
+			"path":        "README.md",
+			"new_content": "after\n",
+		}},
+	})
+	if !result.IsError || !strings.Contains(result.Content, "additional properties") {
+		t.Fatalf("result = %#v, want schema rejection for operations", result)
+	}
+}
+
+func TestNewRejectsUnknownWorkspacePatchInputMode(t *testing.T) {
+	t.Parallel()
+
+	_, err := New(Config{
+		Workspace:               workspace.NewMemoryStore(nil),
+		WorkspacePatchInputMode: WorkspacePatchInputMode("magic"),
+	})
+	if err == nil || !strings.Contains(err.Error(), `unknown workspace patch input mode "magic"`) {
+		t.Fatalf("New() error = %v, want unknown patch input mode", err)
+	}
+}
+
+func TestNewRejectsUnifiedDiffModeWithoutUnifiedDiffStore(t *testing.T) {
+	t.Parallel()
+
+	_, err := New(Config{
+		Workspace:               patchOnlyWorkspaceStore{},
+		WorkspacePatchInputMode: WorkspacePatchInputUnifiedDiff,
+	})
+	if err == nil || !strings.Contains(err.Error(), "requires workspace store with unified diff support") {
+		t.Fatalf("New() error = %v, want unified diff support error", err)
+	}
+}
+
 func TestNewClonesBaseHooks(t *testing.T) {
 	t.Parallel()
 
@@ -698,6 +762,44 @@ func (fakeClient) Stream(context.Context, model.Request) (model.Stream, error) {
 	return nil, nil
 }
 
+type patchOnlyWorkspaceStore struct{}
+
+func (patchOnlyWorkspaceStore) ReadFile(context.Context, string) (string, error) {
+	return "", nil
+}
+
+func (patchOnlyWorkspaceStore) WriteFile(context.Context, string, string) error {
+	return nil
+}
+
+func (patchOnlyWorkspaceStore) DeleteFile(context.Context, string) error {
+	return nil
+}
+
+func (patchOnlyWorkspaceStore) ListFiles(context.Context, string) ([]string, error) {
+	return nil, nil
+}
+
+func (patchOnlyWorkspaceStore) ApplyPatch(context.Context, []workspace.PatchOperation) (workspace.PatchResult, error) {
+	return workspace.PatchResult{}, nil
+}
+
+func (patchOnlyWorkspaceStore) Diff(context.Context, string) (workspace.Diff, error) {
+	return workspace.Diff{}, nil
+}
+
+func (patchOnlyWorkspaceStore) Checkpoint(context.Context, workspace.CheckpointOptions) (workspace.Checkpoint, error) {
+	return workspace.Checkpoint{}, nil
+}
+
+func (patchOnlyWorkspaceStore) Restore(context.Context, string) (workspace.Checkpoint, error) {
+	return workspace.Checkpoint{}, nil
+}
+
+func (patchOnlyWorkspaceStore) ListCheckpoints(context.Context) ([]workspace.Checkpoint, error) {
+	return nil, nil
+}
+
 func runTool(t *testing.T, exec tool.Executor, name string, input any) model.ToolResult {
 	t.Helper()
 	data, err := json.Marshal(input)
@@ -723,6 +825,15 @@ func toolNames(registry *tool.Registry) []string {
 		names = append(names, spec.Name)
 	}
 	return names
+}
+
+func toolSpec(registry *tool.Registry, name string) (model.ToolSpec, bool) {
+	for _, spec := range registry.Specs() {
+		if spec.Name == name {
+			return spec, true
+		}
+	}
+	return model.ToolSpec{}, false
 }
 
 func contains(values []string, want string) bool {

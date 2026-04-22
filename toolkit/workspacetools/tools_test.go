@@ -134,6 +134,69 @@ func TestApplyPatchToolAppliesUnifiedDiffAndDryRun(t *testing.T) {
 	}
 }
 
+func TestUnifiedDiffApplyPatchToolAppliesDiff(t *testing.T) {
+	store := workspace.NewMemoryStore(map[string]string{"README.md": "hello\nworld"})
+	applied := mustExecute(t, NewUnifiedDiffApplyPatchTool(store), model.ToolUse{
+		ID:   "patch-1",
+		Name: ApplyPatchToolName,
+		Input: json.RawMessage(`{
+			"unified_diff": "--- a/README.md\n+++ b/README.md\n@@ -1,2 +1,2 @@\n hello\n-world\n+workspace"
+		}`),
+	})
+	if applied.IsError {
+		t.Fatalf("applied result = %#v, want success", applied)
+	}
+	if applied.Metadata[model.MetadataWorkspaceOperation] != "patch" || applied.Metadata[model.MetadataWorkspaceChanges] != 1 {
+		t.Fatalf("applied metadata = %#v, want workspace patch metadata", applied.Metadata)
+	}
+	content, err := store.ReadFile(context.Background(), "README.md")
+	if err != nil {
+		t.Fatalf("ReadFile returned error: %v", err)
+	}
+	if content != "hello\nworkspace" {
+		t.Fatalf("content = %q, want applied unified diff", content)
+	}
+}
+
+func TestUnifiedDiffApplyPatchToolSchemaRejectsOperations(t *testing.T) {
+	store := workspace.NewMemoryStore(map[string]string{"README.md": "hello"})
+	registry := tool.NewRegistry(NewUnifiedDiffApplyPatchTool(store))
+	results := collect(tool.Executor{Registry: registry}.Run(context.Background(), []model.ToolUse{{
+		ID:   "patch-1",
+		Name: ApplyPatchToolName,
+		Input: json.RawMessage(`{
+			"operations":[{"path":"README.md","new_content":"changed"}]
+		}`),
+	}}))
+	if got, want := len(results), 1; got != want {
+		t.Fatalf("len(results) = %d, want %d", got, want)
+	}
+	if !results[0].IsError || !strings.Contains(results[0].Content, "additional properties") {
+		t.Fatalf("result = %#v, want schema rejection for operations", results[0])
+	}
+	content, err := store.ReadFile(context.Background(), "README.md")
+	if err != nil {
+		t.Fatalf("ReadFile returned error: %v", err)
+	}
+	if content != "hello" {
+		t.Fatalf("content = %q, want unchanged", content)
+	}
+}
+
+func TestUnifiedDiffApplyPatchToolRequiresDiff(t *testing.T) {
+	store := workspace.NewMemoryStore(map[string]string{"README.md": "hello"})
+	_, err := NewUnifiedDiffApplyPatchTool(store).Execute(context.Background(), tool.Call{
+		Use: model.ToolUse{
+			ID:    "patch-1",
+			Name:  ApplyPatchToolName,
+			Input: json.RawMessage(`{}`),
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "unified_diff is required") {
+		t.Fatalf("Execute error = %v, want unified_diff required", err)
+	}
+}
+
 func TestApplyPatchToolRejectsMultiplePatchFormats(t *testing.T) {
 	store := workspace.NewMemoryStore(map[string]string{"README.md": "hello"})
 	_, err := NewApplyPatchTool(store).Execute(context.Background(), tool.Call{
@@ -301,4 +364,12 @@ func mustExecute(t *testing.T, impl tool.Tool, use model.ToolUse) model.ToolResu
 		t.Fatalf("Execute %s returned error: %v", use.Name, err)
 	}
 	return result
+}
+
+func collect(ch <-chan model.ToolResult) []model.ToolResult {
+	var results []model.ToolResult
+	for result := range ch {
+		results = append(results, result)
+	}
+	return results
 }

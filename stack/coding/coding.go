@@ -41,6 +41,11 @@ type Config struct {
 
 	Workspace     workspace.Store
 	PatchReviewer workspacetools.PatchReviewer
+	// WorkspacePatchInputMode controls the model-facing input schema for
+	// workspace_apply_patch. The zero value keeps the flexible SDK schema.
+	// CLIs should prefer WorkspacePatchInputUnifiedDiff to reduce malformed
+	// patch calls from models that only need one edit representation.
+	WorkspacePatchInputMode WorkspacePatchInputMode
 
 	Tasks                       tasktools.Store
 	TaskPlannerOptions          []planner.TaskSourceOption
@@ -54,6 +59,21 @@ type Config struct {
 
 	Policies Policies
 }
+
+// WorkspacePatchInputMode selects the input contract exposed by the
+// workspace_apply_patch tool in the coding stack.
+type WorkspacePatchInputMode string
+
+const (
+	// WorkspacePatchInputFlexible accepts either structured operations or a
+	// unified diff. This is the default SDK surface for hosts that want both
+	// machine-generated guarded edits and diff-based edits.
+	WorkspacePatchInputFlexible WorkspacePatchInputMode = ""
+	// WorkspacePatchInputUnifiedDiff accepts only unified_diff plus dry_run.
+	// This is the preferred coding-agent CLI surface because it removes the
+	// mutually-exclusive operations/unified_diff choice from the model.
+	WorkspacePatchInputUnifiedDiff WorkspacePatchInputMode = "unified_diff"
+)
 
 // Policies configures the optional safety and governance layer for the coding
 // stack. The zero value is intentionally conservative about hidden behavior:
@@ -155,6 +175,19 @@ func validateConfig(config Config) error {
 	if config.PatchReviewer != nil && config.Workspace == nil {
 		return fmt.Errorf("coding stack: patch reviewer requires workspace store")
 	}
+	switch config.WorkspacePatchInputMode {
+	case WorkspacePatchInputFlexible, WorkspacePatchInputUnifiedDiff:
+	default:
+		return fmt.Errorf("coding stack: unknown workspace patch input mode %q", config.WorkspacePatchInputMode)
+	}
+	if config.WorkspacePatchInputMode != WorkspacePatchInputFlexible && config.Workspace == nil {
+		return fmt.Errorf("coding stack: workspace patch input mode requires workspace store")
+	}
+	if config.WorkspacePatchInputMode == WorkspacePatchInputUnifiedDiff {
+		if _, ok := any(config.Workspace).(workspacetools.UnifiedDiffPatchStore); !ok {
+			return fmt.Errorf("coding stack: unified-diff patch input mode requires workspace store with unified diff support")
+		}
+	}
 	if policies.RequireCheckpointBeforePatch && config.Workspace == nil {
 		return fmt.Errorf("coding stack: checkpoint-before-patch requires workspace store")
 	}
@@ -211,10 +244,18 @@ func configureVerifier(config Config) (verifytools.Verifier, *agentpolicy.Rollba
 
 func registerTools(registry *tool.Registry, config Config, verifier verifytools.Verifier) error {
 	if config.Workspace != nil {
+		patchTool := workspacetools.NewApplyPatchToolWithReview(config.Workspace, config.PatchReviewer)
+		if config.WorkspacePatchInputMode == WorkspacePatchInputUnifiedDiff {
+			unifiedStore, ok := any(config.Workspace).(workspacetools.UnifiedDiffPatchStore)
+			if !ok {
+				return fmt.Errorf("coding stack: unified-diff patch input mode requires workspace store with unified diff support")
+			}
+			patchTool = workspacetools.NewUnifiedDiffApplyPatchToolWithReview(unifiedStore, config.PatchReviewer)
+		}
 		tools := []tool.Tool{
 			workspacetools.NewReadTool(config.Workspace),
 			workspacetools.NewListTool(config.Workspace),
-			workspacetools.NewApplyPatchToolWithReview(config.Workspace, config.PatchReviewer),
+			patchTool,
 			workspacetools.NewDiffTool(config.Workspace),
 			workspacetools.NewCheckpointTool(config.Workspace),
 			workspacetools.NewRestoreTool(config.Workspace),
