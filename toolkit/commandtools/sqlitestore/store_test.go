@@ -151,6 +151,76 @@ func TestStoreReadDefensiveCopiesPagingAndPersistence(t *testing.T) {
 	}
 }
 
+func TestNewMigratesPreCommandStringSchema(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "command-transcripts.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("sql.Open() error = %v", err)
+	}
+	if _, err := db.Exec(`
+		CREATE TABLE memax_command_transcript_sessions (
+			id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL DEFAULT '',
+			parent_session_id TEXT NOT NULL DEFAULT '',
+			identity_json TEXT NOT NULL DEFAULT '{}',
+			argv_json TEXT NOT NULL DEFAULT '[]',
+			cwd TEXT NOT NULL DEFAULT '',
+			purpose TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL,
+			pid INTEGER NOT NULL DEFAULT 0,
+			tty INTEGER NOT NULL DEFAULT 0,
+			cols INTEGER NOT NULL DEFAULT 0,
+			rows INTEGER NOT NULL DEFAULT 0,
+			signals_process_tree INTEGER NOT NULL DEFAULT 0,
+			started_at_unix_ms INTEGER NOT NULL,
+			finished_at_unix_ms INTEGER,
+			exit_code INTEGER,
+			timed_out INTEGER NOT NULL DEFAULT 0,
+			next_seq INTEGER NOT NULL DEFAULT 1,
+			dropped_chunks INTEGER NOT NULL DEFAULT 0,
+			dropped_bytes INTEGER NOT NULL DEFAULT 0
+		)
+	`); err != nil {
+		t.Fatalf("create pre-upgrade schema error = %v", err)
+	}
+	if has, err := hasCommandStringColumn(db); err != nil || has {
+		t.Fatalf("hasCommandStringColumn(pre-upgrade) = %t, %v; want false, nil", has, err)
+	}
+
+	store, err := New(context.Background(), db)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if has, err := hasCommandStringColumn(db); err != nil || !has {
+		t.Fatalf("hasCommandStringColumn(after New) = %t, %v; want true, nil", has, err)
+	}
+
+	session := commandtools.CommandSession{
+		ID:        "cmd-1",
+		SessionID: "agent-1",
+		Command:   "go test ./...",
+		Argv:      []string{"go", "test", "./..."},
+		Status:    commandtools.SessionRunning,
+		StartedAt: time.Now().UTC(),
+		NextSeq:   1,
+	}
+	if err := store.SaveCommandSession(context.Background(), session); err != nil {
+		t.Fatalf("SaveCommandSession() error = %v", err)
+	}
+	saved, err := store.CommandSession(context.Background(), "cmd-1")
+	if err != nil {
+		t.Fatalf("CommandSession() error = %v", err)
+	}
+	if saved.Command != "go test ./..." {
+		t.Fatalf("saved.Command = %q, want command string persisted through migrated column", saved.Command)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("db.Close() error = %v", err)
+	}
+}
+
 func TestStoreVisibilityListAndDelete(t *testing.T) {
 	t.Parallel()
 
@@ -382,6 +452,34 @@ func newTestStore(t *testing.T) *Store {
 		t.Fatalf("New() error = %v", err)
 	}
 	return store
+}
+
+func hasCommandStringColumn(db *sql.DB) (bool, error) {
+	rows, err := db.Query(`PRAGMA table_info(memax_command_transcript_sessions)`)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			cid        int
+			name       string
+			columnType string
+			notNull    int
+			defaultVal any
+			pk         int
+		)
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultVal, &pk); err != nil {
+			return false, err
+		}
+		if name == "command_string" {
+			return true, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	return false, nil
 }
 
 func commandSessionIDs(sessions []commandtools.CommandSession) []string {
