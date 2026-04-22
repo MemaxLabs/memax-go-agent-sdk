@@ -1,9 +1,11 @@
 // Package commandtools provides host-owned command execution tools.
 //
 // The core SDK stays system-neutral: command execution is exposed only when a
-// host installs a Runner-backed tool. The default OSRunner executes argv
-// directly without an implicit shell so approval, audit, and timeout policy can
-// reason about the exact process being launched.
+// host installs a Runner-backed tool. NewTool gives models a shell-string
+// command surface for coding-agent ergonomics; NewExecTool keeps an exact argv
+// schema available for hosts that need it. The default OSRunner executes argv
+// directly, so approval, audit, and timeout policy can still reason about the
+// exact process being launched.
 package commandtools
 
 import (
@@ -15,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -40,6 +43,7 @@ const (
 const (
 	MetadataCommandOperation       = model.MetadataCommandOperation
 	MetadataCommandArgv            = model.MetadataCommandArgv
+	MetadataCommandString          = model.MetadataCommandString
 	MetadataCommandCWD             = model.MetadataCommandCWD
 	MetadataCommandExitCode        = model.MetadataCommandExitCode
 	MetadataCommandTimedOut        = model.MetadataCommandTimedOut
@@ -54,6 +58,7 @@ type Request struct {
 	SessionID       string
 	ParentSessionID string
 	Identity        identity.Identity
+	Command         string
 	Argv            []string
 	CWD             string
 	Env             map[string]string
@@ -68,6 +73,7 @@ type Request struct {
 // and retry.
 type Result struct {
 	Argv            []string
+	Command         string
 	CWD             string
 	ExitCode        int
 	TimedOut        bool
@@ -112,19 +118,40 @@ type Config struct {
 	MaxStdinBytes   int
 	MaxOutputBytes  int
 	MaxResultBytes  int
+	// Shell is the argv prefix used by NewTool for shell-string commands, for
+	// example []string{"bash", "-lc"}. The command string is appended as the
+	// final argv element. If Shell is empty, NewTool uses the platform default
+	// shell.
+	Shell []string
 }
 
-// NewTool returns a command execution tool backed by a host-owned Runner.
-// Commands are argv arrays, not shell strings. Hosts that want shell behavior
-// should expose it explicitly through their Runner or a separate tool.
+// NewTool returns a model-friendly shell command tool backed by a host-owned
+// Runner. The tool accepts a single command string and executes it through a
+// shell argv prefix, preserving exact executed argv and the original command
+// string in result metadata.
 func NewTool(config Config) tool.Tool {
+	return newTool(config, false)
+}
+
+// NewExecTool returns an exact argv command tool backed by a host-owned Runner.
+// It is useful for hosts that want process-level execution semantics without an
+// implicit shell. Coding agents should generally prefer NewTool.
+func NewExecTool(config Config) tool.Tool {
+	return newTool(config, true)
+}
+
+func newTool(config Config, useExecInput bool) tool.Tool {
 	name := strings.TrimSpace(config.Name)
 	if name == "" {
 		name = ToolName
 	}
 	description := strings.TrimSpace(config.Description)
 	if description == "" {
-		description = "Run a host-owned command by argv, capture stdout/stderr, and return exit status."
+		if useExecInput {
+			description = "Run a host-owned command by exact argv, capture stdout/stderr, and return exit status."
+		} else {
+			description = "Run a host-owned shell command string, capture stdout/stderr, and return exit status."
+		}
 	}
 	searchHint := strings.TrimSpace(config.SearchHint)
 	if searchHint == "" {
@@ -143,17 +170,13 @@ func NewTool(config Config) tool.Tool {
 			Destructive:     config.MayMutate,
 			ConcurrencySafe: config.ConcurrencySafe,
 			MaxResultBytes:  maxResultBytes,
-			InputSchema:     inputSchema(),
+			InputSchema:     inputSchema(useExecInput),
 		},
 		Handler: func(ctx context.Context, call tool.Call) (model.ToolResult, error) {
 			if config.Runner == nil {
 				return model.ToolResult{}, fmt.Errorf("commandtools: runner is required")
 			}
-			input, err := tool.DecodeInput[input](call.Use)
-			if err != nil {
-				return model.ToolResult{}, err
-			}
-			req, err := requestFromInput(input, config)
+			req, err := requestFromToolUse(call.Use, config, useExecInput)
 			if err != nil {
 				return model.ToolResult{}, err
 			}
@@ -173,6 +196,21 @@ func NewTool(config Config) tool.Tool {
 	}
 }
 
+func requestFromToolUse(use model.ToolUse, config Config, useExecInput bool) (Request, error) {
+	if useExecInput {
+		input, err := tool.DecodeInput[execInput](use)
+		if err != nil {
+			return Request{}, err
+		}
+		return requestFromExecInput(input, config)
+	}
+	input, err := tool.DecodeInput[shellInput](use)
+	if err != nil {
+		return Request{}, err
+	}
+	return requestFromShellInput(input, config)
+}
+
 func validateStdin(stdin string, maxBytes int) error {
 	if maxBytes == 0 {
 		maxBytes = defaultMaxStdinBytes
@@ -190,20 +228,26 @@ func validateStdin(stdin string, maxBytes int) error {
 // run_command tool input. It is intentionally input-only: it does not inspect
 // the target workspace or classify shell syntax.
 func ApprovalSummaryFromRunInput(inputBytes []byte) (approvaltools.Summary, error) {
-	var input input
+	var input struct {
+		Command json.RawMessage `json:"command"`
+		Purpose string          `json:"purpose"`
+	}
 	if len(inputBytes) > 0 {
 		if err := json.Unmarshal(inputBytes, &input); err != nil {
 			return approvaltools.Summary{}, fmt.Errorf("commandtools: decode run input: %w", err)
 		}
 	}
-	argv := normalizeArgv(input.Command)
-	if len(argv) == 0 {
+	command, err := commandDisplayFromRaw(input.Command)
+	if err != nil {
+		return approvaltools.Summary{}, err
+	}
+	if command == "" {
 		return approvaltools.Summary{}, nil
 	}
-	title := "Run command: " + strings.Join(argv, " ")
+	title := "Run command: " + command
 	description := strings.TrimSpace(input.Purpose)
 	if description == "" {
-		description = "Execute host-owned command " + strings.Join(argv, " ")
+		description = "Execute host-owned command " + command
 	}
 	risk := "May read or mutate host-owned state depending on the runner and command."
 	return approvaltools.Summary{
@@ -214,7 +258,40 @@ func ApprovalSummaryFromRunInput(inputBytes []byte) (approvaltools.Summary, erro
 	}, nil
 }
 
-type input struct {
+func commandDisplayFromRaw(raw json.RawMessage) (string, error) {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+		return "", nil
+	}
+	switch raw[0] {
+	case '"':
+		var command string
+		if err := json.Unmarshal(raw, &command); err != nil {
+			return "", fmt.Errorf("commandtools: decode command: %w", err)
+		}
+		return strings.TrimSpace(command), nil
+	case '[':
+		var argv []string
+		if err := json.Unmarshal(raw, &argv); err != nil {
+			return "", fmt.Errorf("commandtools: decode command argv: %w", err)
+		}
+		return strings.Join(normalizeArgv(argv), " "), nil
+	default:
+		return "", fmt.Errorf("commandtools: command must be a string or argv array")
+	}
+}
+
+type shellInput struct {
+	Command   string            `json:"command"`
+	CWD       string            `json:"cwd"`
+	Env       map[string]string `json:"env"`
+	Stdin     string            `json:"stdin"`
+	TimeoutMS int               `json:"timeout_ms"`
+	Purpose   string            `json:"purpose"`
+	Metadata  map[string]any    `json:"metadata"`
+}
+
+type execInput struct {
 	Command   []string          `json:"command"`
 	CWD       string            `json:"cwd"`
 	Env       map[string]string `json:"env"`
@@ -224,11 +301,58 @@ type input struct {
 	Metadata  map[string]any    `json:"metadata"`
 }
 
-func requestFromInput(input input, config Config) (Request, error) {
+func requestFromShellInput(input shellInput, config Config) (Request, error) {
+	command := strings.TrimSpace(input.Command)
+	if command == "" {
+		return Request{}, fmt.Errorf("commandtools: command must not be empty")
+	}
+	argv := shellArgv(command, config.Shell)
+	req, err := requestFromCommonInput(commonInput{
+		CWD:       input.CWD,
+		Env:       input.Env,
+		Stdin:     input.Stdin,
+		TimeoutMS: input.TimeoutMS,
+		Purpose:   input.Purpose,
+		Metadata:  input.Metadata,
+	}, config)
+	if err != nil {
+		return Request{}, err
+	}
+	req.Command = command
+	req.Argv = argv
+	return req, nil
+}
+
+func requestFromExecInput(input execInput, config Config) (Request, error) {
 	argv := normalizeArgv(input.Command)
 	if len(argv) == 0 {
 		return Request{}, fmt.Errorf("commandtools: command must contain at least one argv element")
 	}
+	req, err := requestFromCommonInput(commonInput{
+		CWD:       input.CWD,
+		Env:       input.Env,
+		Stdin:     input.Stdin,
+		TimeoutMS: input.TimeoutMS,
+		Purpose:   input.Purpose,
+		Metadata:  input.Metadata,
+	}, config)
+	if err != nil {
+		return Request{}, err
+	}
+	req.Argv = argv
+	return req, nil
+}
+
+type commonInput struct {
+	CWD       string
+	Env       map[string]string
+	Stdin     string
+	TimeoutMS int
+	Purpose   string
+	Metadata  map[string]any
+}
+
+func requestFromCommonInput(input commonInput, config Config) (Request, error) {
 	timeout := config.DefaultTimeout
 	if timeout <= 0 {
 		timeout = defaultTimeout
@@ -244,7 +368,6 @@ func requestFromInput(input input, config Config) (Request, error) {
 		return Request{}, fmt.Errorf("commandtools: timeout %s exceeds maximum %s", timeout, maxTimeout)
 	}
 	return Request{
-		Argv:     argv,
 		CWD:      strings.TrimSpace(input.CWD),
 		Env:      cloneStringMap(input.Env),
 		Stdin:    input.Stdin,
@@ -258,6 +381,10 @@ func resultToToolResult(result Result, req Request) model.ToolResult {
 	argv := result.Argv
 	if len(argv) == 0 {
 		argv = req.Argv
+	}
+	command := strings.TrimSpace(result.Command)
+	if command == "" {
+		command = strings.TrimSpace(req.Command)
 	}
 	cwd := strings.TrimSpace(result.CWD)
 	if cwd == "" {
@@ -277,6 +404,9 @@ func resultToToolResult(result Result, req Request) model.ToolResult {
 	}
 	metadata[MetadataCommandOperation] = "run"
 	metadata[MetadataCommandArgv] = append([]string(nil), argv...)
+	if command != "" {
+		metadata[MetadataCommandString] = command
+	}
 	metadata[MetadataCommandCWD] = cwd
 	metadata[MetadataCommandExitCode] = result.ExitCode
 	metadata[MetadataCommandTimedOut] = result.TimedOut
@@ -285,21 +415,25 @@ func resultToToolResult(result Result, req Request) model.ToolResult {
 	metadata[MetadataCommandStderrBytes] = stderrBytes
 	metadata[MetadataCommandOutputTruncated] = result.OutputTruncated
 	return model.ToolResult{
-		Content:  formatResult(result, argv),
+		Content:  formatResult(result, argv, command),
 		IsError:  result.TimedOut || result.ExitCode != 0,
 		Metadata: metadata,
 	}
 }
 
-func formatResult(result Result, argv []string) string {
+func formatResult(result Result, argv []string, command string) string {
 	status := "succeeded"
 	if result.TimedOut {
 		status = "timed out"
 	} else if result.ExitCode != 0 {
 		status = "failed"
 	}
+	display := strings.TrimSpace(command)
+	if display == "" {
+		display = strings.Join(argv, " ")
+	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "command %s: %s\nexit_code: %d", status, strings.Join(argv, " "), result.ExitCode)
+	fmt.Fprintf(&b, "command %s: %s\nexit_code: %d", status, display, result.ExitCode)
 	if result.TimedOut {
 		b.WriteString("\ntimed_out: true")
 	}
@@ -349,18 +483,26 @@ func limitStringBytes(input string, maxBytes int) (string, bool) {
 	return input[:maxBytes], true
 }
 
-func inputSchema() map[string]any {
+func inputSchema(useExecInput bool) map[string]any {
+	commandSchema := map[string]any{
+		"type":        "string",
+		"description": "Shell command string to execute. Pipes, redirects, globs, and shell operators are interpreted by the configured shell.",
+		"minLength":   1,
+	}
+	if useExecInput {
+		commandSchema = map[string]any{
+			"type":        "array",
+			"description": "Command argv vector. The first element is the executable. No shell is implied.",
+			"minItems":    1,
+			"items":       map[string]any{"type": "string"},
+		}
+	}
 	return map[string]any{
 		"type":                 "object",
 		"required":             []any{"command"},
 		"additionalProperties": false,
 		"properties": map[string]any{
-			"command": map[string]any{
-				"type":        "array",
-				"description": "Command argv vector. The first element is the executable. No shell is implied.",
-				"minItems":    1,
-				"items":       map[string]any{"type": "string"},
-			},
+			"command": commandSchema,
 			"cwd": map[string]any{
 				"type":        "string",
 				"description": "Optional runner-relative working directory.",
@@ -423,6 +565,9 @@ func (r *ScriptedRunner) RunCommand(ctx context.Context, req Request) (Result, e
 	r.results = r.results[1:]
 	if len(result.Argv) == 0 {
 		result.Argv = append([]string(nil), req.Argv...)
+	}
+	if result.Command == "" {
+		result.Command = req.Command
 	}
 	if result.CWD == "" {
 		result.CWD = req.CWD
@@ -536,6 +681,7 @@ func (r *OSRunner) RunCommand(ctx context.Context, req Request) (Result, error) 
 	err = cmd.Run()
 	duration := time.Since(started)
 	result := Result{
+		Command:         strings.TrimSpace(req.Command),
 		Argv:            append([]string(nil), argv...),
 		CWD:             cwd,
 		ExitCode:        exitCode(err),
@@ -666,6 +812,18 @@ func normalizeArgv(argv []string) []string {
 		out = append(out, arg)
 	}
 	return out
+}
+
+func shellArgv(command string, shell []string) []string {
+	prefix := normalizeArgv(shell)
+	if len(prefix) == 0 {
+		if runtime.GOOS == "windows" {
+			prefix = []string{"cmd", "/C"}
+		} else {
+			prefix = []string{"sh", "-c"}
+		}
+	}
+	return append(append([]string(nil), prefix...), command)
 }
 
 func cloneRequest(req Request) Request {

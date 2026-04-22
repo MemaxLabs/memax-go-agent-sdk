@@ -239,8 +239,9 @@ gateway needs a nonstandard route.
   full-event read, and calendar mutation tools over `scheduling` contracts.
 - `toolkit/workspacetools`: optional workspace read/list/patch/diff/checkpoint/restore tools over `workspace.Store`.
 - `toolkit/commandtools`: optional command execution tools over a host-owned
-  runner. The reference OS runner launches argv directly without an implicit
-  shell and applies cwd containment, timeouts, and output caps.
+  runner. The default model-facing tool accepts shell command strings; the
+  reference OS runner launches exact argv internally and applies cwd
+  containment, timeouts, and output caps.
 - `toolkit/approvaltools`: optional host approval request tool over an
   application-owned approver.
 - `toolkit/agentpolicy`: optional hook-based policy presets for common agent
@@ -371,19 +372,21 @@ checkpoint, task, or approval state without coupling verification to the core
 agent loop.
 
 The optional `toolkit/commandtools` package provides `run_command` over a
-host-owned `Runner`. The tool accepts an argv vector rather than a shell string,
-so the model, approval layer, and audit logs all refer to the exact executable
-and arguments. `commandtools.OSRunner` is a reference local adapter with
-root-confined cwd resolution, direct `os/exec` launch, timeout enforcement, and
-bounded stdout/stderr capture; it is not an OS sandbox, does not filter
+host-owned `Runner`. The default `commandtools.NewTool` accepts a shell command
+string because that is the model-friendly coding-agent surface; it records both
+the model-facing command string and the exact executed argv. Hosts that need a
+model-facing exact-argv schema can install `commandtools.NewExecTool` over the
+same runner interface. `commandtools.OSRunner` is a reference local adapter
+with root-confined cwd resolution, direct `os/exec` launch, timeout enforcement,
+and bounded stdout/stderr capture; it is not an OS sandbox, does not filter
 executables or arguments, and should be installed only by hosts that explicitly
 want local process execution. Hosts that need command allowlists, containers,
 network policy, or OS sandboxing should wrap or replace the runner. OSRunner
 does not inherit the host environment by default because environment variables
 often contain credentials. `ScriptedRunner` supports deterministic evals.
 Command results carry exit code, timeout, duration, retained output byte counts,
-truncation status, and argv metadata, which drive `EventCommandFinished` and
-`memax.command.*` metrics.
+truncation status, command-string metadata, and argv metadata, which drive
+`EventCommandFinished` and `memax.command.*` metrics.
 
 The same package also supports managed command sessions for longer-lived work
 such as dev servers, watchers, or background checks. `start_command`,
@@ -805,11 +808,13 @@ workspace-, and command-runner-neutral.
 
 Command governance presets reuse the same hook and approval primitives without
 making `run_command` special in the core loop. `AllowCommands` and
-`DenyCommands` match argv prefixes for `run_command` and return recoverable
-tool errors on policy denial. Matching is by argv element, not by shell string,
-because command execution is argv-only. `RequireApprovalBeforeCommands` gates
-selected argv prefixes behind `request_approval`. By default, approval is
-session-scoped for later commands matching the configured argv prefixes. With
+`DenyCommands` match command prefixes for `run_command` and return recoverable
+tool errors on policy denial. Prefix policies only match simple shell commands:
+shell control syntax such as `&&`, `;`, pipes, redirects, command substitution,
+or newlines is rejected instead of being partially matched. Exact-argv tools
+and result metadata are matched by argv element. `RequireApprovalBeforeCommands`
+gates selected command prefixes behind `request_approval`. By default, approval
+is session-scoped for later commands matching the configured prefixes. With
 input-bound and single-use command approval options, the approval result must
 carry the canonical hash of the exact later `run_command` input and the grant
 is consumed on first use.

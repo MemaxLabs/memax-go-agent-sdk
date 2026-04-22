@@ -323,7 +323,7 @@ func CodingPresetCIRepair() agenteval.Case {
 			ToolUse: model.ToolUse{
 				ID:    "cmd-1",
 				Name:  commandtools.ToolName,
-				Input: json.RawMessage(`{"command":["go","test","./..."],"purpose":"reproduce CI failure"}`),
+				Input: json.RawMessage(`{"command":"go test ./...","purpose":"reproduce CI failure"}`),
 			},
 		}},
 		[]model.StreamEvent{{
@@ -349,7 +349,7 @@ func CodingPresetCIRepair() agenteval.Case {
 			ToolUse: model.ToolUse{
 				ID:    "cmd-2",
 				Name:  commandtools.ToolName,
-				Input: json.RawMessage(`{"command":["go","test","./..."],"purpose":"confirm CI repair"}`),
+				Input: json.RawMessage(`{"command":"go test ./...","purpose":"confirm CI repair"}`),
 			},
 		}},
 		[]model.StreamEvent{{
@@ -509,7 +509,7 @@ func CodingPresetCIRepairApprovalRecovery() agenteval.Case {
 			ToolUse: model.ToolUse{
 				ID:    "cmd-1",
 				Name:  commandtools.ToolName,
-				Input: json.RawMessage(`{"command":["go","test","./..."],"purpose":"reproduce CI failure"}`),
+				Input: json.RawMessage(`{"command":"go test ./...","purpose":"reproduce CI failure"}`),
 			},
 		}},
 		[]model.StreamEvent{{
@@ -557,7 +557,7 @@ func CodingPresetCIRepairApprovalRecovery() agenteval.Case {
 			ToolUse: model.ToolUse{
 				ID:    "cmd-2",
 				Name:  commandtools.ToolName,
-				Input: json.RawMessage(`{"command":["go","test","./..."],"purpose":"confirm CI repair"}`),
+				Input: json.RawMessage(`{"command":"go test ./...","purpose":"confirm CI repair"}`),
 			},
 		}},
 		[]model.StreamEvent{{

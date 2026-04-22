@@ -252,6 +252,7 @@ type TenantEvent struct {
 type CommandEvent struct {
 	Operation          string
 	CommandID          string
+	Command            string
 	Argv               []string
 	CWD                string
 	Status             string

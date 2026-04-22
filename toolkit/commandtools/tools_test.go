@@ -28,7 +28,7 @@ func TestRunCommandToolReturnsProcessFailureAsToolError(t *testing.T) {
 		Use: model.ToolUse{
 			ID:    "cmd-1",
 			Name:  ToolName,
-			Input: json.RawMessage(`{"command":["go","test","./..."],"cwd":"pkg","timeout_ms":1000,"purpose":"run tests"}`),
+			Input: json.RawMessage(`{"command":"go test ./...","cwd":"pkg","timeout_ms":1000,"purpose":"run tests"}`),
 		},
 	})
 	if err != nil {
@@ -43,14 +43,42 @@ func TestRunCommandToolReturnsProcessFailureAsToolError(t *testing.T) {
 	if result.Metadata[MetadataCommandOperation] != "run" || result.Metadata[MetadataCommandExitCode] != 2 {
 		t.Fatalf("metadata = %#v", result.Metadata)
 	}
-	if got := result.Metadata[MetadataCommandArgv]; !sameStrings(got.([]string), []string{"go", "test", "./..."}) {
+	if got := result.Metadata[MetadataCommandString]; got != "go test ./..." {
+		t.Fatalf("command metadata = %#v", got)
+	}
+	if got := result.Metadata[MetadataCommandArgv]; !sameStrings(got.([]string), shellArgv("go test ./...", nil)) {
 		t.Fatalf("argv metadata = %#v", got)
 	}
 	requests := runner.Requests()
 	if len(requests) != 1 {
 		t.Fatalf("requests = %d, want 1", len(requests))
 	}
-	if requests[0].CWD != "pkg" || requests[0].Purpose != "run tests" || requests[0].Timeout != time.Second {
+	if requests[0].Command != "go test ./..." || !sameStrings(requests[0].Argv, shellArgv("go test ./...", nil)) || requests[0].CWD != "pkg" || requests[0].Purpose != "run tests" || requests[0].Timeout != time.Second {
+		t.Fatalf("request = %#v", requests[0])
+	}
+}
+
+func TestExecCommandToolUsesExactArgv(t *testing.T) {
+	runner := NewScriptedRunner(Result{ExitCode: 0})
+	runTool := NewExecTool(Config{Runner: runner})
+	result, err := runTool.Execute(context.Background(), tool.Call{
+		Use: model.ToolUse{
+			ID:    "cmd-1",
+			Name:  ToolName,
+			Input: json.RawMessage(`{"command":["go","test","./..."],"purpose":"run tests"}`),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("result.IsError = true, want success: %s", result.Content)
+	}
+	requests := runner.Requests()
+	if len(requests) != 1 {
+		t.Fatalf("requests = %d, want 1", len(requests))
+	}
+	if requests[0].Command != "" || !sameStrings(requests[0].Argv, []string{"go", "test", "./..."}) {
 		t.Fatalf("request = %#v", requests[0])
 	}
 }
@@ -83,7 +111,7 @@ func TestRunCommandToolCapsRunnerOutput(t *testing.T) {
 		Use: model.ToolUse{
 			ID:    "cmd-1",
 			Name:  ToolName,
-			Input: json.RawMessage(`{"command":["echo","large"]}`),
+			Input: json.RawMessage(`{"command":"echo large"}`),
 		},
 	})
 	if err != nil {
@@ -104,7 +132,7 @@ func TestRunCommandToolRejectsOversizedStdin(t *testing.T) {
 		Use: model.ToolUse{
 			ID:    "cmd-1",
 			Name:  ToolName,
-			Input: json.RawMessage(`{"command":["cat"],"stdin":"abcd"}`),
+			Input: json.RawMessage(`{"command":"cat","stdin":"abcd"}`),
 		},
 	})
 	if err == nil || !strings.Contains(err.Error(), "stdin") {
@@ -127,11 +155,21 @@ func TestLimitStringBytesDoesNotSplitRunes(t *testing.T) {
 }
 
 func TestApprovalSummaryFromRunInput(t *testing.T) {
-	summary, err := ApprovalSummaryFromRunInput([]byte(`{"command":["go","test","./..."],"purpose":"verify all packages"}`))
+	summary, err := ApprovalSummaryFromRunInput([]byte(`{"command":"go test ./...","purpose":"verify all packages"}`))
 	if err != nil {
 		t.Fatalf("ApprovalSummaryFromRunInput returned error: %v", err)
 	}
 	if summary.Title != "Run command: go test ./..." || summary.Description != "verify all packages" || summary.Changes != 1 {
+		t.Fatalf("summary = %#v", summary)
+	}
+}
+
+func TestApprovalSummaryFromRunInputAcceptsExecArgv(t *testing.T) {
+	summary, err := ApprovalSummaryFromRunInput([]byte(`{"command":["go","test","./..."]}`))
+	if err != nil {
+		t.Fatalf("ApprovalSummaryFromRunInput returned error: %v", err)
+	}
+	if summary.Title != "Run command: go test ./..." || summary.Changes != 1 {
 		t.Fatalf("summary = %#v", summary)
 	}
 }

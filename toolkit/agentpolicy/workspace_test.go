@@ -406,8 +406,35 @@ func TestCommandPolicyAllowAndDeny(t *testing.T) {
 	}
 }
 
+func TestCommandPolicyRejectsShellControlSyntax(t *testing.T) {
+	allow := AllowCommands(MatchCommandPrefix("npm", "install"))
+	allowed, err := allow.BeforeToolUse(context.Background(), commandStringInput("session-1", "npm install"))
+	if err != nil {
+		t.Fatalf("BeforeToolUse simple command returned error: %v", err)
+	}
+	if allowed.DenyReason != "" {
+		t.Fatalf("DenyReason = %q, want simple command allowed", allowed.DenyReason)
+	}
+	chained, err := allow.BeforeToolUse(context.Background(), commandStringInput("session-1", "npm install && rm -rf /tmp/victim"))
+	if err != nil {
+		t.Fatalf("BeforeToolUse chained allow command returned error: %v", err)
+	}
+	if !strings.Contains(chained.DenyReason, "shell control syntax") {
+		t.Fatalf("DenyReason = %q, want shell syntax denial", chained.DenyReason)
+	}
+
+	deny := DenyCommands(MatchCommandPrefix("rm", "-rf"))
+	bypassed, err := deny.BeforeToolUse(context.Background(), commandStringInput("session-1", "echo hi && rm -rf /tmp/victim"))
+	if err != nil {
+		t.Fatalf("BeforeToolUse chained deny command returned error: %v", err)
+	}
+	if !strings.Contains(bypassed.DenyReason, "shell control syntax") {
+		t.Fatalf("DenyReason = %q, want shell syntax denial", bypassed.DenyReason)
+	}
+}
+
 func TestCommandApprovalInputBoundSingleUse(t *testing.T) {
-	approvedInput := json.RawMessage(`{"command":["npm","test"],"purpose":"verify"}`)
+	approvedInput := json.RawMessage(`{"command":"npm test","purpose":"verify"}`)
 	policy := RequireApprovalBeforeCommands(
 		[]CommandMatcher{MatchCommandPrefix("npm", "test")},
 		WithCommandInputBoundApprovals(),
@@ -431,7 +458,7 @@ func TestCommandApprovalInputBoundSingleUse(t *testing.T) {
 		SessionID: "session-1",
 		Use: model.ToolUse{
 			Name:  commandtools.ToolName,
-			Input: json.RawMessage(`{"command":["npm","test"],"purpose":"different"}`),
+			Input: json.RawMessage(`{"command":"npm test","purpose":"different"}`),
 		},
 	})
 	if err != nil {
@@ -459,6 +486,17 @@ func TestCommandApprovalInputBoundSingleUse(t *testing.T) {
 	}
 	if again.DenyReason == "" {
 		t.Fatalf("DenyReason empty, want single-use grant consumed")
+	}
+}
+
+func TestCommandApprovalRequiresApprovalForShellControlSyntax(t *testing.T) {
+	policy := RequireApprovalBeforeCommands([]CommandMatcher{MatchCommandPrefix("npm", "test")})
+	denied, err := policy.BeforeToolUse(context.Background(), commandStringInput("session-1", "echo hi && npm test"))
+	if err != nil {
+		t.Fatalf("BeforeToolUse returned error: %v", err)
+	}
+	if !strings.Contains(denied.DenyReason, "request approval before running command") {
+		t.Fatalf("DenyReason = %q, want approval denial", denied.DenyReason)
 	}
 }
 
@@ -495,6 +533,33 @@ func TestVerifyAfterCommandsDeniesUntilVerificationPasses(t *testing.T) {
 	}
 	if allowed.DenyReason != "" {
 		t.Fatalf("DenyReason = %q, want final allowed after verification", allowed.DenyReason)
+	}
+}
+
+func TestVerifyAfterCommandsTreatsShellControlSyntaxAsDirty(t *testing.T) {
+	policy := RequireVerificationAfterCommands(MatchCommandPrefix("go", "generate"))
+	if err := policy.AfterToolUse(context.Background(), hook.AfterToolUseInput{
+		SessionID: "session-1",
+		Use:       model.ToolUse{Name: commandtools.ToolName},
+		Result: model.ToolResult{
+			Metadata: map[string]any{
+				model.MetadataCommandOperation:  "run",
+				model.MetadataCommandString:     "echo hi && go generate ./...",
+				model.MetadataCommandArgv:       []string{"sh", "-c", "echo hi && go generate ./..."},
+				model.MetadataCommandExitCode:   0,
+				model.MetadataCommandTimedOut:   false,
+				model.MetadataCommandDurationMS: 1,
+			},
+		},
+	}); err != nil {
+		t.Fatalf("AfterToolUse command returned error: %v", err)
+	}
+	denied, err := policy.BeforeFinal(context.Background(), hook.BeforeFinalInput{SessionID: "session-1"})
+	if err != nil {
+		t.Fatalf("BeforeFinal returned error: %v", err)
+	}
+	if denied.DenyReason != VerifyAfterCommandReason() {
+		t.Fatalf("DenyReason = %q, want verify-after-command reason", denied.DenyReason)
 	}
 }
 
@@ -641,6 +706,17 @@ func patchInput(sessionID string) hook.BeforeToolUseInput {
 
 func commandInput(sessionID string, argv []string) hook.BeforeToolUseInput {
 	data, _ := json.Marshal(map[string]any{"command": argv})
+	return hook.BeforeToolUseInput{
+		SessionID: sessionID,
+		Use: model.ToolUse{
+			Name:  commandtools.ToolName,
+			Input: data,
+		},
+	}
+}
+
+func commandStringInput(sessionID string, command string) hook.BeforeToolUseInput {
+	data, _ := json.Marshal(map[string]any{"command": command})
 	return hook.BeforeToolUseInput{
 		SessionID: sessionID,
 		Use: model.ToolUse{

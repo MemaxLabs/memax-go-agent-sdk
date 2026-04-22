@@ -94,10 +94,17 @@ system prompt.
   for checkpoint-before-patch recovery and model-mediated rollback guidance
   after failed verification, plus bounded verify-before-final gating after
   workspace mutations and explicit approval-before-tool gating with optional
-  single-use and input-bound grants. Command policy presets add argv-prefix
+  single-use and input-bound grants. Command policy presets add command-prefix
   allow/deny rules, exact-input approval for selected commands, and
   verify-before-final gates after matching commands, without hard-coding policy
   into the core loop.
+- Migrate command execution ergonomics from exact argv to shell-string input.
+  `commandtools.NewTool` now accepts model-facing shell command strings and
+  records both the original command string and the exact executed argv in
+  metadata. Hosts that need the former exact-argv input contract can expose
+  `commandtools.NewExecTool` over the same runner interface. Command-prefix
+  policies reject shell control syntax rather than partially matching compound
+  commands.
 - Add streaming tool execution. Initial provider tool-use lifecycle events
   (`tool_use_start`, `tool_use_delta`, complete `tool_use`) exist for OpenAI
   and Anthropic streams, and the agent loop can start read-only,

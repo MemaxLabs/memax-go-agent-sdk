@@ -116,8 +116,9 @@ result, not a terminal agent error, so the model can repair and retry or restore
 a checkpoint.
 
 Command events are metadata-derived from `run_command` and compatible custom
-command tools. `EventCommandFinished` carries argv, cwd, exit code, timeout
-status, duration, retained output byte counts, and truncation status.
+command tools. `EventCommandFinished` carries the executed argv, optional
+model-facing command string, cwd, exit code, timeout status, duration, retained
+output byte counts, and truncation status.
 Managed-session command tools can additionally emit `EventCommandStarted`,
 `EventCommandInput`, `EventCommandOutput`, `EventCommandResized`, and
 `EventCommandStopped` with a command session ID, status, optional PID, whether

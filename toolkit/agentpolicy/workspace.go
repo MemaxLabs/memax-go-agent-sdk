@@ -179,15 +179,16 @@ type VerifyBeforeFinal struct {
 	dirty map[string]bool
 }
 
-// CommandMatcher matches argv vectors for command policy presets. Prefix
-// matching is exact by argv element, not shell text, because commandtools uses
-// argv-only execution.
+// CommandMatcher matches simple command token prefixes for command policy
+// presets. Shell-string command inputs with shell control syntax are not
+// prefix-matchable and are denied by command allow/deny policies; exact argv
+// tools and command metadata are matched by argv element.
 type CommandMatcher struct {
 	Prefix []string
 }
 
-// MatchCommandPrefix returns a matcher that matches commands whose argv starts
-// with prefix.
+// MatchCommandPrefix returns a matcher that matches commands whose token prefix
+// starts with prefix.
 func MatchCommandPrefix(prefix ...string) CommandMatcher {
 	return CommandMatcher{Prefix: normalizeCommandArgs(prefix)}
 }
@@ -213,13 +214,13 @@ func WithCommandToolName(name string) CommandPolicyOption {
 }
 
 // AllowCommands returns a before-tool policy that allows only matching
-// run_command argv prefixes. Non-command tools are ignored.
+// run_command prefixes. Non-command tools are ignored.
 func AllowCommands(matchers ...CommandMatcher) *CommandPolicy {
 	return AllowCommandsWithOptions(matchers, nil)
 }
 
 // AllowCommandsWithOptions returns a before-tool policy that allows only
-// matching command argv prefixes, applying optional command policy settings.
+// matching command prefixes, applying optional command policy settings.
 func AllowCommandsWithOptions(matchers []CommandMatcher, options ...CommandPolicyOption) *CommandPolicy {
 	p := &CommandPolicy{toolName: commandtools.ToolName, allow: cloneCommandMatchers(matchers)}
 	for _, option := range options {
@@ -231,13 +232,13 @@ func AllowCommandsWithOptions(matchers []CommandMatcher, options ...CommandPolic
 }
 
 // DenyCommands returns a before-tool policy that denies matching run_command
-// argv prefixes. Non-command tools are ignored.
+// prefixes. Non-command tools are ignored.
 func DenyCommands(matchers ...CommandMatcher) *CommandPolicy {
 	return DenyCommandsWithOptions(matchers, nil)
 }
 
 // DenyCommandsWithOptions returns a before-tool policy that denies matching
-// command argv prefixes, applying optional command policy settings.
+// command prefixes, applying optional command policy settings.
 func DenyCommandsWithOptions(matchers []CommandMatcher, options ...CommandPolicyOption) *CommandPolicy {
 	p := &CommandPolicy{toolName: commandtools.ToolName, deny: cloneCommandMatchers(matchers)}
 	for _, option := range options {
@@ -293,7 +294,7 @@ func WithCommandApprovalCommandToolName(name string) CommandApprovalPolicyOption
 // RequireApprovalBeforeCommands denies matching run_command calls until the
 // model obtains approval for commandtools.ToolName through request_approval.
 // Without WithCommandInputBoundApprovals, a granted approval authorizes later
-// matching command argv prefixes for the session. WithCommandInputBoundApprovals
+// matching command prefixes for the session. WithCommandInputBoundApprovals
 // binds approval to the exact later command input.
 func RequireApprovalBeforeCommands(matchers []CommandMatcher, options ...CommandApprovalPolicyOption) *CommandApprovalPolicy {
 	p := &CommandApprovalPolicy{
@@ -544,15 +545,18 @@ func (p *CommandPolicy) BeforeToolUse(ctx context.Context, input hook.BeforeTool
 	if p == nil || input.Use.Name != p.commandToolName() {
 		return hook.BeforeToolUseResult{}, nil
 	}
-	argv := commandArgv(input.Use.Input)
-	if len(argv) == 0 {
-		return hook.BeforeToolUseResult{DenyReason: "command input must include command argv"}, nil
+	command := commandFromInput(input.Use.Input)
+	if len(command.argv) == 0 {
+		return hook.BeforeToolUseResult{DenyReason: "command input must include command"}, nil
 	}
-	if commandMatchesAny(argv, p.deny) {
-		return hook.BeforeToolUseResult{DenyReason: CommandDeniedReason(argv)}, nil
+	if command.unsafeShell && (len(p.allow) > 0 || len(p.deny) > 0) {
+		return hook.BeforeToolUseResult{DenyReason: CommandShellSyntaxReason(command.argv)}, nil
 	}
-	if len(p.allow) > 0 && !commandMatchesAny(argv, p.allow) {
-		return hook.BeforeToolUseResult{DenyReason: CommandNotAllowedReason(argv)}, nil
+	if commandMatchesAny(command.argv, p.deny) {
+		return hook.BeforeToolUseResult{DenyReason: CommandDeniedReason(command.argv)}, nil
+	}
+	if len(p.allow) > 0 && !commandMatchesAny(command.argv, p.allow) {
+		return hook.BeforeToolUseResult{DenyReason: CommandNotAllowedReason(command.argv)}, nil
 	}
 	return hook.BeforeToolUseResult{}, nil
 }
@@ -574,6 +578,12 @@ func CommandNotAllowedReason(argv []string) string {
 	return "command is not in the allowed command policy: " + strings.Join(normalizeCommandArgs(argv), " ")
 }
 
+// CommandShellSyntaxReason returns the model-visible reason used when command
+// prefix policies cannot safely match shell control syntax.
+func CommandShellSyntaxReason(argv []string) string {
+	return "command contains shell control syntax that command policy cannot safely match: " + strings.Join(normalizeCommandArgs(argv), " ")
+}
+
 // Options returns hook options for command approval gating.
 func (p *CommandApprovalPolicy) Options() []hook.Option {
 	return []hook.Option{
@@ -591,14 +601,17 @@ func (p *CommandApprovalPolicy) BeforeToolUse(ctx context.Context, input hook.Be
 	if p == nil || input.Use.Name != p.commandName() {
 		return hook.BeforeToolUseResult{}, nil
 	}
-	argv := commandArgv(input.Use.Input)
-	if len(argv) == 0 || !commandMatchesAny(argv, p.matchers) {
+	command := commandFromInput(input.Use.Input)
+	if len(command.argv) == 0 || len(p.matchers) == 0 {
+		return hook.BeforeToolUseResult{}, nil
+	}
+	if !command.unsafeShell && !commandMatchesAny(command.argv, p.matchers) {
 		return hook.BeforeToolUseResult{}, nil
 	}
 	if consumed, metadata := p.consumeApproval(input.SessionID, input.Use); consumed {
 		return hook.BeforeToolUseResult{Metadata: metadata}, nil
 	}
-	return hook.BeforeToolUseResult{DenyReason: ApprovalBeforeCommandReason(argv)}, nil
+	return hook.BeforeToolUseResult{DenyReason: ApprovalBeforeCommandReason(command.argv)}, nil
 }
 
 // AfterToolUse records granted command approvals from approval tool results.
@@ -827,20 +840,37 @@ func isVerificationRequiredWorkspaceOperation(operation string, metadata map[str
 	}
 }
 
-func commandArgv(input json.RawMessage) []string {
-	var value struct {
-		Command []string `json:"command"`
-	}
-	if err := json.Unmarshal(input, &value); err != nil {
-		return nil
-	}
-	return normalizeCommandArgs(value.Command)
+type parsedCommand struct {
+	argv        []string
+	unsafeShell bool
 }
 
-func metadataCommandArgv(metadata map[string]any) []string {
-	switch values := metadata[model.MetadataCommandArgv].(type) {
+func commandFromInput(input json.RawMessage) parsedCommand {
+	var value struct {
+		Command any `json:"command"`
+	}
+	if err := json.Unmarshal(input, &value); err != nil {
+		return parsedCommand{}
+	}
+	return commandFromValue(value.Command)
+}
+
+func metadataCommand(metadata map[string]any) parsedCommand {
+	if command, _ := metadata[model.MetadataCommandString].(string); strings.TrimSpace(command) != "" {
+		return commandFromValue(command)
+	}
+	return commandFromValue(metadata[model.MetadataCommandArgv])
+}
+
+func commandFromValue(value any) parsedCommand {
+	switch values := value.(type) {
+	case string:
+		return parsedCommand{
+			argv:        normalizeCommandArgs(strings.Fields(values)),
+			unsafeShell: hasShellControlSyntax(values),
+		}
 	case []string:
-		return normalizeCommandArgs(values)
+		return parsedCommand{argv: normalizeCommandArgs(values)}
 	case []any:
 		out := make([]string, 0, len(values))
 		for _, value := range values {
@@ -848,10 +878,25 @@ func metadataCommandArgv(metadata map[string]any) []string {
 				out = append(out, str)
 			}
 		}
-		return normalizeCommandArgs(out)
+		return parsedCommand{argv: normalizeCommandArgs(out)}
 	default:
-		return nil
+		return parsedCommand{}
 	}
+}
+
+func hasShellControlSyntax(command string) bool {
+	for _, marker := range []string{"&&", "||", ";", "|", "`", "$(", ">", "<", "\n", "\r"} {
+		if strings.Contains(command, marker) {
+			return true
+		}
+	}
+	fields := strings.Fields(command)
+	for _, field := range fields {
+		if field == "&" {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeCommandArgs(argv []string) []string {
@@ -941,8 +986,8 @@ func (p *VerifyAfterCommands) AfterToolUse(ctx context.Context, input hook.After
 		return nil
 	}
 	if input.Use.Name == p.commandName() && !input.Result.IsError {
-		argv := metadataCommandArgv(input.Result.Metadata)
-		if commandMatchesAny(argv, p.matchers) {
+		command := metadataCommand(input.Result.Metadata)
+		if len(p.matchers) > 0 && (command.unsafeShell || commandMatchesAny(command.argv, p.matchers)) {
 			p.setDirty(input.SessionID, true)
 		}
 		return nil

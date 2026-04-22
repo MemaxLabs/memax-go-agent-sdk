@@ -164,7 +164,7 @@ func CommandTestRepairLoop() agenteval.Case {
 			ToolUse: model.ToolUse{
 				ID:    "cmd-1",
 				Name:  commandtools.ToolName,
-				Input: json.RawMessage(`{"command":["go","test","./..."],"purpose":"verify current state"}`),
+				Input: json.RawMessage(`{"command":"go test ./...","purpose":"verify current state"}`),
 			},
 		}},
 		[]model.StreamEvent{{
@@ -182,7 +182,7 @@ func CommandTestRepairLoop() agenteval.Case {
 			ToolUse: model.ToolUse{
 				ID:    "cmd-2",
 				Name:  commandtools.ToolName,
-				Input: json.RawMessage(`{"command":["go","test","./..."],"purpose":"verify repaired state"}`),
+				Input: json.RawMessage(`{"command":"go test ./...","purpose":"verify repaired state"}`),
 			},
 		}},
 		[]model.StreamEvent{{Kind: model.StreamText, Text: "Tests pass after repair."}},
@@ -812,7 +812,7 @@ func CommandApprovalPolicyRecovery() agenteval.Case {
 			Reason:   "approved dependency install",
 		}},
 	})
-	toolInput := `{"command":["npm","install"],"purpose":"install dependencies"}`
+	toolInput := `{"command":"npm install","purpose":"install dependencies"}`
 	modelClient := agenteval.NewScriptedModel(
 		[]model.StreamEvent{{
 			Kind: model.StreamToolUse,
@@ -875,7 +875,7 @@ func CommandApprovalPolicyRecovery() agenteval.Case {
 						return fmt.Errorf("second command result = %#v, want command success", results[2])
 					}
 					requests := runner.Requests()
-					if len(requests) != 1 || strings.Join(requests[0].Argv, " ") != "npm install" {
+					if len(requests) != 1 || requests[0].Command != "npm install" {
 						return fmt.Errorf("runner requests = %#v, want only approved npm install", requests)
 					}
 					return nil
@@ -908,7 +908,7 @@ func CommandVerifyBeforeFinalPolicyRecovery() agenteval.Case {
 			ToolUse: model.ToolUse{
 				ID:    "cmd-1",
 				Name:  commandtools.ToolName,
-				Input: json.RawMessage(`{"command":["go","generate","./..."],"purpose":"regenerate code"}`),
+				Input: json.RawMessage(`{"command":"go generate ./...","purpose":"regenerate code"}`),
 			},
 		}},
 		[]model.StreamEvent{{Kind: model.StreamText, Text: "Generated code."}},

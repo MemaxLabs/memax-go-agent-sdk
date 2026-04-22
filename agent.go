@@ -2058,6 +2058,7 @@ func emitCommandToolEvent(ctx context.Context, emit func(Event) bool, opts Optio
 	commandEvent := &CommandEvent{
 		Operation:          operation,
 		CommandID:          metadatavalues.String(result.Metadata, model.MetadataCommandSessionID),
+		Command:            metadatavalues.String(result.Metadata, model.MetadataCommandString),
 		Argv:               metadataStrings(result.Metadata, model.MetadataCommandArgv),
 		CWD:                metadatavalues.String(result.Metadata, model.MetadataCommandCWD),
 		Status:             metadatavalues.String(result.Metadata, model.MetadataCommandStatus),

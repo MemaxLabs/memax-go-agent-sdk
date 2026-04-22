@@ -516,12 +516,14 @@ a checkpoint through normal tools.
 
 For general test/build/lint commands, use the optional `toolkit/commandtools`
 package. It exposes `run_command` over a host-owned `Runner`; the core SDK
-still does not execute shell commands itself. The reference `OSRunner` launches
-argv directly, applies cwd containment when rooted, enforces timeouts, and caps
-stdout/stderr. `OSRunner` is not a sandbox and does not filter commands or
-arguments; hosts that need an allowlist, container, network policy, or process
-sandbox should wrap or replace it. It does not inherit `os.Environ()` by
-default because environment variables often contain secrets:
+still does not execute shell commands itself. `commandtools.NewTool` gives
+models the normal terminal UX: `command` is a shell string. The reference
+`OSRunner` still launches exact argv internally, applies cwd containment when
+rooted, enforces timeouts, and caps stdout/stderr. `OSRunner` is not a sandbox
+and does not filter commands or arguments; hosts that need an allowlist,
+container, network policy, or process sandbox should wrap or replace it. It
+does not inherit `os.Environ()` by default because environment variables often
+contain secrets:
 
 ```go
 runner, err := commandtools.NewOSRunner("/path/to/repo")
@@ -535,8 +537,15 @@ registry.Register(commandTool)
 Command results are normal tool results with exit code, timeout, duration, and
 output metadata. Non-zero exits are model-visible tool errors, enabling the
 agent to patch, rerun, or ask for approval through the normal loop.
-Use `toolkit/agentpolicy` to add argv-prefix allowlists, denylists,
-input-bound approvals, or verify-before-final gates for selected commands.
+Use `toolkit/agentpolicy` to add command-prefix allowlists, denylists,
+input-bound approvals, or verify-before-final gates for selected commands. For
+hosts that need a model-facing exact-argv schema instead of a shell string, use
+`commandtools.NewExecTool` over the same runner interface.
+
+Command-prefix policies only match simple shell commands. If a model submits
+shell control syntax such as `&&`, `;`, pipes, redirects, command substitution,
+or newlines, command allow/deny policies reject the input instead of trying to
+prove which subcommands will run.
 
 For longer-lived commands such as dev servers or watch jobs, the same package
 also provides `start_command`, `write_command_input`,
@@ -813,8 +822,8 @@ Use `Options.MaxFinalDenials` to cap these repair turns; zero uses the SDK
 default and negative disables before-final retries.
 
 Command execution can use the same policy surface. `agentpolicy.DenyCommands`
-and `agentpolicy.AllowCommands` match argv prefixes, not shell text, so hosts
-can block dangerous executables or expose a narrow command set:
+and `agentpolicy.AllowCommands` match command prefixes, so hosts can block
+dangerous executables or expose a narrow command set:
 
 ```go
 policy := agentpolicy.AllowCommands(
@@ -823,11 +832,18 @@ policy := agentpolicy.AllowCommands(
 )
 ```
 
+Prefix policies only match simple shell commands. If a model submits shell
+control syntax such as `&&`, `;`, pipes, redirects, command substitution, or
+newlines, command allow/deny policies reject the input instead of trying to
+prove which subcommands will run. Hosts that need strict process-level
+governance can expose `commandtools.NewExecTool`, which keeps `command` as an
+exact argv array.
+
 For sensitive commands, combine `approvaltools.NewTool` with
 `agentpolicy.RequireApprovalBeforeCommands(...)`. The command approval policy
 denies matching `run_command` attempts until the model requests approval for
 the command tool action. By default, a granted approval authorizes later
-commands matching the configured argv prefixes for that session. With
+commands matching the configured prefixes for that session. With
 `agentpolicy.WithCommandInputBoundApprovals()` and
 `agentpolicy.WithCommandSingleUseApprovals()`, approval applies only to the
 later matching JSON input and is consumed on first use.

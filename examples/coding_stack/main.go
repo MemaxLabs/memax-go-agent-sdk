@@ -122,7 +122,7 @@ func (m *stackModel) Stream(context.Context, model.Request) (model.Stream, error
 	switch m.turn {
 	case 1:
 		return newStream(toolUse("tool-1", commandtools.ToolName, map[string]any{
-			"command": []string{"go", "test", "./..."},
+			"command": "go test ./...",
 			"purpose": "reproduce CI failure",
 		})), nil
 	case 2:
@@ -149,7 +149,7 @@ func (m *stackModel) Stream(context.Context, model.Request) (model.Stream, error
 		return newStream(toolUse("tool-5", workspacetools.ApplyPatchToolName, patchInput())), nil
 	case 6:
 		return newStream(toolUse("tool-6", commandtools.ToolName, map[string]any{
-			"command": []string{"go", "test", "./..."},
+			"command": "go test ./...",
 			"purpose": "confirm CI repair",
 		})), nil
 	case 7:

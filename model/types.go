@@ -201,6 +201,9 @@ const (
 	MetadataCommandOperation = "command_operation"
 	// MetadataCommandArgv carries the executed argv vector.
 	MetadataCommandArgv = "command_argv"
+	// MetadataCommandString carries the model-facing shell command string when
+	// the command tool was invoked through a shell-style interface.
+	MetadataCommandString = "command_string"
 	// MetadataCommandCWD carries the command working directory.
 	MetadataCommandCWD = "command_cwd"
 	// MetadataCommandExitCode carries the process exit code. Runner

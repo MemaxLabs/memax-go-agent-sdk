@@ -282,9 +282,12 @@ patches, snapshots, restore, reviewable mutations, and sandbox boundaries.
   workspace contract source-neutral.
 - Verification is an explicit host-owned tool capability, not hidden shell
   access or an implicit SDK side effect.
-- Command execution is an explicit host-owned runner capability with argv-only
-  inputs, timeout/output caps, structured status metadata, and approval-summary
-  support; the core SDK never gets implicit shell access.
+- Command execution is an explicit host-owned runner capability. The default
+  model-facing tool accepts shell command strings for coding-agent ergonomics
+  while preserving exact executed argv in metadata; `NewExecTool` keeps an
+  exact-argv schema available for hosts that need it. The core SDK never gets
+  hidden process access, and runners still own timeout/output caps, structured
+  status metadata, and approval-summary support.
 - Longer-lived command sessions are explicit tools over host-owned lifecycle
   interfaces rather than hidden background shell state. Initial
   start/read/wait/stop support exists, including a reference OS-backed
@@ -308,9 +311,11 @@ patches, snapshots, restore, reviewable mutations, and sandbox boundaries.
 - More isolated execution can stay outside the core loop through adapter seams
   that let hosts wire related sandbox-backed workspace, one-shot command, and
   managed command-session toolkits together.
-- Command governance is expressed as hook-based policy presets: argv-prefix
+- Command governance is expressed as hook-based policy presets: command-prefix
   allow/deny rules, exact-input approval for selected commands, and
-  verify-before-final gates after successful mutating commands.
+  verify-before-final gates after successful mutating commands. Prefix policies
+  reject shell control syntax instead of partially matching compound shell
+  strings.
 - File tools emit structured metadata for modified paths and checkpoint IDs.
 - CI/server examples use workspace adapters instead of raw OS assumptions.
 
