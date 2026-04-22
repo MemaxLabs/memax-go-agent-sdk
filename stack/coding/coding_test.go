@@ -727,6 +727,69 @@ func TestParseModelProfile(t *testing.T) {
 	}
 }
 
+func TestModelEfforts(t *testing.T) {
+	t.Parallel()
+
+	efforts := ModelEfforts()
+	want := []ModelEffort{ModelEffortLow, ModelEffortMedium, ModelEffortHigh, ModelEffortXHigh}
+	if fmt.Sprint(efforts) != fmt.Sprint(want) {
+		t.Fatalf("ModelEfforts() = %v, want %v", efforts, want)
+	}
+	efforts[0] = "mutated"
+	if got := ModelEfforts()[0]; got != ModelEffortLow {
+		t.Fatalf("ModelEfforts() returned shared backing array; first effort = %q", got)
+	}
+	for _, effort := range append([]ModelEffort{ModelEffortAuto}, want...) {
+		if effort.Description() == "" {
+			t.Fatalf("%s Description() is empty", effort)
+		}
+	}
+	if got := ModelEffort("unknown").Description(); got != "" {
+		t.Fatalf("unknown Description() = %q, want empty", got)
+	}
+	if got := ModelEffortAuto.String(); got != "auto" {
+		t.Fatalf("ModelEffortAuto.String() = %q, want auto", got)
+	}
+	if got := ModelEffortXHigh.String(); got != "xhigh" {
+		t.Fatalf("ModelEffortXHigh.String() = %q, want xhigh", got)
+	}
+}
+
+func TestParseModelEffort(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		raw  string
+		want ModelEffort
+	}{
+		{raw: "", want: ModelEffortAuto},
+		{raw: "  ", want: ModelEffortAuto},
+		{raw: "auto", want: ModelEffortAuto},
+		{raw: "LOW", want: ModelEffortLow},
+		{raw: " medium ", want: ModelEffortMedium},
+		{raw: "high", want: ModelEffortHigh},
+		{raw: "xhigh", want: ModelEffortXHigh},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(fmt.Sprintf("%q", tc.raw), func(t *testing.T) {
+			t.Parallel()
+
+			got, err := ParseModelEffort(tc.raw)
+			if err != nil {
+				t.Fatalf("ParseModelEffort() error = %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("ParseModelEffort() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+
+	if _, err := ParseModelEffort("maximum"); err == nil || !strings.Contains(err.Error(), `unknown model effort "maximum"`) {
+		t.Fatalf("ParseModelEffort() error = %v, want unknown effort", err)
+	}
+}
+
 func TestOpenAIModelOptions(t *testing.T) {
 	t.Parallel()
 
@@ -764,6 +827,46 @@ func TestOpenAIModelOptions(t *testing.T) {
 	}
 }
 
+func TestOpenAIModelEffortOptions(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		effort ModelEffort
+		want   openai.ReasoningEffort
+	}{
+		{effort: ModelEffortLow, want: openai.ReasoningEffortLow},
+		{effort: ModelEffortMedium, want: openai.ReasoningEffortMedium},
+		{effort: ModelEffortHigh, want: openai.ReasoningEffortHigh},
+		{effort: ModelEffortXHigh, want: openai.ReasoningEffortXHigh},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(string(tc.effort), func(t *testing.T) {
+			t.Parallel()
+
+			opts, err := OpenAIModelEffortOptions(tc.effort)
+			if err != nil {
+				t.Fatalf("OpenAIModelEffortOptions() error = %v", err)
+			}
+			client := openai.New("key", "model", opts...)
+			if client.Reasoning == nil || client.Reasoning.Effort != tc.want {
+				t.Fatalf("Reasoning = %+v, want effort %q", client.Reasoning, tc.want)
+			}
+		})
+	}
+
+	opts, err := OpenAIModelEffortOptions(ModelEffortAuto)
+	if err != nil {
+		t.Fatalf("OpenAIModelEffortOptions(auto) error = %v", err)
+	}
+	if len(opts) != 0 {
+		t.Fatalf("OpenAIModelEffortOptions(auto) = %d opts, want 0", len(opts))
+	}
+	if _, err := OpenAIModelEffortOptions("maximum"); err == nil || !strings.Contains(err.Error(), `unknown model effort "maximum"`) {
+		t.Fatalf("OpenAIModelEffortOptions() error = %v, want unknown effort", err)
+	}
+}
+
 func TestAnthropicModelOptions(t *testing.T) {
 	t.Parallel()
 
@@ -793,6 +896,46 @@ func TestAnthropicModelOptions(t *testing.T) {
 				t.Fatalf("Thinking = %+v, want adaptive", client.Thinking)
 			}
 		})
+	}
+}
+
+func TestAnthropicModelEffortOptions(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		effort ModelEffort
+		want   anthropic.Effort
+	}{
+		{effort: ModelEffortLow, want: anthropic.EffortLow},
+		{effort: ModelEffortMedium, want: anthropic.EffortMedium},
+		{effort: ModelEffortHigh, want: anthropic.EffortHigh},
+		{effort: ModelEffortXHigh, want: anthropic.EffortXHigh},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(string(tc.effort), func(t *testing.T) {
+			t.Parallel()
+
+			opts, err := AnthropicModelEffortOptions(tc.effort)
+			if err != nil {
+				t.Fatalf("AnthropicModelEffortOptions() error = %v", err)
+			}
+			client := anthropic.New("key", "model", opts...)
+			if client.Effort != tc.want {
+				t.Fatalf("Effort = %q, want %q", client.Effort, tc.want)
+			}
+		})
+	}
+
+	opts, err := AnthropicModelEffortOptions(ModelEffortAuto)
+	if err != nil {
+		t.Fatalf("AnthropicModelEffortOptions(auto) error = %v", err)
+	}
+	if len(opts) != 0 {
+		t.Fatalf("AnthropicModelEffortOptions(auto) = %d opts, want 0", len(opts))
+	}
+	if _, err := AnthropicModelEffortOptions("maximum"); err == nil || !strings.Contains(err.Error(), `unknown model effort "maximum"`) {
+		t.Fatalf("AnthropicModelEffortOptions() error = %v, want unknown effort", err)
 	}
 }
 
