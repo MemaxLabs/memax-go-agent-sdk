@@ -45,6 +45,7 @@ func TestStoreReadDefensiveCopiesPagingAndPersistence(t *testing.T) {
 		SessionID:          "agent-1",
 		ParentSessionID:    "parent-1",
 		Identity:           identity.Identity{Name: "Build Agent", Role: "tester", Constraints: []string{"never skip tests"}},
+		Command:            "go test ./...",
 		Argv:               []string{"go", "test", "./..."},
 		CWD:                "/repo",
 		Purpose:            "verify",
@@ -95,7 +96,7 @@ func TestStoreReadDefensiveCopiesPagingAndPersistence(t *testing.T) {
 	if read.NextSeq != 4 {
 		t.Fatalf("read.NextSeq = %d, want 4", read.NextSeq)
 	}
-	if read.Session.Argv[0] != "go" || read.Session.Identity.Constraints[0] != "never skip tests" || read.Session.ExitCode == nil || *read.Session.ExitCode != 0 || read.Session.FinishedAt == nil || !read.Session.FinishedAt.Equal(originalFinished) {
+	if read.Session.Command != "go test ./..." || read.Session.Argv[0] != "go" || read.Session.Identity.Constraints[0] != "never skip tests" || read.Session.ExitCode == nil || *read.Session.ExitCode != 0 || read.Session.FinishedAt == nil || !read.Session.FinishedAt.Equal(originalFinished) {
 		t.Fatalf("read.Session = %#v, want defensive copy of original snapshot", read.Session)
 	}
 

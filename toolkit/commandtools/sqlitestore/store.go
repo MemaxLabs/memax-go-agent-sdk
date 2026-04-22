@@ -237,7 +237,7 @@ func (s *Store) ListCommands(ctx context.Context, req commandtools.ListRequest) 
 		args  []any
 	)
 	query.WriteString(`
-		SELECT id, session_id, parent_session_id, identity_json, argv_json,
+		SELECT id, session_id, parent_session_id, identity_json, command_string, argv_json,
 			cwd, purpose, status, pid, tty, cols, rows, signals_process_tree,
 			started_at_unix_ms, finished_at_unix_ms, exit_code, timed_out,
 			next_seq, dropped_chunks, dropped_bytes
@@ -312,6 +312,7 @@ func (s *Store) init(ctx context.Context) error {
 			session_id TEXT NOT NULL DEFAULT '',
 			parent_session_id TEXT NOT NULL DEFAULT '',
 			identity_json TEXT NOT NULL DEFAULT '{}',
+			command_string TEXT NOT NULL DEFAULT '',
 			argv_json TEXT NOT NULL DEFAULT '[]',
 			cwd TEXT NOT NULL DEFAULT '',
 			purpose TEXT NOT NULL DEFAULT '',
@@ -350,7 +351,18 @@ func (s *Store) init(ctx context.Context) error {
 	`); err != nil {
 		return fmt.Errorf("init sqlite command transcript chunk schema: %w", err)
 	}
+	if err := s.ensureSessionColumn(ctx, "command_string", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
 	return nil
+}
+
+func (s *Store) ensureSessionColumn(ctx context.Context, name, definition string) error {
+	_, err := s.db.ExecContext(ctx, fmt.Sprintf(`ALTER TABLE memax_command_transcript_sessions ADD COLUMN %s %s`, name, definition))
+	if err == nil || sqliteDuplicateColumn(err) {
+		return nil
+	}
+	return fmt.Errorf("ensure sqlite command transcript session column %s: %w", name, err)
 }
 
 func (s *Store) withImmediateTx(ctx context.Context, fn func(*sql.Conn) error) error {
@@ -387,7 +399,7 @@ func (s *Store) getSessionConn(ctx context.Context, conn *sql.Conn, id string) (
 		return commandtools.CommandSession{}, fmt.Errorf("commandtools: command session id is required")
 	}
 	row := conn.QueryRowContext(ctx, `
-		SELECT id, session_id, parent_session_id, identity_json, argv_json,
+		SELECT id, session_id, parent_session_id, identity_json, command_string, argv_json,
 			cwd, purpose, status, pid, tty, cols, rows, signals_process_tree,
 			started_at_unix_ms, finished_at_unix_ms, exit_code, timed_out,
 			next_seq, dropped_chunks, dropped_bytes
@@ -424,15 +436,16 @@ func (s *Store) upsertSessionConn(ctx context.Context, conn *sql.Conn, session c
 	}
 	if _, err := conn.ExecContext(ctx, `
 		INSERT INTO memax_command_transcript_sessions (
-			id, session_id, parent_session_id, identity_json, argv_json,
+			id, session_id, parent_session_id, identity_json, command_string, argv_json,
 			cwd, purpose, status, pid, tty, cols, rows, signals_process_tree,
 			started_at_unix_ms, finished_at_unix_ms, exit_code, timed_out,
 			next_seq, dropped_chunks, dropped_bytes
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			session_id = excluded.session_id,
 			parent_session_id = excluded.parent_session_id,
 			identity_json = excluded.identity_json,
+			command_string = excluded.command_string,
 			argv_json = excluded.argv_json,
 			cwd = excluded.cwd,
 			purpose = excluded.purpose,
@@ -449,7 +462,7 @@ func (s *Store) upsertSessionConn(ctx context.Context, conn *sql.Conn, session c
 			next_seq = excluded.next_seq,
 			dropped_chunks = excluded.dropped_chunks,
 			dropped_bytes = excluded.dropped_bytes
-	`, session.ID, session.SessionID, session.ParentSessionID, identityJSON, argvJSON,
+	`, session.ID, session.SessionID, session.ParentSessionID, identityJSON, strings.TrimSpace(session.Command), argvJSON,
 		session.CWD, session.Purpose, string(session.Status), session.PID, boolInt(session.TTY), session.Cols, session.Rows, boolInt(session.SignalsProcessTree),
 		unixMillis(session.StartedAt), finishedAt, exitCode, boolInt(session.TimedOut), session.NextSeq, session.DroppedChunks, session.DroppedBytes); err != nil {
 		return fmt.Errorf("upsert sqlite command transcript session %s: %w", session.ID, err)
@@ -495,6 +508,7 @@ func scanCommandSession(scanner commandSessionScanner) (commandtools.CommandSess
 		session            commandtools.CommandSession
 		status             string
 		identityJSON       string
+		commandString      string
 		argvJSON           string
 		tty                int64
 		signalsProcessTree int64
@@ -508,6 +522,7 @@ func scanCommandSession(scanner commandSessionScanner) (commandtools.CommandSess
 		&session.SessionID,
 		&session.ParentSessionID,
 		&identityJSON,
+		&commandString,
 		&argvJSON,
 		&session.CWD,
 		&session.Purpose,
@@ -531,6 +546,7 @@ func scanCommandSession(scanner commandSessionScanner) (commandtools.CommandSess
 		return commandtools.CommandSession{}, fmt.Errorf("scan sqlite command transcript session: %w", err)
 	}
 	session.Status = commandtools.SessionStatus(status)
+	session.Command = strings.TrimSpace(commandString)
 	session.TTY = tty != 0
 	session.SignalsProcessTree = signalsProcessTree != 0
 	session.TimedOut = timedOut != 0
@@ -611,6 +627,10 @@ func boolInt(v bool) int {
 		return 1
 	}
 	return 0
+}
+
+func sqliteDuplicateColumn(err error) bool {
+	return err != nil && (strings.Contains(err.Error(), "duplicate column name") || strings.Contains(err.Error(), "already exists"))
 }
 
 func unixMillis(t time.Time) int64 {

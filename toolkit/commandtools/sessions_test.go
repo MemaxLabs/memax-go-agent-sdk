@@ -649,6 +649,18 @@ func TestApprovalSummaryFromStartInput(t *testing.T) {
 	}
 }
 
+func TestApprovalSummaryFromShellStartInput(t *testing.T) {
+	summary, err := ApprovalSummaryFromStartInput([]byte(`{"command":"npm run dev","purpose":"start local dev server"}`))
+	if err != nil {
+		t.Fatalf("ApprovalSummaryFromStartInput returned error: %v", err)
+	}
+	if summary.Title != "Start command session: npm run dev" ||
+		summary.Description != "start local dev server" ||
+		summary.Changes != 1 {
+		t.Fatalf("summary = %#v, want shell start command approval summary", summary)
+	}
+}
+
 func TestApprovalSummaryFromTTYStartInput(t *testing.T) {
 	summary, err := ApprovalSummaryFromStartInput([]byte(`{"command":["python","-i"],"tty":true}`))
 	if err != nil {
@@ -656,6 +668,46 @@ func TestApprovalSummaryFromTTYStartInput(t *testing.T) {
 	}
 	if !strings.Contains(summary.Risk, "PTY sessions") {
 		t.Fatalf("summary = %#v, want tty-specific risk text", summary)
+	}
+}
+
+func TestNewShellStartToolUsesShellCommandSchemaAndRequest(t *testing.T) {
+	manager := NewScriptedSessionManager(ScriptedCommand{ID: "dev-1"})
+	toolDef := NewShellStartTool(manager, []string{"bash", "-lc"}).(tool.Definition)
+	properties := toolDef.ToolSpec.InputSchema["properties"].(map[string]any)
+	command := properties["command"].(map[string]any)
+	if command["type"] != "string" {
+		t.Fatalf("command schema = %#v, want string", command)
+	}
+
+	result, err := toolDef.Handler(context.Background(), tool.Call{
+		Runtime: tool.Runtime{SessionID: "session-1"},
+		Use: model.ToolUse{
+			Name:  StartToolName,
+			Input: json.RawMessage(`{"command":"npm run dev","purpose":"start dev server"}`),
+		},
+	})
+	if err != nil {
+		t.Fatalf("shell start handler returned error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("shell start result = %#v, want success", result)
+	}
+	requests := manager.StartRequests()
+	if len(requests) != 1 {
+		t.Fatalf("start requests = %d, want 1", len(requests))
+	}
+	if requests[0].Command != "npm run dev" {
+		t.Fatalf("request command = %q, want original shell command", requests[0].Command)
+	}
+	if want := []string{"bash", "-lc", "npm run dev"}; !sameStrings(requests[0].Argv, want) {
+		t.Fatalf("argv = %#v, want %#v", requests[0].Argv, want)
+	}
+	if got := result.Metadata[MetadataCommandString]; got != "npm run dev" {
+		t.Fatalf("metadata command string = %#v, want original shell command", got)
+	}
+	if strings.Contains(result.Content, "bash -lc") || !strings.Contains(result.Content, "npm run dev") {
+		t.Fatalf("result content = %q, want original command without shell prefix", result.Content)
 	}
 }
 
@@ -747,6 +799,20 @@ func TestSessionMetadataOmitsGeometryWithoutTTY(t *testing.T) {
 	}
 	if _, ok := metadata[MetadataCommandRows]; ok {
 		t.Fatalf("metadata = %#v, want rows omitted without tty", metadata)
+	}
+}
+
+func TestSessionMetadataIncludesCommandString(t *testing.T) {
+	metadata := sessionMetadata(CommandSession{
+		ID:        "cmd-1",
+		Command:   "npm run dev",
+		Argv:      []string{"bash", "-lc", "npm run dev"},
+		Status:    SessionRunning,
+		StartedAt: time.Unix(1, 0).UTC(),
+		NextSeq:   1,
+	})
+	if got := metadata[MetadataCommandString]; got != "npm run dev" {
+		t.Fatalf("metadata command string = %#v, want original shell command", got)
 	}
 }
 

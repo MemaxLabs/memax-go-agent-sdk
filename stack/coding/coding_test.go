@@ -297,6 +297,57 @@ func TestNewRejectsUnifiedDiffModeWithoutUnifiedDiffStore(t *testing.T) {
 	}
 }
 
+func TestNewCanExposeShellCommandSessionStartTool(t *testing.T) {
+	t.Parallel()
+
+	stack, err := New(Config{
+		CommandSessions:              commandtools.NewScriptedSessionManager(commandtools.ScriptedCommand{ID: "dev-1"}),
+		CommandSessionStartInputMode: CommandSessionStartInputShellCommand,
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	startSpec, ok := toolSpec(stack.Registry(), commandtools.StartToolName)
+	if !ok {
+		t.Fatalf("registry missing %q", commandtools.StartToolName)
+	}
+	properties, ok := startSpec.InputSchema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("start input schema properties = %#v, want object", startSpec.InputSchema["properties"])
+	}
+	command, ok := properties["command"].(map[string]any)
+	if !ok {
+		t.Fatalf("start input schema = %#v, want command property", startSpec.InputSchema)
+	}
+	if command["type"] != "string" {
+		t.Fatalf("start command schema = %#v, want shell command string", startSpec.InputSchema)
+	}
+}
+
+func TestNewRejectsUnknownCommandSessionStartInputMode(t *testing.T) {
+	t.Parallel()
+
+	_, err := New(Config{
+		CommandSessions:              commandtools.NewScriptedSessionManager(commandtools.ScriptedCommand{ID: "dev-1"}),
+		CommandSessionStartInputMode: CommandSessionStartInputMode("magic"),
+	})
+	if err == nil || !strings.Contains(err.Error(), `unknown command session start input mode "magic"`) {
+		t.Fatalf("New() error = %v, want unknown command session start input mode", err)
+	}
+}
+
+func TestNewRejectsCommandSessionStartInputModeWithoutManager(t *testing.T) {
+	t.Parallel()
+
+	_, err := New(Config{
+		CommandSessionStartInputMode: CommandSessionStartInputShellCommand,
+	})
+	if err == nil || !strings.Contains(err.Error(), "command session start input mode requires command session manager") {
+		t.Fatalf("New() error = %v, want missing command session manager", err)
+	}
+}
+
 func TestNewClonesBaseHooks(t *testing.T) {
 	t.Parallel()
 

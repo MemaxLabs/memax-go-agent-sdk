@@ -330,6 +330,7 @@ func (m *OSSessionManager) StartCommand(ctx context.Context, req StartRequest) (
 			SessionID:          req.SessionID,
 			ParentSessionID:    req.ParentSessionID,
 			Identity:           req.Identity,
+			Command:            strings.TrimSpace(req.Command),
 			Argv:               append([]string(nil), argv...),
 			CWD:                cwd,
 			Purpose:            strings.TrimSpace(req.Purpose),

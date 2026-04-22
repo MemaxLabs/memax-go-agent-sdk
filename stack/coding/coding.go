@@ -55,7 +55,12 @@ type Config struct {
 	Verifier        verifytools.Config
 	Command         commandtools.Config
 	CommandSessions commandtools.SessionManager
-	Approval        approvaltools.Config
+	// CommandSessionStartInputMode controls the model-facing input schema for
+	// start_command. The zero value keeps the exact-argv SDK schema. CLIs
+	// should prefer CommandSessionStartInputShellCommand so models can start
+	// long-running commands with the same shell-string shape as run_command.
+	CommandSessionStartInputMode CommandSessionStartInputMode
+	Approval                     approvaltools.Config
 
 	Policies Policies
 }
@@ -73,6 +78,20 @@ const (
 	// This is the preferred coding-agent CLI surface because it removes the
 	// mutually-exclusive operations/unified_diff choice from the model.
 	WorkspacePatchInputUnifiedDiff WorkspacePatchInputMode = "unified_diff"
+)
+
+// CommandSessionStartInputMode selects the input contract exposed by the
+// start_command tool in the coding stack.
+type CommandSessionStartInputMode string
+
+const (
+	// CommandSessionStartInputArgv accepts an exact argv vector. This is the
+	// default SDK surface for hosts that need shell-free process semantics.
+	CommandSessionStartInputArgv CommandSessionStartInputMode = ""
+	// CommandSessionStartInputShellCommand accepts a shell command string.
+	// This is the preferred coding-agent CLI surface because it matches
+	// run_command and avoids argv construction errors.
+	CommandSessionStartInputShellCommand CommandSessionStartInputMode = "shell_command"
 )
 
 // Policies configures the optional safety and governance layer for the coding
@@ -188,6 +207,14 @@ func validateConfig(config Config) error {
 			return fmt.Errorf("coding stack: unified-diff patch input mode requires workspace store with unified diff support")
 		}
 	}
+	switch config.CommandSessionStartInputMode {
+	case CommandSessionStartInputArgv, CommandSessionStartInputShellCommand:
+	default:
+		return fmt.Errorf("coding stack: unknown command session start input mode %q", config.CommandSessionStartInputMode)
+	}
+	if config.CommandSessionStartInputMode != CommandSessionStartInputArgv && config.CommandSessions == nil {
+		return fmt.Errorf("coding stack: command session start input mode requires command session manager")
+	}
 	if policies.RequireCheckpointBeforePatch && config.Workspace == nil {
 		return fmt.Errorf("coding stack: checkpoint-before-patch requires workspace store")
 	}
@@ -277,7 +304,13 @@ func registerTools(registry *tool.Registry, config Config, verifier verifytools.
 		}
 	}
 	if config.CommandSessions != nil {
-		sessionTools, err := commandtools.NewSessionTools(config.CommandSessions)
+		var sessionTools []tool.Tool
+		var err error
+		if config.CommandSessionStartInputMode == CommandSessionStartInputShellCommand {
+			sessionTools, err = commandtools.NewShellSessionTools(config.CommandSessions, config.Command.Shell)
+		} else {
+			sessionTools, err = commandtools.NewSessionTools(config.CommandSessions)
+		}
 		if err != nil {
 			return err
 		}

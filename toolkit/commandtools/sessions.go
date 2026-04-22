@@ -134,14 +134,17 @@ type CommandSession struct {
 	SessionID       string
 	ParentSessionID string
 	Identity        identity.Identity
-	Argv            []string
-	CWD             string
-	Purpose         string
-	Status          SessionStatus
-	PID             int
-	TTY             bool
-	Cols            int
-	Rows            int
+	// Command preserves the original model-facing shell command string when a
+	// shell-string start tool was used. Argv remains the exact process argv.
+	Command string
+	Argv    []string
+	CWD     string
+	Purpose string
+	Status  SessionStatus
+	PID     int
+	TTY     bool
+	Cols    int
+	Rows    int
 	// SignalsProcessTree reports whether StopCommand and timeout handling target
 	// the launched process tree/group instead of only the top-level process.
 	SignalsProcessTree bool
@@ -173,16 +176,19 @@ type StartRequest struct {
 	SessionID       string
 	ParentSessionID string
 	Identity        identity.Identity
-	Argv            []string
-	CWD             string
-	Env             map[string]string
-	Stdin           string
-	TTY             bool
-	Cols            int
-	Rows            int
-	Timeout         time.Duration
-	Purpose         string
-	Metadata        map[string]any
+	// Command preserves the model-facing shell command string when StartRequest
+	// was produced from a shell-string start tool.
+	Command  string
+	Argv     []string
+	CWD      string
+	Env      map[string]string
+	Stdin    string
+	TTY      bool
+	Cols     int
+	Rows     int
+	Timeout  time.Duration
+	Purpose  string
+	Metadata map[string]any
 }
 
 // ReadRequest reads buffered output from a managed command session.
@@ -326,8 +332,23 @@ func NewSessionTools(manager SessionManager) ([]tool.Tool, error) {
 	if manager == nil {
 		return nil, fmt.Errorf("commandtools: session manager is required")
 	}
+	return newSessionTools(manager, NewStartTool(manager)), nil
+}
+
+// NewShellSessionTools returns the standard managed command-session tool set
+// with a model-friendly shell-string start_command surface. The manager still
+// receives exact argv after the command string is expanded through the shell
+// prefix. If shell is empty, the platform default shell is used.
+func NewShellSessionTools(manager SessionManager, shell ...[]string) ([]tool.Tool, error) {
+	if manager == nil {
+		return nil, fmt.Errorf("commandtools: session manager is required")
+	}
+	return newSessionTools(manager, NewShellStartTool(manager, shell...)), nil
+}
+
+func newSessionTools(manager SessionManager, start tool.Tool) []tool.Tool {
 	tools := []tool.Tool{
-		NewStartTool(manager),
+		start,
 		NewReadOutputTool(manager),
 		NewStopTool(manager),
 		NewListTool(manager),
@@ -341,7 +362,7 @@ func NewSessionTools(manager SessionManager) ([]tool.Tool, error) {
 	if resizer, ok := any(manager).(Resizer); ok {
 		tools = append(tools, NewResizeTool(resizer))
 	}
-	return tools, nil
+	return tools
 }
 
 // SessionCleanupOptions returns hook options that call cleaner when the agent
@@ -360,6 +381,18 @@ func SessionCleanupOptions(cleaner Cleaner) []hook.Option {
 
 // NewStartTool returns a tool that starts a managed command session.
 func NewStartTool(starter Starter) tool.Tool {
+	return newStartTool(starter, false, nil)
+}
+
+// NewShellStartTool returns a tool that starts a managed command session from a
+// shell command string. Use this surface for coding-agent CLIs where models
+// should not need to construct exact argv vectors. If shell is empty, the
+// platform default shell is used.
+func NewShellStartTool(starter Starter, shell ...[]string) tool.Tool {
+	return newStartTool(starter, true, firstShell(shell))
+}
+
+func newStartTool(starter Starter, useShellInput bool, shell []string) tool.Tool {
 	return tool.Definition{
 		ToolSpec: model.ToolSpec{
 			Name:           StartToolName,
@@ -367,14 +400,10 @@ func NewStartTool(starter Starter) tool.Tool {
 			SearchHint:     "start background command dev server watcher process session",
 			Destructive:    true,
 			MaxResultBytes: 8 * 1024,
-			InputSchema:    startInputSchema(),
+			InputSchema:    startInputSchema(useShellInput),
 		},
 		Handler: func(ctx context.Context, call tool.Call) (model.ToolResult, error) {
-			input, err := tool.DecodeInput[startInput](call.Use)
-			if err != nil {
-				return model.ToolResult{}, err
-			}
-			req, err := startRequestFromInput(input)
+			req, err := startRequestFromToolUse(call.Use, useShellInput, shell)
 			if err != nil {
 				return model.ToolResult{}, err
 			}
@@ -388,6 +417,28 @@ func NewStartTool(starter Starter) tool.Tool {
 			return startResult(session), nil
 		},
 	}
+}
+
+func startRequestFromToolUse(use model.ToolUse, useShellInput bool, shell []string) (StartRequest, error) {
+	if useShellInput {
+		input, err := tool.DecodeInput[shellStartInput](use)
+		if err != nil {
+			return StartRequest{}, err
+		}
+		return startRequestFromShellInput(input, shell)
+	}
+	input, err := tool.DecodeInput[startInput](use)
+	if err != nil {
+		return StartRequest{}, err
+	}
+	return startRequestFromInput(input)
+}
+
+func firstShell(shells [][]string) []string {
+	if len(shells) == 0 {
+		return nil
+	}
+	return append([]string(nil), shells[0]...)
 }
 
 // NewReadOutputTool returns a tool that reads buffered output from a managed
@@ -727,6 +778,20 @@ type startInput struct {
 	Metadata  map[string]any    `json:"metadata"`
 }
 
+type shellStartInput struct {
+	ID        string            `json:"id"`
+	Command   string            `json:"command"`
+	CWD       string            `json:"cwd"`
+	Env       map[string]string `json:"env"`
+	Stdin     string            `json:"stdin"`
+	TTY       bool              `json:"tty"`
+	Cols      int               `json:"cols"`
+	Rows      int               `json:"rows"`
+	TimeoutMS int               `json:"timeout_ms"`
+	Purpose   string            `json:"purpose"`
+	Metadata  map[string]any    `json:"metadata"`
+}
+
 type readInput struct {
 	ID       string `json:"id"`
 	AfterSeq int    `json:"after_seq"`
@@ -767,7 +832,20 @@ type listInput struct {
 	Limit            int  `json:"limit"`
 }
 
-func startInputSchema() map[string]any {
+func startInputSchema(useShellInput bool) map[string]any {
+	commandSchema := map[string]any{
+		"type":        "array",
+		"description": "Command argv vector. The first element is the executable. No shell is implied.",
+		"minItems":    1,
+		"items":       map[string]any{"type": "string"},
+	}
+	if useShellInput {
+		commandSchema = map[string]any{
+			"type":        "string",
+			"description": "Shell command string to start as a managed session. Pipes, redirects, globs, and shell operators are interpreted by the configured or default platform shell.",
+			"minLength":   1,
+		}
+	}
 	return map[string]any{
 		"type":                 "object",
 		"required":             []any{"command"},
@@ -777,12 +855,7 @@ func startInputSchema() map[string]any {
 				"type":        "string",
 				"description": "Optional stable command session ID. If omitted, the host generates one.",
 			},
-			"command": map[string]any{
-				"type":        "array",
-				"description": "Command argv vector. The first element is the executable. No shell is implied.",
-				"minItems":    1,
-				"items":       map[string]any{"type": "string"},
-			},
+			"command": commandSchema,
 			"cwd": map[string]any{
 				"type":        "string",
 				"description": "Optional runner-relative working directory.",
@@ -900,20 +973,27 @@ func waitInputSchema() map[string]any {
 // start_command tool input. It is intentionally input-only: it does not inspect
 // manager state or classify process side effects.
 func ApprovalSummaryFromStartInput(inputBytes []byte) (approvaltools.Summary, error) {
-	var input startInput
+	var input struct {
+		Command json.RawMessage `json:"command"`
+		Purpose string          `json:"purpose"`
+		TTY     bool            `json:"tty"`
+	}
 	if len(inputBytes) > 0 {
 		if err := json.Unmarshal(inputBytes, &input); err != nil {
 			return approvaltools.Summary{}, fmt.Errorf("commandtools: decode start input: %w", err)
 		}
 	}
-	argv := normalizeArgv(input.Command)
-	if len(argv) == 0 {
+	command, err := commandDisplayFromRaw(input.Command)
+	if err != nil {
+		return approvaltools.Summary{}, err
+	}
+	if command == "" {
 		return approvaltools.Summary{}, nil
 	}
-	title := "Start command session: " + strings.Join(argv, " ")
+	title := "Start command session: " + command
 	description := strings.TrimSpace(input.Purpose)
 	if description == "" {
-		description = "Start managed command session " + strings.Join(argv, " ")
+		description = "Start managed command session " + command
 	}
 	return approvaltools.Summary{
 		Title:       title,
@@ -946,6 +1026,35 @@ func startRequestFromInput(input startInput) (StartRequest, error) {
 	return StartRequest{
 		ID:       strings.TrimSpace(input.ID),
 		Argv:     argv,
+		CWD:      strings.TrimSpace(input.CWD),
+		Env:      cloneStringMap(input.Env),
+		Stdin:    input.Stdin,
+		TTY:      input.TTY,
+		Cols:     cols,
+		Rows:     rows,
+		Timeout:  timeout,
+		Purpose:  strings.TrimSpace(input.Purpose),
+		Metadata: model.CloneMetadata(input.Metadata),
+	}, nil
+}
+
+func startRequestFromShellInput(input shellStartInput, shell []string) (StartRequest, error) {
+	command := strings.TrimSpace(input.Command)
+	if command == "" {
+		return StartRequest{}, fmt.Errorf("commandtools: command must not be empty")
+	}
+	cols, rows, err := normalizeStartTTYDimensions(input.TTY, input.Cols, input.Rows)
+	if err != nil {
+		return StartRequest{}, err
+	}
+	timeout := defaultSessionTimeout
+	if input.TimeoutMS > 0 {
+		timeout = time.Duration(input.TimeoutMS) * time.Millisecond
+	}
+	return StartRequest{
+		ID:       strings.TrimSpace(input.ID),
+		Command:  command,
+		Argv:     shellArgv(command, shell),
 		CWD:      strings.TrimSpace(input.CWD),
 		Env:      cloneStringMap(input.Env),
 		Stdin:    input.Stdin,
@@ -1034,7 +1143,7 @@ func listResult(sessions []CommandSession) model.ToolResult {
 		if i > 0 {
 			b.WriteByte('\n')
 		}
-		fmt.Fprintf(&b, "%s\t%s\t%s", session.ID, session.Status, strings.Join(session.Argv, " "))
+		fmt.Fprintf(&b, "%s\t%s\t%s", session.ID, session.Status, commandSessionDisplay(session))
 		if session.TTY {
 			b.WriteString("\ttty=true")
 			if session.Cols > 0 && session.Rows > 0 {
@@ -1068,6 +1177,9 @@ func sessionMetadata(session CommandSession) map[string]any {
 		MetadataCommandStartedAt:          session.StartedAt.UTC().Format(time.RFC3339Nano),
 		MetadataCommandTimedOut:           session.TimedOut,
 		MetadataCommandNextSeq:            session.NextSeq,
+	}
+	if strings.TrimSpace(session.Command) != "" {
+		metadata[MetadataCommandString] = session.Command
 	}
 	if session.TTY {
 		metadata[MetadataCommandCols] = session.Cols
@@ -1119,7 +1231,7 @@ func validateTTYDimensions(cols, rows int) error {
 
 func formatSessionStart(session CommandSession) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "started command session %s: %s", session.ID, strings.Join(session.Argv, " "))
+	fmt.Fprintf(&b, "started command session %s: %s", session.ID, commandSessionDisplay(session))
 	fmt.Fprintf(&b, "\nstatus: %s", session.Status)
 	if session.TTY {
 		b.WriteString("\ntty: true")
@@ -1141,7 +1253,7 @@ func formatSessionStart(session CommandSession) string {
 
 func formatSessionRead(result ReadResult, afterSeq int) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "command output for %s: %s", result.Session.ID, strings.Join(result.Session.Argv, " "))
+	fmt.Fprintf(&b, "command output for %s: %s", result.Session.ID, commandSessionDisplay(result.Session))
 	fmt.Fprintf(&b, "\nstatus: %s", result.Session.Status)
 	if result.Session.TTY {
 		b.WriteString("\ntty: true")
@@ -1164,9 +1276,16 @@ func formatSessionRead(result ReadResult, afterSeq int) string {
 	return b.String()
 }
 
+func commandSessionDisplay(session CommandSession) string {
+	if command := strings.TrimSpace(session.Command); command != "" {
+		return command
+	}
+	return strings.Join(session.Argv, " ")
+}
+
 func formatSessionWrite(result WriteResult) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "wrote input to command session %s: %s", result.Session.ID, strings.Join(result.Session.Argv, " "))
+	fmt.Fprintf(&b, "wrote input to command session %s: %s", result.Session.ID, commandSessionDisplay(result.Session))
 	fmt.Fprintf(&b, "\nstatus: %s", result.Session.Status)
 	if result.Session.TTY {
 		b.WriteString("\ntty: true")
@@ -1213,7 +1332,7 @@ func resumeAfterSeq(result ReadResult, afterSeq int) int {
 
 func formatSessionResize(session CommandSession) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "resized command session %s: %s", session.ID, strings.Join(session.Argv, " "))
+	fmt.Fprintf(&b, "resized command session %s: %s", session.ID, commandSessionDisplay(session))
 	fmt.Fprintf(&b, "\nstatus: %s", session.Status)
 	if session.TTY {
 		b.WriteString("\ntty: true")
@@ -1226,7 +1345,7 @@ func formatSessionResize(session CommandSession) string {
 
 func formatSessionStop(session CommandSession) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "stopped command session %s: %s", session.ID, strings.Join(session.Argv, " "))
+	fmt.Fprintf(&b, "stopped command session %s: %s", session.ID, commandSessionDisplay(session))
 	fmt.Fprintf(&b, "\nstatus: %s", session.Status)
 	if session.TTY {
 		b.WriteString("\ntty: true")
@@ -1348,6 +1467,7 @@ func (m *ScriptedSessionManager) StartCommand(ctx context.Context, req StartRequ
 			SessionID:       req.SessionID,
 			ParentSessionID: req.ParentSessionID,
 			Identity:        req.Identity,
+			Command:         strings.TrimSpace(req.Command),
 			Argv:            append([]string(nil), req.Argv...),
 			CWD:             req.CWD,
 			Purpose:         req.Purpose,
