@@ -862,6 +862,14 @@ func TestOpenAIModelEffortOptions(t *testing.T) {
 	if len(opts) != 0 {
 		t.Fatalf("OpenAIModelEffortOptions(auto) = %d opts, want 0", len(opts))
 	}
+	profileOpts, err := OpenAIModelOptions(ModelProfileFast)
+	if err != nil {
+		t.Fatalf("OpenAIModelOptions(fast) error = %v", err)
+	}
+	client := openai.New("key", "model", append(profileOpts, opts...)...)
+	if client.Reasoning == nil || client.Reasoning.Effort != openai.ReasoningEffortLow {
+		t.Fatalf("Reasoning after auto override = %+v, want profile effort low", client.Reasoning)
+	}
 	if _, err := OpenAIModelEffortOptions("maximum"); err == nil || !strings.Contains(err.Error(), `unknown model effort "maximum"`) {
 		t.Fatalf("OpenAIModelEffortOptions() error = %v, want unknown effort", err)
 	}
@@ -933,6 +941,14 @@ func TestAnthropicModelEffortOptions(t *testing.T) {
 	}
 	if len(opts) != 0 {
 		t.Fatalf("AnthropicModelEffortOptions(auto) = %d opts, want 0", len(opts))
+	}
+	profileOpts, err := AnthropicModelOptions(ModelProfileFast)
+	if err != nil {
+		t.Fatalf("AnthropicModelOptions(fast) error = %v", err)
+	}
+	client := anthropic.New("key", "model", append(profileOpts, opts...)...)
+	if client.Effort != anthropic.EffortLow {
+		t.Fatalf("Effort after auto override = %q, want profile effort low", client.Effort)
 	}
 	if _, err := AnthropicModelEffortOptions("maximum"); err == nil || !strings.Contains(err.Error(), `unknown model effort "maximum"`) {
 		t.Fatalf("AnthropicModelEffortOptions() error = %v, want unknown effort", err)

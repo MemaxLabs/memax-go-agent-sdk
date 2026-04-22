@@ -189,7 +189,9 @@ func OpenAIModelOptions(profile ModelProfile) ([]openai.Option, error) {
 
 // OpenAIModelEffortOptions maps a provider-neutral effort override onto
 // OpenAI-specific model controls. ModelEffortAuto returns no options so the
-// caller's selected ModelProfile remains authoritative.
+// caller's selected ModelProfile remains authoritative. The override uses the
+// provider's whole ReasoningConfig setter today because effort is the only
+// reasoning field managed by coding profiles.
 func OpenAIModelEffortOptions(effort ModelEffort) ([]openai.Option, error) {
 	switch effort {
 	case ModelEffortAuto:
