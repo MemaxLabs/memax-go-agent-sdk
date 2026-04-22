@@ -2,20 +2,27 @@ package session
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
+	"regexp"
 	"sort"
 	"sync"
 	"time"
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
+	"github.com/google/uuid"
 )
+
+var sessionIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 type Session struct {
 	ID        string
 	ParentID  string
 	CreatedAt time.Time
+}
+
+// ValidID reports whether id is a syntactically valid SDK session ID.
+func ValidID(id string) bool {
+	return sessionIDPattern.MatchString(id)
 }
 
 type Store interface {
@@ -68,6 +75,9 @@ func (s *MemoryStore) Create(ctx context.Context) (Session, error) {
 }
 
 func (s *MemoryStore) CreateWithOptions(_ context.Context, opts CreateOptions) (Session, error) {
+	if opts.ParentID != "" && !ValidID(opts.ParentID) {
+		return Session{}, fmt.Errorf("invalid parent session id: %q", opts.ParentID)
+	}
 	id, err := newID()
 	if err != nil {
 		return Session{}, err
@@ -228,9 +238,9 @@ func sortSessions(sessions []Session) {
 }
 
 func newID() (string, error) {
-	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
+	id, err := uuid.NewV7()
+	if err != nil {
 		return "", fmt.Errorf("generate session id: %w", err)
 	}
-	return hex.EncodeToString(b[:]), nil
+	return id.String(), nil
 }

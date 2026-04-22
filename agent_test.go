@@ -1869,7 +1869,7 @@ func TestQueryLoadsMemoriesFromSource(t *testing.T) {
 	var got memory.Request
 	events, err := Query(context.Background(), "inspect billing code", Options{
 		Model:           fake,
-		ParentSessionID: "parent-session",
+		ParentSessionID: "00000000-0000-7000-8000-000000000010",
 		MemorySource: memory.SourceFunc(func(_ context.Context, req memory.Request) ([]memory.Memory, error) {
 			got = req
 			return []memory.Memory{{
@@ -1888,8 +1888,8 @@ func TestQueryLoadsMemoriesFromSource(t *testing.T) {
 	if got.SessionID == "" {
 		t.Fatal("memory source did not receive active session id")
 	}
-	if got.ParentSessionID != "parent-session" {
-		t.Fatalf("memory source parent session = %q, want parent-session", got.ParentSessionID)
+	if got.ParentSessionID != "00000000-0000-7000-8000-000000000010" {
+		t.Fatalf("memory source parent session = %q, want 00000000-0000-7000-8000-000000000010", got.ParentSessionID)
 	}
 	if len(got.Messages) != 1 || got.Messages[0].PlainText() != "inspect billing code" {
 		t.Fatalf("memory source messages = %#v, want current messages", got.Messages)
@@ -1943,7 +1943,7 @@ func TestQueryLoadsPlannerWithSessionContext(t *testing.T) {
 	var got planner.Request
 	events, err := Query(context.Background(), "inspect billing code", Options{
 		Model:           fake,
-		ParentSessionID: "parent-session",
+		ParentSessionID: "00000000-0000-7000-8000-000000000010",
 		Identity:        identity.Identity{Name: "planner-agent"},
 		Planner: planner.PolicyFunc(func(_ context.Context, req planner.Request) (planner.Plan, error) {
 			got = req
@@ -1967,8 +1967,8 @@ func TestQueryLoadsPlannerWithSessionContext(t *testing.T) {
 	if got.SessionID == "" {
 		t.Fatal("planner did not receive active session id")
 	}
-	if got.ParentSessionID != "parent-session" {
-		t.Fatalf("planner parent session = %q, want parent-session", got.ParentSessionID)
+	if got.ParentSessionID != "00000000-0000-7000-8000-000000000010" {
+		t.Fatalf("planner parent session = %q, want 00000000-0000-7000-8000-000000000010", got.ParentSessionID)
 	}
 	if got.Identity.Name != "planner-agent" {
 		t.Fatalf("planner identity = %#v, want planner-agent", got.Identity)
@@ -2277,7 +2277,7 @@ func TestQueryPropagatesParentSessionID(t *testing.T) {
 	fake := &fakeModel{turns: [][]model.StreamEvent{{{Kind: model.StreamText, Text: "done"}}}}
 	events, err := Query(context.Background(), "start", Options{
 		Model:           fake,
-		ParentSessionID: "parent-session",
+		ParentSessionID: "00000000-0000-7000-8000-000000000010",
 	})
 	if err != nil {
 		t.Fatalf("Query returned error: %v", err)
@@ -2294,10 +2294,10 @@ func TestQueryPropagatesParentSessionID(t *testing.T) {
 			break
 		}
 	}
-	if started.ParentSessionID != "parent-session" {
+	if started.ParentSessionID != "00000000-0000-7000-8000-000000000010" {
 		t.Fatalf("started event = %#v, want parent session id", started)
 	}
-	if len(fake.requests) != 1 || fake.requests[0].ParentSessionID != "parent-session" {
+	if len(fake.requests) != 1 || fake.requests[0].ParentSessionID != "00000000-0000-7000-8000-000000000010" {
 		t.Fatalf("model request = %#v, want parent session id", fake.requests)
 	}
 }

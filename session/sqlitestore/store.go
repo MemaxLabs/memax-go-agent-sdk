@@ -2,9 +2,7 @@ package sqlitestore
 
 import (
 	"context"
-	"crypto/rand"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +10,7 @@ import (
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/session"
+	"github.com/google/uuid"
 )
 
 type Store struct {
@@ -34,6 +33,9 @@ func (s *Store) Create(ctx context.Context) (session.Session, error) {
 }
 
 func (s *Store) CreateWithOptions(ctx context.Context, opts session.CreateOptions) (session.Session, error) {
+	if opts.ParentID != "" && !session.ValidID(opts.ParentID) {
+		return session.Session{}, fmt.Errorf("invalid parent session id: %q", opts.ParentID)
+	}
 	id, err := newID()
 	if err != nil {
 		return session.Session{}, err
@@ -235,9 +237,9 @@ func forkMessages(messages []model.Message, throughMessageID string) ([]model.Me
 }
 
 func newID() (string, error) {
-	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
+	id, err := uuid.NewV7()
+	if err != nil {
 		return "", fmt.Errorf("generate session id: %w", err)
 	}
-	return hex.EncodeToString(b[:]), nil
+	return id.String(), nil
 }

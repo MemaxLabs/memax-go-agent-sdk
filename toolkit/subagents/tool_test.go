@@ -40,7 +40,7 @@ func TestToolRunsChildAgentWithParentCorrelation(t *testing.T) {
 			Input: json.RawMessage(`{"prompt":"inspect the subsystem"}`),
 		},
 		Runtime: tool.Runtime{
-			SessionID: "parent-session",
+			SessionID: "00000000-0000-7000-8000-000000000010",
 			Sessions:  store,
 		},
 	})
@@ -53,7 +53,7 @@ func TestToolRunsChildAgentWithParentCorrelation(t *testing.T) {
 	if result.Content != "child done" {
 		t.Fatalf("Content = %q, want child done", result.Content)
 	}
-	if result.Metadata["parent_session_id"] != "parent-session" {
+	if result.Metadata["parent_session_id"] != "00000000-0000-7000-8000-000000000010" {
 		t.Fatalf("metadata = %#v, want parent session id", result.Metadata)
 	}
 	childSessionID, ok := result.Metadata["child_session_id"].(string)
@@ -67,7 +67,7 @@ func TestToolRunsChildAgentWithParentCorrelation(t *testing.T) {
 	if len(messages) != 2 || messages[0].PlainText() != "inspect the subsystem" {
 		t.Fatalf("child messages = %#v", messages)
 	}
-	if len(childModel.requests) != 1 || childModel.requests[0].ParentSessionID != "parent-session" {
+	if len(childModel.requests) != 1 || childModel.requests[0].ParentSessionID != "00000000-0000-7000-8000-000000000010" {
 		t.Fatalf("model request = %#v, want parent correlation", childModel.requests)
 	}
 }
@@ -92,7 +92,7 @@ func TestToolUsesRuntimeSessionStoreWhenAgentDoesNotSetOne(t *testing.T) {
 			Name:  delegate.Spec().Name,
 			Input: json.RawMessage(`{"prompt":"use runtime store"}`),
 		},
-		Runtime: tool.Runtime{SessionID: "parent-session", Sessions: store},
+		Runtime: tool.Runtime{SessionID: "00000000-0000-7000-8000-000000000010", Sessions: store},
 	})
 	if err != nil {
 		t.Fatalf("Execute returned error: %v", err)
@@ -128,7 +128,7 @@ func TestToolInheritsRuntimeTenantScopeAndValidator(t *testing.T) {
 			Input: json.RawMessage(`{"prompt":"inherit tenant"}`),
 		},
 		Runtime: tool.Runtime{
-			SessionID: "parent-session",
+			SessionID: "00000000-0000-7000-8000-000000000010",
 			Sessions:  store,
 			Tenant: tenant.Scope{
 				ID:        "tenant-1",
@@ -206,7 +206,7 @@ func TestToolScopesChildPlanAndHandlesResult(t *testing.T) {
 			Name:  delegate.Spec().Name,
 			Input: json.RawMessage(`{"prompt":"run scoped work","task_id":"task-1"}`),
 		},
-		Runtime: tool.Runtime{SessionID: "parent-session", Sessions: store},
+		Runtime: tool.Runtime{SessionID: "00000000-0000-7000-8000-000000000010", Sessions: store},
 	})
 	if err != nil {
 		t.Fatalf("Execute returned error: %v", err)
@@ -241,7 +241,7 @@ func TestToolReportsChildAgentErrorAsToolResult(t *testing.T) {
 			Name:  delegate.Spec().Name,
 			Input: json.RawMessage(`{"prompt":"run"}`),
 		},
-		Runtime: tool.Runtime{SessionID: "parent-session", Sessions: session.NewMemoryStore()},
+		Runtime: tool.Runtime{SessionID: "00000000-0000-7000-8000-000000000010", Sessions: session.NewMemoryStore()},
 	})
 	if err != nil {
 		t.Fatalf("Execute returned error: %v", err)

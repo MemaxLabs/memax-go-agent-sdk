@@ -56,12 +56,12 @@ func TestJSONLStoreRoundTrip(t *testing.T) {
 func TestJSONLStoreCreateWithParent(t *testing.T) {
 	store := NewJSONLStore(t.TempDir())
 	sess, err := store.CreateWithOptions(context.Background(), CreateOptions{
-		ParentID: "0123456789abcdef0123456789abcdef",
+		ParentID: "00000000-0000-7000-8000-000000000000",
 	})
 	if err != nil {
 		t.Fatalf("CreateWithOptions returned error: %v", err)
 	}
-	if sess.ParentID != "0123456789abcdef0123456789abcdef" {
+	if sess.ParentID != "00000000-0000-7000-8000-000000000000" {
 		t.Fatalf("ParentID = %q, want parent id", sess.ParentID)
 	}
 	messages, err := store.Messages(context.Background(), sess.ID)
@@ -150,8 +150,8 @@ func TestJSONLStoreListMissingDirectory(t *testing.T) {
 }
 
 func TestValidID(t *testing.T) {
-	if !ValidID("0123456789abcdef0123456789abcdef") {
-		t.Fatal("ValidID returned false for generated-id shape")
+	if !ValidID("00000000-0000-7000-8000-000000000000") {
+		t.Fatal("ValidID returned false for uuid shape")
 	}
 	if ValidID("../escape") {
 		t.Fatal("ValidID returned true for path traversal")
@@ -173,7 +173,7 @@ func TestJSONLStoreExists(t *testing.T) {
 		t.Fatal("Exists returned false for created session")
 	}
 
-	exists, err = store.Exists(ctx, "fedcba9876543210fedcba9876543210")
+	exists, err = store.Exists(ctx, "00000000-0000-7000-8000-000000000001")
 	if err != nil {
 		t.Fatalf("Exists missing returned error: %v", err)
 	}
@@ -205,7 +205,7 @@ func TestJSONLStoreRejectsInvalidSessionID(t *testing.T) {
 
 func TestJSONLStoreReportsCorruptTranscriptLine(t *testing.T) {
 	dir := t.TempDir()
-	id := "0123456789abcdef0123456789abcdef"
+	id := "00000000-0000-7000-8000-000000000000"
 	path := filepath.Join(dir, id+transcriptExt)
 	if err := os.WriteFile(path, []byte("{not json}\n"), 0o600); err != nil {
 		t.Fatalf("write fixture: %v", err)

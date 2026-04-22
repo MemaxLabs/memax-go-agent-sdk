@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
@@ -16,19 +15,12 @@ import (
 
 const transcriptExt = ".jsonl"
 
-var sessionIDPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
-
 type JSONLStore struct {
 	dir string
 }
 
 func NewJSONLStore(dir string) *JSONLStore {
 	return &JSONLStore{dir: dir}
-}
-
-// ValidID reports whether id is a syntactically valid SDK session ID.
-func ValidID(id string) bool {
-	return sessionIDPattern.MatchString(id)
 }
 
 type transcriptEntry struct {
@@ -46,7 +38,7 @@ func (s *JSONLStore) CreateWithOptions(_ context.Context, opts CreateOptions) (S
 	if s.dir == "" {
 		return Session{}, fmt.Errorf("session jsonl store directory is required")
 	}
-	if opts.ParentID != "" && !sessionIDPattern.MatchString(opts.ParentID) {
+	if opts.ParentID != "" && !ValidID(opts.ParentID) {
 		return Session{}, fmt.Errorf("invalid parent session id: %q", opts.ParentID)
 	}
 	if err := os.MkdirAll(s.dir, 0o755); err != nil {
@@ -153,7 +145,7 @@ func (s *JSONLStore) List(ctx context.Context) ([]Session, error) {
 			continue
 		}
 		id := strings.TrimSuffix(entry.Name(), transcriptExt)
-		if !sessionIDPattern.MatchString(id) {
+		if !ValidID(id) {
 			continue
 		}
 		session, err := s.Get(ctx, id)
@@ -237,7 +229,7 @@ func (s *JSONLStore) readTranscript(_ context.Context, id string) (Session, []mo
 }
 
 func (s *JSONLStore) path(id string) (string, error) {
-	if !sessionIDPattern.MatchString(id) {
+	if !ValidID(id) {
 		return "", fmt.Errorf("invalid session id: %q", id)
 	}
 	return filepath.Join(s.dir, id+transcriptExt), nil

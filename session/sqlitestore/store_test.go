@@ -14,11 +14,12 @@ func TestStoreRoundTripGetListAndFork(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
 
-	sess, err := store.CreateWithOptions(ctx, session.CreateOptions{ParentID: "parent"})
+	parentID := "00000000-0000-7000-8000-000000000000"
+	sess, err := store.CreateWithOptions(ctx, session.CreateOptions{ParentID: parentID})
 	if err != nil {
 		t.Fatalf("CreateWithOptions returned error: %v", err)
 	}
-	if sess.ParentID != "parent" || sess.CreatedAt.IsZero() {
+	if sess.ParentID != parentID || sess.CreatedAt.IsZero() {
 		t.Fatalf("session = %#v, want parent and created time", sess)
 	}
 
@@ -36,7 +37,7 @@ func TestStoreRoundTripGetListAndFork(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get returned error: %v", err)
 	}
-	if got.ID != sess.ID || got.ParentID != "parent" {
+	if got.ID != sess.ID || got.ParentID != parentID {
 		t.Fatalf("Get = %#v, want session metadata", got)
 	}
 
@@ -69,6 +70,14 @@ func TestStoreRoundTripGetListAndFork(t *testing.T) {
 	}
 	if len(forkMessages) != 1 || forkMessages[0].ID != "m1" {
 		t.Fatalf("fork messages = %#v, want through m1", forkMessages)
+	}
+}
+
+func TestStoreRejectsInvalidParentSessionID(t *testing.T) {
+	store := newTestStore(t)
+	_, err := store.CreateWithOptions(context.Background(), session.CreateOptions{ParentID: "parent"})
+	if err == nil {
+		t.Fatal("CreateWithOptions returned nil, want invalid parent session id")
 	}
 }
 

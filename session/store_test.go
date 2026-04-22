@@ -9,23 +9,32 @@ import (
 
 func TestMemoryStoreCreateWithParent(t *testing.T) {
 	store := NewMemoryStore()
-	sess, err := store.CreateWithOptions(context.Background(), CreateOptions{ParentID: "parent-session"})
+	parentID := "00000000-0000-7000-8000-000000000000"
+	sess, err := store.CreateWithOptions(context.Background(), CreateOptions{ParentID: parentID})
 	if err != nil {
 		t.Fatalf("CreateWithOptions returned error: %v", err)
 	}
-	if sess.ParentID != "parent-session" {
-		t.Fatalf("ParentID = %q, want parent-session", sess.ParentID)
+	if sess.ParentID != parentID {
+		t.Fatalf("ParentID = %q, want %q", sess.ParentID, parentID)
 	}
 }
 
 func TestCreateUsesExtendedStore(t *testing.T) {
 	store := NewMemoryStore()
-	sess, err := Create(context.Background(), store, CreateOptions{ParentID: "parent-session"})
+	parentID := "00000000-0000-7000-8000-000000000000"
+	sess, err := Create(context.Background(), store, CreateOptions{ParentID: parentID})
 	if err != nil {
 		t.Fatalf("Create returned error: %v", err)
 	}
-	if sess.ParentID != "parent-session" {
-		t.Fatalf("ParentID = %q, want parent-session", sess.ParentID)
+	if sess.ParentID != parentID {
+		t.Fatalf("ParentID = %q, want %q", sess.ParentID, parentID)
+	}
+}
+
+func TestMemoryStoreRejectsInvalidParentSessionID(t *testing.T) {
+	_, err := NewMemoryStore().CreateWithOptions(context.Background(), CreateOptions{ParentID: "parent-session"})
+	if err == nil {
+		t.Fatal("CreateWithOptions returned nil, want invalid parent session id")
 	}
 }
 

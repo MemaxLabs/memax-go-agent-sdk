@@ -529,8 +529,8 @@ func TestQuotaValidatorDelegatedChildGetsFreshSessionEnvelope(t *testing.T) {
 	}, WithRequiredTenantScope())
 	scope := tenant.Scope{ID: "tenant-1", SubjectID: "user-1"}
 	for _, req := range []tenant.Request{
-		{Boundary: tenant.BoundarySessionStart, SessionID: "parent-session", Scope: scope},
-		{Boundary: tenant.BoundaryModelRequest, SessionID: "parent-session", Scope: scope},
+		{Boundary: tenant.BoundarySessionStart, SessionID: "00000000-0000-7000-8000-000000000010", Scope: scope},
+		{Boundary: tenant.BoundaryModelRequest, SessionID: "00000000-0000-7000-8000-000000000010", Scope: scope},
 	} {
 		if err := tenant.Check(context.Background(), validator, req); err != nil {
 			t.Fatalf("parent tenant.Check(%s) error = %v", req.Boundary, err)
@@ -544,7 +544,7 @@ func TestQuotaValidatorDelegatedChildGetsFreshSessionEnvelope(t *testing.T) {
 			Input: json.RawMessage(`{"prompt":"delegate after parent quota use"}`),
 		},
 		Runtime: tool.Runtime{
-			SessionID:       "parent-session",
+			SessionID:       "00000000-0000-7000-8000-000000000010",
 			Sessions:        store,
 			Tenant:          scope,
 			TenantValidator: validator,
@@ -562,7 +562,7 @@ func TestQuotaValidatorDelegatedChildGetsFreshSessionEnvelope(t *testing.T) {
 	if len(childModel.requests) != 1 {
 		t.Fatalf("child model requests = %d, want 1", len(childModel.requests))
 	}
-	if childModel.requests[0].SessionID == "parent-session" {
+	if childModel.requests[0].SessionID == "00000000-0000-7000-8000-000000000010" {
 		t.Fatalf("child session id = %q, want fresh child session", childModel.requests[0].SessionID)
 	}
 	if childModel.requests[0].Tenant.ID != "tenant-1" {
