@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
@@ -35,6 +36,21 @@ func TestMemoryStoreRejectsInvalidParentSessionID(t *testing.T) {
 	_, err := NewMemoryStore().CreateWithOptions(context.Background(), CreateOptions{ParentID: "parent-session"})
 	if err == nil {
 		t.Fatal("CreateWithOptions returned nil, want invalid parent session id")
+	}
+}
+
+func TestValidIDAcceptsCanonicalUUIDCase(t *testing.T) {
+	lower := "0194d9a4-7b8c-7d20-9a1b-4f6c6f4f7a01"
+	upper := "0194D9A4-7B8C-7D20-9A1B-4F6C6F4F7A01"
+	if !ValidID(lower) {
+		t.Fatalf("ValidID(%q) = false, want true", lower)
+	}
+	if !ValidID(upper) {
+		t.Fatalf("ValidID(%q) = false, want true", upper)
+	}
+	canonical, ok := CanonicalID(upper)
+	if !ok || canonical != lower {
+		t.Fatalf("CanonicalID(%q) = %q, %t; want %q, true", upper, canonical, ok, lower)
 	}
 }
 
@@ -83,6 +99,44 @@ func TestMemoryStoreGetListAndFork(t *testing.T) {
 	}
 	if len(forkMessages) != 1 || forkMessages[0].ID != "m1" {
 		t.Fatalf("fork messages = %#v, want through m1", forkMessages)
+	}
+}
+
+func TestMemoryStoreCanonicalizesInputSessionIDs(t *testing.T) {
+	store := NewMemoryStore()
+	sess, err := store.Create(context.Background())
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	upperID := strings.ToUpper(sess.ID)
+	if err := store.Append(context.Background(), upperID, model.Message{ID: "m1", Role: model.RoleUser}); err != nil {
+		t.Fatalf("Append returned error: %v", err)
+	}
+	got, err := store.Get(context.Background(), upperID)
+	if err != nil {
+		t.Fatalf("Get returned error: %v", err)
+	}
+	if got.ID != sess.ID {
+		t.Fatalf("Get ID = %q, want canonical %q", got.ID, sess.ID)
+	}
+	messages, err := store.Messages(context.Background(), upperID)
+	if err != nil {
+		t.Fatalf("Messages returned error: %v", err)
+	}
+	if len(messages) != 1 || messages[0].ID != "m1" {
+		t.Fatalf("Messages = %#v, want appended message", messages)
+	}
+}
+
+func TestMemoryStoreRejectsInvalidForkParentSessionID(t *testing.T) {
+	store := NewMemoryStore()
+	sess, err := store.Create(context.Background())
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	_, err = store.Fork(context.Background(), sess.ID, ForkOptions{ParentID: "parent-session"})
+	if err == nil {
+		t.Fatal("Fork returned nil, want invalid parent session id")
 	}
 }
 

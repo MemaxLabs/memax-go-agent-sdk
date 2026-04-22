@@ -3,6 +3,7 @@ package sqlitestore
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"testing"
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
@@ -70,6 +71,33 @@ func TestStoreRoundTripGetListAndFork(t *testing.T) {
 	}
 	if len(forkMessages) != 1 || forkMessages[0].ID != "m1" {
 		t.Fatalf("fork messages = %#v, want through m1", forkMessages)
+	}
+}
+
+func TestStoreCanonicalizesInputSessionIDs(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	sess, err := store.Create(ctx)
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	upperID := strings.ToUpper(sess.ID)
+	if err := store.Append(ctx, upperID, model.Message{ID: "m1", Role: model.RoleUser}); err != nil {
+		t.Fatalf("Append returned error: %v", err)
+	}
+	got, err := store.Get(ctx, upperID)
+	if err != nil {
+		t.Fatalf("Get returned error: %v", err)
+	}
+	if got.ID != sess.ID {
+		t.Fatalf("Get ID = %q, want canonical %q", got.ID, sess.ID)
+	}
+	messages, err := store.Messages(ctx, upperID)
+	if err != nil {
+		t.Fatalf("Messages returned error: %v", err)
+	}
+	if len(messages) != 1 || messages[0].ID != "m1" {
+		t.Fatalf("Messages = %#v, want appended message", messages)
 	}
 }
 

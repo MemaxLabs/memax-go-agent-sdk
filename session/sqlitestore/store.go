@@ -33,8 +33,9 @@ func (s *Store) Create(ctx context.Context) (session.Session, error) {
 }
 
 func (s *Store) CreateWithOptions(ctx context.Context, opts session.CreateOptions) (session.Session, error) {
-	if opts.ParentID != "" && !session.ValidID(opts.ParentID) {
-		return session.Session{}, fmt.Errorf("invalid parent session id: %q", opts.ParentID)
+	parentID, err := canonicalParentID(opts.ParentID)
+	if err != nil {
+		return session.Session{}, err
 	}
 	id, err := newID()
 	if err != nil {
@@ -42,7 +43,7 @@ func (s *Store) CreateWithOptions(ctx context.Context, opts session.CreateOption
 	}
 	sess := session.Session{
 		ID:        id,
-		ParentID:  opts.ParentID,
+		ParentID:  parentID,
 		CreatedAt: time.Now().UTC(),
 	}
 	_, err = s.db.ExecContext(ctx, `
@@ -56,11 +57,14 @@ func (s *Store) CreateWithOptions(ctx context.Context, opts session.CreateOption
 }
 
 func (s *Store) Append(ctx context.Context, id string, msg model.Message) error {
+	id, err := canonicalRequiredID(id)
+	if err != nil {
+		return err
+	}
 	if _, err := s.Get(ctx, id); err != nil {
 		return err
 	}
 	if msg.ID == "" {
-		var err error
 		msg.ID, err = newID()
 		if err != nil {
 			return err
@@ -81,6 +85,10 @@ func (s *Store) Append(ctx context.Context, id string, msg model.Message) error 
 }
 
 func (s *Store) Messages(ctx context.Context, id string) ([]model.Message, error) {
+	id, err := canonicalRequiredID(id)
+	if err != nil {
+		return nil, err
+	}
 	if _, err := s.Get(ctx, id); err != nil {
 		return nil, err
 	}
@@ -114,9 +122,13 @@ func (s *Store) Messages(ctx context.Context, id string) ([]model.Message, error
 }
 
 func (s *Store) Get(ctx context.Context, id string) (session.Session, error) {
+	id, err := canonicalRequiredID(id)
+	if err != nil {
+		return session.Session{}, err
+	}
 	var sess session.Session
 	var createdAt string
-	err := s.db.QueryRowContext(ctx, `
+	err = s.db.QueryRowContext(ctx, `
 		SELECT id, parent_id, created_at
 		FROM memax_sessions
 		WHERE id = ?
@@ -171,6 +183,10 @@ func (s *Store) List(ctx context.Context) ([]session.Session, error) {
 }
 
 func (s *Store) Fork(ctx context.Context, id string, opts session.ForkOptions) (session.Session, error) {
+	id, err := canonicalRequiredID(id)
+	if err != nil {
+		return session.Session{}, err
+	}
 	messages, err := s.Messages(ctx, id)
 	if err != nil {
 		return session.Session{}, err
@@ -242,4 +258,23 @@ func newID() (string, error) {
 		return "", fmt.Errorf("generate session id: %w", err)
 	}
 	return id.String(), nil
+}
+
+func canonicalRequiredID(id string) (string, error) {
+	canonical, ok := session.CanonicalID(id)
+	if !ok {
+		return "", fmt.Errorf("invalid session id: %q", id)
+	}
+	return canonical, nil
+}
+
+func canonicalParentID(id string) (string, error) {
+	if id == "" {
+		return "", nil
+	}
+	canonical, ok := session.CanonicalID(id)
+	if !ok {
+		return "", fmt.Errorf("invalid parent session id: %q", id)
+	}
+	return canonical, nil
 }

@@ -39,6 +39,9 @@ func Query(ctx context.Context, prompt string, opts Options) (<-chan Event, erro
 	if opts.Model == nil {
 		return nil, ErrMissingModelClient
 	}
+	if err := normalizeSessionIDs(&opts); err != nil {
+		return nil, err
+	}
 	outputValidator, err := opts.Output.Compile(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("compile output contract: %w", err)
@@ -201,6 +204,24 @@ func startSession(ctx context.Context, opts Options) (session.Session, error) {
 		return session.Get(ctx, opts.Sessions, opts.SessionID)
 	}
 	return session.Create(ctx, opts.Sessions, session.CreateOptions{ParentID: opts.ParentSessionID})
+}
+
+func normalizeSessionIDs(opts *Options) error {
+	if opts.SessionID != "" {
+		id, ok := session.CanonicalID(opts.SessionID)
+		if !ok {
+			return fmt.Errorf("invalid session id: %q", opts.SessionID)
+		}
+		opts.SessionID = id
+	}
+	if opts.ParentSessionID != "" {
+		id, ok := session.CanonicalID(opts.ParentSessionID)
+		if !ok {
+			return fmt.Errorf("invalid parent session id: %q", opts.ParentSessionID)
+		}
+		opts.ParentSessionID = id
+	}
+	return nil
 }
 
 func validateTenantBoundary(ctx context.Context, opts Options, sessionID, parentSessionID string, boundary tenant.Boundary) error {

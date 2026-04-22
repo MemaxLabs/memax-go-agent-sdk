@@ -38,8 +38,9 @@ func (s *JSONLStore) CreateWithOptions(_ context.Context, opts CreateOptions) (S
 	if s.dir == "" {
 		return Session{}, fmt.Errorf("session jsonl store directory is required")
 	}
-	if opts.ParentID != "" && !ValidID(opts.ParentID) {
-		return Session{}, fmt.Errorf("invalid parent session id: %q", opts.ParentID)
+	parentID, err := canonicalParentID(opts.ParentID)
+	if err != nil {
+		return Session{}, err
 	}
 	if err := os.MkdirAll(s.dir, 0o755); err != nil {
 		return Session{}, fmt.Errorf("create session directory: %w", err)
@@ -57,7 +58,7 @@ func (s *JSONLStore) CreateWithOptions(_ context.Context, opts CreateOptions) (S
 	if err != nil {
 		return Session{}, fmt.Errorf("create transcript: %w", err)
 	}
-	session := Session{ID: id, ParentID: opts.ParentID, CreatedAt: time.Now().UTC()}
+	session := Session{ID: id, ParentID: parentID, CreatedAt: time.Now().UTC()}
 	entry := transcriptEntry{
 		Type:      "session",
 		Timestamp: session.CreatedAt,
@@ -184,6 +185,10 @@ func (s *JSONLStore) Fork(ctx context.Context, id string, opts ForkOptions) (Ses
 }
 
 func (s *JSONLStore) readTranscript(_ context.Context, id string) (Session, []model.Message, error) {
+	canonicalID, err := canonicalRequiredID(id)
+	if err != nil {
+		return Session{}, nil, err
+	}
 	path, err := s.path(id)
 	if err != nil {
 		return Session{}, nil, err
@@ -197,7 +202,7 @@ func (s *JSONLStore) readTranscript(_ context.Context, id string) (Session, []mo
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 64*1024), 64*1024*1024)
 
-	session := Session{ID: id}
+	session := Session{ID: canonicalID}
 	var messages []model.Message
 	line := 0
 	for scanner.Scan() {
@@ -229,8 +234,9 @@ func (s *JSONLStore) readTranscript(_ context.Context, id string) (Session, []mo
 }
 
 func (s *JSONLStore) path(id string) (string, error) {
-	if !ValidID(id) {
+	canonicalID, ok := CanonicalID(id)
+	if !ok {
 		return "", fmt.Errorf("invalid session id: %q", id)
 	}
-	return filepath.Join(s.dir, id+transcriptExt), nil
+	return filepath.Join(s.dir, canonicalID+transcriptExt), nil
 }

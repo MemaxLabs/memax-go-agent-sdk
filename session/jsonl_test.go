@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
@@ -50,6 +51,32 @@ func TestJSONLStoreRoundTrip(t *testing.T) {
 	}
 	if got[1].ToolResult == nil || got[1].ToolResult.Content != "result" {
 		t.Fatalf("second message = %#v, want tool result", got[1])
+	}
+}
+
+func TestJSONLStoreCanonicalizesInputSessionIDs(t *testing.T) {
+	store := NewJSONLStore(t.TempDir())
+	sess, err := store.Create(context.Background())
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	upperID := strings.ToUpper(sess.ID)
+	if err := store.Append(context.Background(), upperID, model.Message{ID: "m1", Role: model.RoleUser}); err != nil {
+		t.Fatalf("Append returned error: %v", err)
+	}
+	exists, err := store.Exists(context.Background(), upperID)
+	if err != nil {
+		t.Fatalf("Exists returned error: %v", err)
+	}
+	if !exists {
+		t.Fatal("Exists returned false for uppercase session id")
+	}
+	got, err := store.Get(context.Background(), upperID)
+	if err != nil {
+		t.Fatalf("Get returned error: %v", err)
+	}
+	if got.ID != sess.ID {
+		t.Fatalf("Get ID = %q, want canonical %q", got.ID, sess.ID)
 	}
 }
 

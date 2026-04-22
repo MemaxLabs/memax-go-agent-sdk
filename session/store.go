@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -12,7 +13,7 @@ import (
 	"github.com/google/uuid"
 )
 
-var sessionIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+var sessionIDPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 type Session struct {
 	ID        string
@@ -22,7 +23,16 @@ type Session struct {
 
 // ValidID reports whether id is a syntactically valid SDK session ID.
 func ValidID(id string) bool {
-	return sessionIDPattern.MatchString(id)
+	_, ok := CanonicalID(id)
+	return ok
+}
+
+// CanonicalID returns id in the SDK's lowercase UUID form.
+func CanonicalID(id string) (string, bool) {
+	if !sessionIDPattern.MatchString(id) {
+		return "", false
+	}
+	return strings.ToLower(id), true
 }
 
 type Store interface {
@@ -75,14 +85,15 @@ func (s *MemoryStore) Create(ctx context.Context) (Session, error) {
 }
 
 func (s *MemoryStore) CreateWithOptions(_ context.Context, opts CreateOptions) (Session, error) {
-	if opts.ParentID != "" && !ValidID(opts.ParentID) {
-		return Session{}, fmt.Errorf("invalid parent session id: %q", opts.ParentID)
+	parentID, err := canonicalParentID(opts.ParentID)
+	if err != nil {
+		return Session{}, err
 	}
 	id, err := newID()
 	if err != nil {
 		return Session{}, err
 	}
-	session := Session{ID: id, ParentID: opts.ParentID, CreatedAt: time.Now().UTC()}
+	session := Session{ID: id, ParentID: parentID, CreatedAt: time.Now().UTC()}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.sessions[id] = memorySession{session: session}
@@ -90,8 +101,11 @@ func (s *MemoryStore) CreateWithOptions(_ context.Context, opts CreateOptions) (
 }
 
 func (s *MemoryStore) Append(_ context.Context, id string, msg model.Message) error {
+	id, err := canonicalRequiredID(id)
+	if err != nil {
+		return err
+	}
 	if msg.ID == "" {
-		var err error
 		msg.ID, err = newID()
 		if err != nil {
 			return err
@@ -109,6 +123,10 @@ func (s *MemoryStore) Append(_ context.Context, id string, msg model.Message) er
 }
 
 func (s *MemoryStore) Messages(_ context.Context, id string) ([]model.Message, error) {
+	id, err := canonicalRequiredID(id)
+	if err != nil {
+		return nil, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	record, ok := s.sessions[id]
@@ -119,6 +137,10 @@ func (s *MemoryStore) Messages(_ context.Context, id string) ([]model.Message, e
 }
 
 func (s *MemoryStore) Get(_ context.Context, id string) (Session, error) {
+	id, err := canonicalRequiredID(id)
+	if err != nil {
+		return Session{}, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	record, ok := s.sessions[id]
@@ -140,6 +162,17 @@ func (s *MemoryStore) List(context.Context) ([]Session, error) {
 }
 
 func (s *MemoryStore) Fork(_ context.Context, id string, opts ForkOptions) (Session, error) {
+	id, err := canonicalRequiredID(id)
+	if err != nil {
+		return Session{}, err
+	}
+	parentID, err := canonicalParentID(opts.ParentID)
+	if err != nil {
+		return Session{}, err
+	}
+	if parentID == "" {
+		parentID = id
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	source, ok := s.sessions[id]
@@ -153,10 +186,6 @@ func (s *MemoryStore) Fork(_ context.Context, id string, opts ForkOptions) (Sess
 	newID, err := newID()
 	if err != nil {
 		return Session{}, err
-	}
-	parentID := opts.ParentID
-	if parentID == "" {
-		parentID = id
 	}
 	session := Session{ID: newID, ParentID: parentID, CreatedAt: time.Now().UTC()}
 	s.sessions[newID] = memorySession{
@@ -224,6 +253,25 @@ func forkMessages(messages []model.Message, throughMessageID string) ([]model.Me
 		}
 	}
 	return model.CloneMessages(messages[:limit]), nil
+}
+
+func canonicalRequiredID(id string) (string, error) {
+	canonical, ok := CanonicalID(id)
+	if !ok {
+		return "", fmt.Errorf("invalid session id: %q", id)
+	}
+	return canonical, nil
+}
+
+func canonicalParentID(id string) (string, error) {
+	if id == "" {
+		return "", nil
+	}
+	canonical, ok := CanonicalID(id)
+	if !ok {
+		return "", fmt.Errorf("invalid parent session id: %q", id)
+	}
+	return canonical, nil
 }
 
 func sortSessions(sessions []Session) {
