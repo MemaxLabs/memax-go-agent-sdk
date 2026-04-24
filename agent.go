@@ -2172,7 +2172,7 @@ func collectAssistant(
 
 		switch event.Kind {
 		case model.StreamText:
-			if strings.TrimSpace(event.Text) != "" {
+			if event.Text != "" {
 				block := model.ContentBlock{Type: model.ContentText, Text: event.Text}
 				blocks = append(blocks, block)
 				out := newEvent(EventAssistant, sessionID, turn)

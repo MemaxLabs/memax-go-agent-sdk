@@ -75,6 +75,50 @@ func TestQueryRunsToolAndContinuesToResult(t *testing.T) {
 	}
 }
 
+func TestQueryPreservesWhitespaceOnlyAssistantTextDeltas(t *testing.T) {
+	events, err := Query(context.Background(), "summarize", Options{
+		Model: &fakeModel{turns: [][]model.StreamEvent{{
+			{Kind: model.StreamText, Text: "###"},
+			{Kind: model.StreamText, Text: " "},
+			{Kind: model.StreamText, Text: "1. Strong CLI/config hygiene"},
+			{Kind: model.StreamText, Text: "\n"},
+			{Kind: model.StreamText, Text: "The parser is careful about:"},
+			{Kind: model.StreamText, Text: "\n"},
+			{Kind: model.StreamText, Text: "- source precedence"},
+			{Kind: model.StreamText, Text: "\n"},
+			{Kind: model.StreamText, Text: "- conflict validation"},
+			{Kind: model.StreamText, Text: "\n\n"},
+			{Kind: model.StreamText, Text: "Done."},
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+
+	var assistantChunks []string
+	var result string
+	for event := range events {
+		switch event.Kind {
+		case EventAssistant:
+			if event.Message != nil {
+				assistantChunks = append(assistantChunks, event.Message.PlainText())
+			}
+		case EventResult:
+			result = event.Result
+		case EventError:
+			t.Fatalf("query event error: %v", event.Err)
+		}
+	}
+
+	want := "### 1. Strong CLI/config hygiene\nThe parser is careful about:\n- source precedence\n- conflict validation\n\nDone."
+	if got := strings.Join(assistantChunks, ""); got != want {
+		t.Fatalf("assistant chunks joined = %q, want %q", got, want)
+	}
+	if result != want {
+		t.Fatalf("result = %q, want %q", result, want)
+	}
+}
+
 func TestQueryStartsSafeToolBeforeAssistantStreamEnds(t *testing.T) {
 	started := make(chan struct{})
 	registry := tool.NewRegistry(tool.Definition{
