@@ -9,6 +9,7 @@ func TestCapabilitiesForModel(t *testing.T) {
 		wantOutput int
 	}{
 		{name: "claude-opus-4-7", wantWindow: contextWindowClaude200K, wantOutput: 128_000},
+		{name: "claude-3-opus-20240229", wantWindow: contextWindowClaude200K},
 		{name: "claude-sonnet-4-6", wantWindow: contextWindowClaude200K, wantOutput: 64_000},
 		{name: "claude-haiku-4-5-20251001", wantWindow: contextWindowClaude200K, wantOutput: 64_000},
 		{name: "claude-3-5-sonnet-20241022", wantWindow: contextWindowClaude200K},

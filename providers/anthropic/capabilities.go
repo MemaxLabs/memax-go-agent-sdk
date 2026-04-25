@@ -22,7 +22,7 @@ func CapabilitiesForModel(modelName string) model.Capabilities {
 	}
 	if strings.Contains(name, "claude") {
 		caps.ContextWindowTokens = contextWindowClaude200K
-		if strings.Contains(name, "opus") {
+		if strings.Contains(name, "opus-4") || strings.Contains(name, "opus-4.") {
 			caps.MaxOutputTokens = 128_000
 		} else if strings.Contains(name, "sonnet-4-6") || strings.Contains(name, "sonnet-4.6") || strings.Contains(name, "haiku-4-5") || strings.Contains(name, "haiku-4.5") {
 			caps.MaxOutputTokens = 64_000
