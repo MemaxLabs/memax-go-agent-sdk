@@ -41,11 +41,11 @@ func ClientCapabilities(client Client) (Capabilities, bool) {
 	return caps, !caps.IsZero()
 }
 
-// IsZero reports whether no useful capability facts are set.
+// IsZero reports whether no useful capability limits are set. Provider and
+// model labels alone are identity, not limits; callers that need a specific
+// limit should still check that field directly.
 func (c Capabilities) IsZero() bool {
-	return c.Provider == "" &&
-		c.Model == "" &&
-		c.ContextWindowTokens == 0 &&
+	return c.ContextWindowTokens == 0 &&
 		c.MaxOutputTokens == 0 &&
 		c.AutoCompactTokens == 0 &&
 		len(c.Metadata) == 0

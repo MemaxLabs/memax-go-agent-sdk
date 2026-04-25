@@ -13,9 +13,9 @@ const (
 )
 
 // CapabilitiesForModel returns locally-known OpenAI model limits. The registry
-// is deliberately conservative: aliases that require explicit long-context
-// provider configuration report the standard context window, while hosts can
-// still override with their own context policy.
+// is deliberately conservative for model families whose long-context behavior
+// depends on deployment or product configuration; hosts can still override with
+// their own context policy.
 func CapabilitiesForModel(modelName string) model.Capabilities {
 	name := strings.ToLower(strings.TrimSpace(modelName))
 	caps := model.Capabilities{
@@ -26,11 +26,7 @@ func CapabilitiesForModel(modelName string) model.Capabilities {
 	case strings.HasPrefix(name, "gpt-4.1"):
 		caps.ContextWindowTokens = contextWindowGPT41
 		caps.MaxOutputTokens = 32_768
-	case strings.HasPrefix(name, "gpt-5.4"),
-		strings.HasPrefix(name, "gpt-5.3"),
-		strings.HasPrefix(name, "gpt-5.2"),
-		strings.HasPrefix(name, "gpt-5.1"),
-		strings.HasPrefix(name, "gpt-5"):
+	case strings.HasPrefix(name, "gpt-5"):
 		caps.ContextWindowTokens = contextWindowGPT5
 	case strings.HasPrefix(name, "gpt-4o"):
 		caps.ContextWindowTokens = contextWindowGPT4o

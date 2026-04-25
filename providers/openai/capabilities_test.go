@@ -41,3 +41,10 @@ func TestClientCapabilitiesUseConfiguredMaxOutput(t *testing.T) {
 		t.Fatalf("MaxOutputTokens = %d, want configured 123", got.MaxOutputTokens)
 	}
 }
+
+func TestNilClientCapabilities(t *testing.T) {
+	var client *Client
+	if got := client.Capabilities(); !got.IsZero() {
+		t.Fatalf("nil Capabilities = %#v, want zero", got)
+	}
+}

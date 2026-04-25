@@ -8,9 +8,9 @@ func TestCapabilitiesForModel(t *testing.T) {
 		wantWindow int
 		wantOutput int
 	}{
-		{name: "claude-opus-4-7", wantWindow: contextWindowClaude1M, wantOutput: 128_000},
-		{name: "claude-sonnet-4-6", wantWindow: contextWindowClaude1M, wantOutput: 64_000},
-		{name: "claude-haiku-4-5-20251001", wantWindow: contextWindowClaude200K},
+		{name: "claude-opus-4-7", wantWindow: contextWindowClaude200K, wantOutput: 128_000},
+		{name: "claude-sonnet-4-6", wantWindow: contextWindowClaude200K, wantOutput: 64_000},
+		{name: "claude-haiku-4-5-20251001", wantWindow: contextWindowClaude200K, wantOutput: 64_000},
 		{name: "claude-3-5-sonnet-20241022", wantWindow: contextWindowClaude200K},
 		{name: "unknown"},
 	}
@@ -33,10 +33,17 @@ func TestCapabilitiesForModel(t *testing.T) {
 func TestClientCapabilitiesUseConfiguredMaxTokens(t *testing.T) {
 	client := &Client{Model: "claude-opus-4-7", MaxTokens: 123}
 	got := client.Capabilities()
-	if got.ContextWindowTokens != contextWindowClaude1M {
-		t.Fatalf("ContextWindowTokens = %d, want %d", got.ContextWindowTokens, contextWindowClaude1M)
+	if got.ContextWindowTokens != contextWindowClaude200K {
+		t.Fatalf("ContextWindowTokens = %d, want %d", got.ContextWindowTokens, contextWindowClaude200K)
 	}
 	if got.MaxOutputTokens != 123 {
 		t.Fatalf("MaxOutputTokens = %d, want configured 123", got.MaxOutputTokens)
+	}
+}
+
+func TestNilClientCapabilities(t *testing.T) {
+	var client *Client
+	if got := client.Capabilities(); !got.IsZero() {
+		t.Fatalf("nil Capabilities = %#v, want zero", got)
 	}
 }

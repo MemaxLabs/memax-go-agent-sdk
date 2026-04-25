@@ -49,4 +49,9 @@ func TestClientCapabilitiesFallbacks(t *testing.T) {
 	if caps, ok := ClientCapabilities(capabilitiesClient{}); ok || !caps.IsZero() {
 		t.Fatalf("zero ClientCapabilities = (%#v, %t), want zero false", caps, ok)
 	}
+	if caps, ok := ClientCapabilities(capabilitiesClient{
+		CapabilitiesValue: Capabilities{Provider: "test", Model: "unknown"},
+	}); ok || !caps.IsZero() {
+		t.Fatalf("identity-only ClientCapabilities = (%#v, %t), want zero false", caps, ok)
+	}
 }
