@@ -17,7 +17,7 @@ const (
 // depends on deployment or product configuration; hosts can still override with
 // their own context policy.
 func CapabilitiesForModel(modelName string) model.Capabilities {
-	name := strings.ToLower(strings.TrimSpace(modelName))
+	name := normalizeCapabilityModelName(modelName)
 	caps := model.Capabilities{
 		Provider: "openai",
 		Model:    modelName,
@@ -32,6 +32,14 @@ func CapabilitiesForModel(modelName string) model.Capabilities {
 		caps.ContextWindowTokens = contextWindowGPT4o
 	}
 	return caps
+}
+
+func normalizeCapabilityModelName(modelName string) string {
+	name := strings.ToLower(strings.TrimSpace(modelName))
+	if family, modelID, ok := strings.Cut(name, "/"); ok && family == "openai" {
+		return strings.TrimSpace(modelID)
+	}
+	return name
 }
 
 // Capabilities reports the configured client's locally-known model limits.

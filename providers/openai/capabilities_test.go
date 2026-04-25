@@ -10,8 +10,10 @@ func TestCapabilitiesForModel(t *testing.T) {
 	}{
 		{name: "gpt-4.1", wantWindow: contextWindowGPT41, wantOutput: 32_768},
 		{name: "gpt-4.1-mini-2025-04-14", wantWindow: contextWindowGPT41, wantOutput: 32_768},
+		{name: "openai/gpt-4.1-mini-2025-04-14", wantWindow: contextWindowGPT41, wantOutput: 32_768},
 		{name: "gpt-5.4", wantWindow: contextWindowGPT5},
 		{name: "gpt-5.3-codex", wantWindow: contextWindowGPT5},
+		{name: "openai/gpt-5.5-pro", wantWindow: contextWindowGPT5},
 		{name: "gpt-4o", wantWindow: contextWindowGPT4o},
 		{name: "unknown"},
 	}
