@@ -11,3 +11,6 @@ coverage.out
 
 # Local Memax runtime state.
 .memax-sessions/
+
+# Temp
+.tmp/
