@@ -54,6 +54,9 @@ parity today.
 - Add subagent tool with parent/child session correlation. Initial bounded worker tool, scoped plan handoff, and opt-in task progress return exist.
 - Add todo/task state tools. Initial task toolkit exists.
 - Add tool search and deferred tool loading for large registries. Initial selector and search toolkit exist.
+- Add host-owned web search and fetch tools. Initial `web.Searcher` /
+  `web.Fetcher` contracts plus `toolkit/webtools` exist for metadata-first
+  search and explicit URL fetch through host-owned providers.
 - Add checkpoint interfaces for virtual workspaces. Initial checkpoint manager and tools exist.
 - Add resumable/forkable durable sessions. Initial resume/list/get/fork support exists.
 - Add retry-after-context-failure and external result storage.

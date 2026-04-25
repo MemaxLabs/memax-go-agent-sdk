@@ -664,6 +664,13 @@ stuffing or direct transport access. Initial `messaging/jmapclient` and
 adapter over JMAP mail, using thread-collapsed metadata search and explicit
 full-thread reads instead of stuffing email bodies into prompt context.
 
+`web` provides the analogous seam for host-owned public web access.
+`web.Searcher` returns metadata-first search hits suited for discovery, and
+`web.Fetcher` loads full page content only when the model explicitly asks for a
+specific URL. The optional `toolkit/webtools` package exposes `web_search` and
+`web_fetch`, keeping internet access transcript-visible and policy-controlled
+by the host rather than hidden inside the runtime kernel.
+
 `scheduling` provides the analogous seam for host-owned calendar and scheduling
 backends. `scheduling.Searcher` returns metadata-first event results suited for
 discovery, `scheduling.Reader` loads full event detail only when the model

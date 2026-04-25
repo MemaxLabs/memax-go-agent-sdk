@@ -81,6 +81,8 @@ Coding-oriented adapters and toolkits:
 - checkpoint manager interfaces and checkpoint tools
 - workspace, patch, diff, restore, verification, and command toolkits over
   host-owned backends
+- host-owned web search/fetch contracts plus optional `toolkit/webtools`
+  adapters for transcript-visible public web access
 - initial `stack/coding` assembly for batteries-included coding workflows
 - initial `stack/personal` assembly for durable-memory, metadata-first
   note/document tools, metadata-first messaging tools, metadata-first
@@ -506,6 +508,14 @@ of capabilities. Workspace paths use forward-slash, workspace-relative syntax;
 OS-backed adapters should translate and contain paths at the adapter boundary.
 Patch, diff, checkpoint, and restore tools emit dedicated workspace lifecycle
 events derived from result metadata.
+
+For public web access, use the optional `web` contracts and
+`toolkit/webtools`. The core SDK does not search or fetch the internet by
+itself. Hosts provide a `web.Searcher` and/or `web.Fetcher` that owns the
+search provider, credentials, domain policy, caching, and audit behavior, then
+register `web_search` and `web_fetch` through the normal tool layer. Search
+results are metadata-first: titles, URLs, snippets, sources, and publish times
+are visible before the model asks to fetch a specific URL.
 
 For verification loops, use the optional `toolkit/verifytools` package. It
 defines a small host-owned `Verifier` interface so applications can expose

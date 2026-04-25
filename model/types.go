@@ -266,6 +266,35 @@ const (
 	// MetadataCommandDroppedBytes carries the number of older output bytes
 	// evicted from the manager buffer.
 	MetadataCommandDroppedBytes = "command_dropped_bytes"
+	// MetadataWebOperation identifies web tool results that should produce web
+	// lifecycle events or audit records.
+	MetadataWebOperation = "web_operation"
+	// MetadataWebQuery carries the web search query.
+	MetadataWebQuery = "web_query"
+	// MetadataWebDomains carries optional domain filters for a web search.
+	MetadataWebDomains = "web_domains"
+	// MetadataWebResultCount carries the number of web search results returned.
+	MetadataWebResultCount = "web_result_count"
+	// MetadataWebResultMetadata carries per-result web search metadata in result
+	// order when the backend provides it.
+	MetadataWebResultMetadata = "web_result_metadata"
+	// MetadataWebURLs carries URLs returned by web search tools or touched by
+	// web fetch tools.
+	MetadataWebURLs = "web_urls"
+	// MetadataWebURL carries the requested URL for a web fetch.
+	MetadataWebURL = "web_url"
+	// MetadataWebFinalURL carries the final URL after a web fetch redirect.
+	MetadataWebFinalURL = "web_final_url"
+	// MetadataWebStatusCode carries the HTTP status code observed by a web
+	// fetch backend, when applicable.
+	MetadataWebStatusCode = "web_status_code"
+	// MetadataWebContentType carries the fetched content type.
+	MetadataWebContentType = "web_content_type"
+	// MetadataWebContentBytes carries the size of fetched content returned to
+	// the model.
+	MetadataWebContentBytes = "web_content_bytes"
+	// MetadataWebFetchedAt carries the fetch timestamp in RFC3339Nano format.
+	MetadataWebFetchedAt = "web_fetched_at"
 	// MetadataTaskID identifies the task affected by a tool result or requested
 	// operation.
 	MetadataTaskID = "task_id"
