@@ -272,6 +272,7 @@ func NewApplyPatchToolWithReview(store Patcher, reviewer PatchReviewer) tool.Too
 				},
 			},
 		},
+		Normalizer: tool.InputNormalizerFunc(normalizeUnifiedDiffStringInput),
 		Handler: func(ctx context.Context, call tool.Call) (model.ToolResult, error) {
 			input, err := tool.DecodeInput[patchInput](call.Use)
 			if err != nil {
@@ -316,6 +317,7 @@ func NewUnifiedDiffApplyPatchToolWithReview(store UnifiedDiffPatchStore, reviewe
 				},
 			},
 		},
+		Normalizer: tool.InputNormalizerFunc(normalizeUnifiedDiffStringInput),
 		Handler: func(ctx context.Context, call tool.Call) (model.ToolResult, error) {
 			input, err := tool.DecodeInput[unifiedDiffPatchInput](call.Use)
 			if err != nil {
@@ -334,6 +336,22 @@ func NewUnifiedDiffApplyPatchToolWithReview(store UnifiedDiffPatchStore, reviewe
 			return patchToolResult(result), nil
 		},
 	}
+}
+
+func normalizeUnifiedDiffStringInput(_ context.Context, use model.ToolUse) (model.ToolUse, bool, error) {
+	var unifiedDiff string
+	if err := json.Unmarshal(use.Input, &unifiedDiff); err != nil {
+		return use, false, nil
+	}
+	if strings.TrimSpace(unifiedDiff) == "" {
+		return use, false, nil
+	}
+	input, err := json.Marshal(map[string]any{"unified_diff": unifiedDiff})
+	if err != nil {
+		return use, false, err
+	}
+	use.Input = input
+	return use, true, nil
 }
 
 // NewDiffTool returns a read-only tool for showing changes since a checkpoint.

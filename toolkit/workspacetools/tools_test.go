@@ -183,6 +183,35 @@ func TestUnifiedDiffApplyPatchToolSchemaRejectsOperations(t *testing.T) {
 	}
 }
 
+func TestUnifiedDiffApplyPatchToolNormalizesRawDiffString(t *testing.T) {
+	store := workspace.NewMemoryStore(map[string]string{"README.md": "hello\n"})
+	registry := tool.NewRegistry(NewUnifiedDiffApplyPatchTool(store))
+	diff := "--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-hello\n+hello workspace\n"
+	input, err := json.Marshal(diff)
+	if err != nil {
+		t.Fatalf("marshal diff: %v", err)
+	}
+	results := collect(tool.Executor{Registry: registry}.Run(context.Background(), []model.ToolUse{{
+		ID:    "patch-1",
+		Name:  ApplyPatchToolName,
+		Input: input,
+	}}))
+
+	if got, want := len(results), 1; got != want {
+		t.Fatalf("len(results) = %d, want %d", got, want)
+	}
+	if results[0].IsError {
+		t.Fatalf("result = %#v, want success", results[0])
+	}
+	content, err := store.ReadFile(context.Background(), "README.md")
+	if err != nil {
+		t.Fatalf("ReadFile returned error: %v", err)
+	}
+	if content != "hello workspace\n" {
+		t.Fatalf("content = %q, want applied raw unified diff", content)
+	}
+}
+
 func TestUnifiedDiffApplyPatchToolRequiresDiff(t *testing.T) {
 	store := workspace.NewMemoryStore(map[string]string{"README.md": "hello"})
 	_, err := NewUnifiedDiffApplyPatchTool(store).Execute(context.Background(), tool.Call{

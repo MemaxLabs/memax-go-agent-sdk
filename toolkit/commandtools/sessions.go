@@ -402,6 +402,7 @@ func newStartTool(starter Starter, useShellInput bool, shell []string) tool.Tool
 			MaxResultBytes: 8 * 1024,
 			InputSchema:    startInputSchema(useShellInput),
 		},
+		Normalizer: startToolInputNormalizer(useShellInput),
 		Handler: func(ctx context.Context, call tool.Call) (model.ToolResult, error) {
 			req, err := startRequestFromToolUse(call.Use, useShellInput, shell)
 			if err != nil {
@@ -417,6 +418,13 @@ func newStartTool(starter Starter, useShellInput bool, shell []string) tool.Tool
 			return startResult(session), nil
 		},
 	}
+}
+
+func startToolInputNormalizer(useShellInput bool) tool.InputNormalizer {
+	if !useShellInput {
+		return normalizeNumericInput("cols", "rows", "timeout_ms")
+	}
+	return normalizeShellCommandInput("cols", "rows", "timeout_ms")
 }
 
 func startRequestFromToolUse(use model.ToolUse, useShellInput bool, shell []string) (StartRequest, error) {
@@ -454,6 +462,7 @@ func NewReadOutputTool(reader Reader) tool.Tool {
 			MaxResultBytes:  32 * 1024,
 			InputSchema:     readInputSchema(),
 		},
+		Normalizer: normalizeNumericInput("after_seq", "limit", "max_bytes"),
 		Handler: func(ctx context.Context, call tool.Call) (model.ToolResult, error) {
 			input, err := tool.DecodeInput[readInput](call.Use)
 			if err != nil {
@@ -493,6 +502,7 @@ func NewWaitTool(waiter Waiter) tool.Tool {
 			MaxResultBytes:  32 * 1024,
 			InputSchema:     waitInputSchema(),
 		},
+		Normalizer: normalizeNumericInput("after_seq", "timeout_ms", "limit", "max_bytes"),
 		Handler: func(ctx context.Context, call tool.Call) (model.ToolResult, error) {
 			input, err := tool.DecodeInput[waitInput](call.Use)
 			if err != nil {
@@ -570,6 +580,7 @@ func NewWriteInputTool(writer Writer) tool.Tool {
 				},
 			},
 		},
+		Normalizer: normalizeNumericInput("yield_ms", "limit", "max_bytes"),
 		Handler: func(ctx context.Context, call tool.Call) (model.ToolResult, error) {
 			input, err := tool.DecodeInput[writeInput](call.Use)
 			if err != nil {
@@ -639,6 +650,7 @@ func NewResizeTool(resizer Resizer) tool.Tool {
 				},
 			},
 		},
+		Normalizer: normalizeNumericInput("cols", "rows"),
 		Handler: func(ctx context.Context, call tool.Call) (model.ToolResult, error) {
 			input, err := tool.DecodeInput[resizeInput](call.Use)
 			if err != nil {
@@ -744,6 +756,7 @@ func NewListTool(lister Lister) tool.Tool {
 				},
 			},
 		},
+		Normalizer: normalizeNumericInput("limit"),
 		Handler: func(ctx context.Context, call tool.Call) (model.ToolResult, error) {
 			input, err := tool.DecodeInput[listInput](call.Use)
 			if err != nil {
@@ -1403,6 +1416,7 @@ type ScriptedSessionManager struct {
 	resizeRequests []ResizeRequest
 	readRequests   []ReadRequest
 	stopRequests   []StopRequest
+	listRequests   []ListRequest
 }
 
 type scriptedSessionState struct {
@@ -1661,6 +1675,7 @@ func (m *ScriptedSessionManager) ListCommands(ctx context.Context, req ListReque
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.listRequests = append(m.listRequests, cloneListRequest(req))
 	var out []CommandSession
 	for _, state := range m.sessions {
 		if req.SessionID != "" && state.session.SessionID != req.SessionID {
@@ -1761,6 +1776,20 @@ func (m *ScriptedSessionManager) StopRequests() []StopRequest {
 	out := make([]StopRequest, len(m.stopRequests))
 	for i, req := range m.stopRequests {
 		out[i] = cloneStopRequest(req)
+	}
+	return out
+}
+
+// ListRequests returns captured list requests.
+func (m *ScriptedSessionManager) ListRequests() []ListRequest {
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]ListRequest, len(m.listRequests))
+	for i, req := range m.listRequests {
+		out[i] = cloneListRequest(req)
 	}
 	return out
 }
@@ -1952,3 +1981,5 @@ func cloneWriteRequest(req WriteRequest) WriteRequest { return req }
 func cloneResizeRequest(req ResizeRequest) ResizeRequest { return req }
 
 func cloneStopRequest(req StopRequest) StopRequest { return req }
+
+func cloneListRequest(req ListRequest) ListRequest { return req }

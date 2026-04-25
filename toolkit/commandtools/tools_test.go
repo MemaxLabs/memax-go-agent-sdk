@@ -58,6 +58,120 @@ func TestRunCommandToolReturnsProcessFailureAsToolError(t *testing.T) {
 	}
 }
 
+func TestRunCommandToolNormalizesLegacyArgvInput(t *testing.T) {
+	runner := NewScriptedRunner(Result{ExitCode: 0})
+	registry := tool.NewRegistry(NewTool(Config{Runner: runner, Shell: []string{"bash", "-lc"}}))
+	results := collectToolResults(tool.Executor{Registry: registry}.Run(context.Background(), []model.ToolUse{{
+		ID:    "cmd-1",
+		Name:  ToolName,
+		Input: json.RawMessage(`{"command":["go","test","./..."],"timeout_ms":"1000"}`),
+	}}))
+
+	if got, want := len(results), 1; got != want {
+		t.Fatalf("len(results) = %d, want %d", got, want)
+	}
+	if results[0].IsError {
+		t.Fatalf("result = %#v, want success", results[0])
+	}
+	requests := runner.Requests()
+	if len(requests) != 1 {
+		t.Fatalf("requests = %d, want 1", len(requests))
+	}
+	if requests[0].Command != "go test ./..." || requests[0].Timeout != time.Second {
+		t.Fatalf("request = %#v, want normalized command and timeout", requests[0])
+	}
+	if want := []string{"bash", "-lc", "go test ./..."}; !sameStrings(requests[0].Argv, want) {
+		t.Fatalf("argv = %#v, want %#v", requests[0].Argv, want)
+	}
+}
+
+func TestRunCommandToolShellQuotesNormalizedArgvInput(t *testing.T) {
+	runner := NewScriptedRunner(Result{ExitCode: 0})
+	registry := tool.NewRegistry(NewTool(Config{Runner: runner, Shell: []string{"bash", "-lc"}}))
+	results := collectToolResults(tool.Executor{Registry: registry}.Run(context.Background(), []model.ToolUse{{
+		ID:    "cmd-1",
+		Name:  ToolName,
+		Input: json.RawMessage(`{"command":["env","FOO=bar","printf","%s\\n","hello world","don't split"]}`),
+	}}))
+
+	if len(results) != 1 || results[0].IsError {
+		t.Fatalf("results = %#v, want success", results)
+	}
+	requests := runner.Requests()
+	if len(requests) != 1 {
+		t.Fatalf("requests = %d, want 1", len(requests))
+	}
+	want := "env 'FOO=bar' printf '%s\\n' 'hello world' 'don'\\''t split'"
+	if requests[0].Command != want {
+		t.Fatalf("command = %q, want %q", requests[0].Command, want)
+	}
+}
+
+func TestRunCommandToolNormalizedArgvStripsEmptyArgumentsLikeApprovalDisplay(t *testing.T) {
+	runner := NewScriptedRunner(Result{ExitCode: 0})
+	registry := tool.NewRegistry(NewTool(Config{Runner: runner, Shell: []string{"bash", "-lc"}}))
+	results := collectToolResults(tool.Executor{Registry: registry}.Run(context.Background(), []model.ToolUse{{
+		ID:    "cmd-1",
+		Name:  ToolName,
+		Input: json.RawMessage(`{"command":["go","","  ","test"]}`),
+	}}))
+
+	if len(results) != 1 || results[0].IsError {
+		t.Fatalf("results = %#v, want success", results)
+	}
+	requests := runner.Requests()
+	if len(requests) != 1 || requests[0].Command != "go test" {
+		t.Fatalf("requests = %#v, want normalized command matching approval display", requests)
+	}
+	summary, err := ApprovalSummaryFromRunInput([]byte(`{"command":["go","","  ","test"]}`))
+	if err != nil {
+		t.Fatalf("ApprovalSummaryFromRunInput returned error: %v", err)
+	}
+	if summary.Title != "Run command: go test" {
+		t.Fatalf("summary = %#v, want approval display to match runtime command", summary)
+	}
+}
+
+func TestRunCommandToolRejectsEmptyLegacyArgvAfterNormalization(t *testing.T) {
+	runner := NewScriptedRunner(Result{ExitCode: 0})
+	registry := tool.NewRegistry(NewTool(Config{Runner: runner, Shell: []string{"bash", "-lc"}}))
+	results := collectToolResults(tool.Executor{Registry: registry}.Run(context.Background(), []model.ToolUse{{
+		ID:    "cmd-1",
+		Name:  ToolName,
+		Input: json.RawMessage(`{"command":["","  "]}`),
+	}}))
+
+	if len(results) != 1 || !results[0].IsError {
+		t.Fatalf("results = %#v, want schema validation error", results)
+	}
+	if !strings.Contains(results[0].Content, "invalid input for tool") {
+		t.Fatalf("content = %q, want validation error", results[0].Content)
+	}
+	if len(runner.Requests()) != 0 {
+		t.Fatalf("runner requests = %#v, want none", runner.Requests())
+	}
+}
+
+func TestRunCommandToolLeavesNULArgvForSchemaValidation(t *testing.T) {
+	runner := NewScriptedRunner(Result{ExitCode: 0})
+	registry := tool.NewRegistry(NewTool(Config{Runner: runner, Shell: []string{"bash", "-lc"}}))
+	results := collectToolResults(tool.Executor{Registry: registry}.Run(context.Background(), []model.ToolUse{{
+		ID:    "cmd-1",
+		Name:  ToolName,
+		Input: json.RawMessage("{\"command\":[\"printf\",\"bad\\u0000arg\"]}"),
+	}}))
+
+	if len(results) != 1 || !results[0].IsError {
+		t.Fatalf("results = %#v, want schema validation error", results)
+	}
+	if !strings.Contains(results[0].Content, "invalid input for tool") {
+		t.Fatalf("content = %q, want validation error", results[0].Content)
+	}
+	if len(runner.Requests()) != 0 {
+		t.Fatalf("runner requests = %#v, want none", runner.Requests())
+	}
+}
+
 func TestExecCommandToolUsesExactArgv(t *testing.T) {
 	runner := NewScriptedRunner(Result{ExitCode: 0})
 	runTool := NewExecTool(Config{Runner: runner})
@@ -81,6 +195,35 @@ func TestExecCommandToolUsesExactArgv(t *testing.T) {
 	if requests[0].Command != "" || !sameStrings(requests[0].Argv, []string{"go", "test", "./..."}) {
 		t.Fatalf("request = %#v", requests[0])
 	}
+}
+
+func TestExecCommandToolNormalizesNumericStringsWithoutChangingArgv(t *testing.T) {
+	runner := NewScriptedRunner(Result{ExitCode: 0})
+	registry := tool.NewRegistry(NewExecTool(Config{Runner: runner}))
+	results := collectToolResults(tool.Executor{Registry: registry}.Run(context.Background(), []model.ToolUse{{
+		ID:    "cmd-1",
+		Name:  ToolName,
+		Input: json.RawMessage(`{"command":["go","test","./..."],"timeout_ms":"1000"}`),
+	}}))
+
+	if len(results) != 1 || results[0].IsError {
+		t.Fatalf("results = %#v, want success", results)
+	}
+	requests := runner.Requests()
+	if len(requests) != 1 {
+		t.Fatalf("requests = %d, want 1", len(requests))
+	}
+	if requests[0].Command != "" || !sameStrings(requests[0].Argv, []string{"go", "test", "./..."}) || requests[0].Timeout != time.Second {
+		t.Fatalf("request = %#v, want exact argv with normalized timeout", requests[0])
+	}
+}
+
+func collectToolResults(ch <-chan model.ToolResult) []model.ToolResult {
+	var results []model.ToolResult
+	for result := range ch {
+		results = append(results, result)
+	}
+	return results
 }
 
 func TestScriptedRunnerReturnsDefensiveCopies(t *testing.T) {
@@ -171,6 +314,17 @@ func TestApprovalSummaryFromRunInputAcceptsExecArgv(t *testing.T) {
 	}
 	if summary.Title != "Run command: go test ./..." || summary.Changes != 1 {
 		t.Fatalf("summary = %#v", summary)
+	}
+}
+
+func TestApprovalSummaryFromRunInputUsesRuntimeShellQuoting(t *testing.T) {
+	summary, err := ApprovalSummaryFromRunInput([]byte(`{"command":["env","FOO=bar","printf","%s\\n","hello world"]}`))
+	if err != nil {
+		t.Fatalf("ApprovalSummaryFromRunInput returned error: %v", err)
+	}
+	want := "Run command: env 'FOO=bar' printf '%s\\n' 'hello world'"
+	if summary.Title != want {
+		t.Fatalf("summary title = %q, want %q", summary.Title, want)
 	}
 }
 

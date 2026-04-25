@@ -156,6 +156,19 @@ func (e Executor) runOne(ctx context.Context, use model.ToolUse) model.ToolResul
 	if !ok {
 		return fail(fmt.Errorf("no such tool: %s", use.Name))
 	}
+	if normalizer, ok := t.(InputNormalizer); ok {
+		normalized, changed, err := normalizer.NormalizeInput(ctx, use)
+		if err != nil {
+			return fail(fmt.Errorf("normalize tool input: %w", err))
+		}
+		use = normalized
+		if changed {
+			span.Set(
+				telemetry.Bool("memax.tool.input_normalized", true),
+				telemetry.Int("memax.tool.normalized_input_bytes", len(use.Input)),
+			)
+		}
+	}
 	schema, _ := e.Registry.InputSchema(use.Name)
 	if err := validateInput(use, schema); err != nil {
 		return fail(err)

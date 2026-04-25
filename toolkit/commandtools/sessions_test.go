@@ -711,6 +711,120 @@ func TestNewShellStartToolUsesShellCommandSchemaAndRequest(t *testing.T) {
 	}
 }
 
+func TestNewShellStartToolNormalizesLegacyArgvAndNumericStrings(t *testing.T) {
+	manager := NewScriptedSessionManager(ScriptedCommand{ID: "dev-1"})
+	registry := tool.NewRegistry(NewShellStartTool(manager, []string{"bash", "-lc"}))
+	results := collectSessionToolResults(tool.Executor{Registry: registry}.Run(context.Background(), []model.ToolUse{{
+		ID:    "start-1",
+		Name:  StartToolName,
+		Input: json.RawMessage(`{"command":["npm","run","dev"],"tty":true,"cols":"120","rows":"40","timeout_ms":"1000"}`),
+	}}))
+
+	if got, want := len(results), 1; got != want {
+		t.Fatalf("len(results) = %d, want %d", got, want)
+	}
+	if results[0].IsError {
+		t.Fatalf("result = %#v, want success", results[0])
+	}
+	requests := manager.StartRequests()
+	if len(requests) != 1 {
+		t.Fatalf("start requests = %d, want 1", len(requests))
+	}
+	if requests[0].Command != "npm run dev" || requests[0].Cols != 120 || requests[0].Rows != 40 || requests[0].Timeout != time.Second {
+		t.Fatalf("request = %#v, want normalized shell command and numeric fields", requests[0])
+	}
+	if want := []string{"bash", "-lc", "npm run dev"}; !sameStrings(requests[0].Argv, want) {
+		t.Fatalf("argv = %#v, want %#v", requests[0].Argv, want)
+	}
+}
+
+func TestSessionToolsNormalizeNumericStrings(t *testing.T) {
+	manager := NewScriptedSessionManager(ScriptedCommand{
+		ID:  "dev-1",
+		TTY: true,
+		Pages: []ScriptedOutputPage{{
+			Chunks:  []OutputChunk{{Seq: 2, Stream: "stdout", Text: "ready\n"}},
+			Running: true,
+		}},
+		WritePages: []ScriptedWritePage{{
+			Page: ScriptedOutputPage{
+				Chunks:  []OutputChunk{{Seq: 3, Stream: "stdout", Text: "pong\n"}},
+				Running: true,
+			},
+		}},
+	})
+	if _, err := manager.StartCommand(context.Background(), StartRequest{
+		SessionID: "session-1",
+		Argv:      []string{"server"},
+		TTY:       true,
+		Cols:      80,
+		Rows:      24,
+	}); err != nil {
+		t.Fatalf("StartCommand returned error: %v", err)
+	}
+
+	registry := tool.NewRegistry(
+		NewReadOutputTool(manager),
+		NewWaitTool(manager),
+		NewWriteInputTool(manager),
+		NewResizeTool(manager),
+		NewListTool(manager),
+	)
+	uses := []model.ToolUse{
+		{ID: "read-1", Name: ReadOutputToolName, Input: json.RawMessage(`{"id":"dev-1","after_seq":"1","limit":"2","max_bytes":"100"}`)},
+		{ID: "wait-1", Name: WaitOutputToolName, Input: json.RawMessage(`{"id":"dev-1","after_seq":"2","timeout_ms":"250","limit":"3","max_bytes":"101"}`)},
+		{ID: "write-1", Name: WriteInputToolName, Input: json.RawMessage(`{"id":"dev-1","input":"ping","yield_ms":"25","limit":"4","max_bytes":"102"}`)},
+		{ID: "resize-1", Name: ResizeToolName, Input: json.RawMessage(`{"id":"dev-1","cols":"120","rows":"40"}`)},
+		{ID: "list-1", Name: ListToolName, Input: json.RawMessage(`{"include_completed":true,"limit":"5"}`)},
+	}
+	for _, use := range uses {
+		results := collectSessionToolResults(tool.Executor{
+			Registry: registry,
+			Runtime:  tool.Runtime{SessionID: "session-1"},
+		}.Run(context.Background(), []model.ToolUse{use}))
+		if len(results) != 1 {
+			t.Fatalf("%s results = %#v, want one result", use.Name, results)
+		}
+		if results[0].IsError {
+			t.Fatalf("%s result = %#v, want success", use.Name, results[0])
+		}
+	}
+
+	readRequests := manager.ReadRequests()
+	if len(readRequests) < 2 {
+		t.Fatalf("read requests = %#v, want read and wait requests", readRequests)
+	}
+	if readRequests[0].AfterSeq != 1 || readRequests[0].MaxChunks != 2 || readRequests[0].MaxBytes != 100 {
+		t.Fatalf("read request = %#v, want normalized numeric fields", readRequests[0])
+	}
+	if readRequests[1].AfterSeq != 2 || readRequests[1].MaxChunks != 3 || readRequests[1].MaxBytes != 101 {
+		t.Fatalf("wait/read request = %#v, want normalized numeric fields", readRequests[1])
+	}
+	writeRequests := manager.WriteRequests()
+	if len(writeRequests) != 1 || writeRequests[0].Yield != 25*time.Millisecond || writeRequests[0].MaxChunks != 4 || writeRequests[0].MaxBytes != 102 {
+		t.Fatalf("write requests = %#v, want normalized numeric fields", writeRequests)
+	}
+	resizeRequests := manager.ResizeRequests()
+	if len(resizeRequests) != 1 || resizeRequests[0].Cols != 120 || resizeRequests[0].Rows != 40 {
+		t.Fatalf("resize requests = %#v, want normalized numeric fields", resizeRequests)
+	}
+	listRequests := manager.ListRequests()
+	if len(listRequests) != 1 || listRequests[0].Limit != 5 || !listRequests[0].IncludeCompleted {
+		t.Fatalf("list requests = %#v, want normalized numeric fields", listRequests)
+	}
+}
+
+func TestApprovalSummaryFromStartInputUsesRuntimeShellQuoting(t *testing.T) {
+	summary, err := ApprovalSummaryFromStartInput([]byte(`{"command":["env","FOO=bar","npm","run","dev server"]}`))
+	if err != nil {
+		t.Fatalf("ApprovalSummaryFromStartInput returned error: %v", err)
+	}
+	want := "Start command session: env 'FOO=bar' npm run 'dev server'"
+	if summary.Title != want {
+		t.Fatalf("summary title = %q, want %q", summary.Title, want)
+	}
+}
+
 func TestStartRequestFromInputNormalizesTTYGeometry(t *testing.T) {
 	req, err := startRequestFromInput(startInput{
 		Command: []string{"python", "-i"},
@@ -915,6 +1029,14 @@ func assertCommandSessionError(t testing.TB, err, kind error, want string) {
 	if err.Error() != want {
 		t.Fatalf("error = %q, want %q", err.Error(), want)
 	}
+}
+
+func collectSessionToolResults(ch <-chan model.ToolResult) []model.ToolResult {
+	var results []model.ToolResult
+	for result := range ch {
+		results = append(results, result)
+	}
+	return results
 }
 
 func intPtr(v int) *int { return &v }

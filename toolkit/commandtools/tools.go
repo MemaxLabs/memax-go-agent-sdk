@@ -172,6 +172,7 @@ func newTool(config Config, useExecInput bool) tool.Tool {
 			MaxResultBytes:  maxResultBytes,
 			InputSchema:     inputSchema(useExecInput),
 		},
+		Normalizer: commandToolInputNormalizer(useExecInput),
 		Handler: func(ctx context.Context, call tool.Call) (model.ToolResult, error) {
 			if config.Runner == nil {
 				return model.ToolResult{}, fmt.Errorf("commandtools: runner is required")
@@ -194,6 +195,13 @@ func newTool(config Config, useExecInput bool) tool.Tool {
 			return resultToToolResult(result, req), nil
 		},
 	}
+}
+
+func commandToolInputNormalizer(useExecInput bool) tool.InputNormalizer {
+	if useExecInput {
+		return normalizeNumericInput("timeout_ms")
+	}
+	return normalizeShellCommandInput("timeout_ms")
 }
 
 func requestFromToolUse(use model.ToolUse, config Config, useExecInput bool) (Request, error) {
@@ -275,7 +283,7 @@ func commandDisplayFromRaw(raw json.RawMessage) (string, error) {
 		if err := json.Unmarshal(raw, &argv); err != nil {
 			return "", fmt.Errorf("commandtools: decode command argv: %w", err)
 		}
-		return strings.Join(normalizeArgv(argv), " "), nil
+		return shellQuoteJoin(normalizeArgv(argv)), nil
 	default:
 		return "", fmt.Errorf("commandtools: command must be a string or argv array")
 	}

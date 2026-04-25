@@ -113,6 +113,71 @@ func TestExecutorValidatesInputBeforePermissionAndHandler(t *testing.T) {
 	}
 }
 
+func TestExecutorNormalizesInputBeforeValidationPermissionAndHandler(t *testing.T) {
+	permissionSawNormalized := false
+	handlerSawNormalized := false
+	tracer := &toolTracer{}
+	reg := NewRegistry(Definition{
+		ToolSpec: model.ToolSpec{
+			Name: "read",
+			InputSchema: map[string]any{
+				"type":     "object",
+				"required": []any{"path"},
+				"properties": map[string]any{
+					"path": map[string]any{"type": "string"},
+				},
+				"additionalProperties": false,
+			},
+			ReadOnly: true,
+		},
+		Normalizer: InputNormalizerFunc(func(_ context.Context, use model.ToolUse) (model.ToolUse, bool, error) {
+			use.Input = json.RawMessage(`{"path":"README.md"}`)
+			return use, true, nil
+		}),
+		Handler: func(_ context.Context, call Call) (model.ToolResult, error) {
+			var input struct {
+				Path string `json:"path"`
+			}
+			if err := json.Unmarshal(call.Use.Input, &input); err != nil {
+				t.Fatalf("unmarshal handler input: %v", err)
+			}
+			handlerSawNormalized = input.Path == "README.md"
+			return model.ToolResult{Content: input.Path}, nil
+		},
+	})
+
+	results := collect(Executor{
+		Registry: reg,
+		Tracer:   tracer,
+		Permissions: permissionFunc(func(_ context.Context, use model.ToolUse, _ model.ToolSpec) Decision {
+			var input struct {
+				Path string `json:"path"`
+			}
+			if err := json.Unmarshal(use.Input, &input); err != nil {
+				t.Fatalf("unmarshal permission input: %v", err)
+			}
+			permissionSawNormalized = input.Path == "README.md"
+			return Decision{Allow: true}
+		}),
+	}.Run(context.Background(), []model.ToolUse{
+		{ID: "1", Name: "read", Input: json.RawMessage(`{"path":42}`)},
+	}))
+
+	if got, want := len(results), 1; got != want {
+		t.Fatalf("len(results) = %d, want %d", got, want)
+	}
+	if results[0].IsError || results[0].Content != "README.md" {
+		t.Fatalf("unexpected result: %#v", results[0])
+	}
+	if !permissionSawNormalized || !handlerSawNormalized {
+		t.Fatalf("normalization visibility: permission=%v handler=%v", permissionSawNormalized, handlerSawNormalized)
+	}
+	if !hasAttr(tracer.attrs, "memax.tool.input_normalized", true) ||
+		!hasAttr(tracer.attrs, "memax.tool.normalized_input_bytes", len(`{"path":"README.md"}`)) {
+		t.Fatalf("span attrs = %#v, want input normalization telemetry", tracer.attrs)
+	}
+}
+
 func TestRegistryRejectsInvalidInputSchema(t *testing.T) {
 	reg := NewRegistry()
 	err := reg.Register(Definition{
@@ -422,6 +487,9 @@ func TestExecutorStartsToolSpan(t *testing.T) {
 	}
 	if !hasAttr(tracer.attrs, "memax.tool.name", "read") || !hasAttr(tracer.attrs, "memax.session_id", "session-1") {
 		t.Fatalf("span attrs = %#v", tracer.attrs)
+	}
+	if hasAttr(tracer.attrs, "memax.tool.input_normalized", true) {
+		t.Fatalf("span attrs = %#v, should not report normalization for non-normalizing tool", tracer.attrs)
 	}
 }
 

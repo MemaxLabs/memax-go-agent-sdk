@@ -26,6 +26,24 @@ type Tool interface {
 	CanRunConcurrently(model.ToolUse) bool
 }
 
+// InputNormalizer is an optional Tool extension for canonicalizing model tool
+// input before schema validation, hooks, permissions, and execution. Use it for
+// narrow, deterministic repairs of common shape mistakes, not for changing tool
+// semantics.
+type InputNormalizer interface {
+	NormalizeInput(context.Context, model.ToolUse) (model.ToolUse, bool, error)
+}
+
+// InputNormalizerFunc adapts a function into an InputNormalizer.
+type InputNormalizerFunc func(context.Context, model.ToolUse) (model.ToolUse, bool, error)
+
+func (f InputNormalizerFunc) NormalizeInput(ctx context.Context, use model.ToolUse) (model.ToolUse, bool, error) {
+	if f == nil {
+		return use, false, nil
+	}
+	return f(ctx, use)
+}
+
 type Call struct {
 	Use     model.ToolUse
 	Runtime Runtime
@@ -34,8 +52,9 @@ type Call struct {
 type Handler func(context.Context, Call) (model.ToolResult, error)
 
 type Definition struct {
-	ToolSpec model.ToolSpec
-	Handler  Handler
+	ToolSpec   model.ToolSpec
+	Handler    Handler
+	Normalizer InputNormalizer
 }
 
 func (d Definition) Spec() model.ToolSpec {
@@ -51,6 +70,13 @@ func (d Definition) Execute(ctx context.Context, call Call) (model.ToolResult, e
 
 func (d Definition) CanRunConcurrently(_ model.ToolUse) bool {
 	return d.ToolSpec.ConcurrencySafe
+}
+
+func (d Definition) NormalizeInput(ctx context.Context, use model.ToolUse) (model.ToolUse, bool, error) {
+	if d.Normalizer == nil {
+		return use, false, nil
+	}
+	return d.Normalizer.NormalizeInput(ctx, use)
 }
 
 func DecodeInput[T any](use model.ToolUse) (T, error) {
