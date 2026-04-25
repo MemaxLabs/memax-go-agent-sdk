@@ -15,6 +15,7 @@ func TestCapabilitiesForModel(t *testing.T) {
 		{name: "gpt-5.3-codex", wantWindow: contextWindowGPT5},
 		{name: "openai/gpt-5.5-pro", wantWindow: contextWindowGPT5},
 		{name: "gpt-4o", wantWindow: contextWindowGPT4o},
+		{name: "anthropic/claude-opus-4.7"},
 		{name: "unknown"},
 	}
 	for _, tt := range tests {
