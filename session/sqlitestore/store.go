@@ -182,6 +182,46 @@ func (s *Store) List(ctx context.Context) ([]session.Session, error) {
 	return sessions, nil
 }
 
+// Children returns sessions whose ParentID matches parentID. An empty parentID
+// returns root sessions.
+func (s *Store) Children(ctx context.Context, parentID string) ([]session.Session, error) {
+	parentID, err := canonicalParentID(parentID)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, parent_id, created_at
+		FROM memax_sessions
+		WHERE parent_id = ?
+		ORDER BY created_at ASC, id ASC
+	`, parentID)
+	if err != nil {
+		return nil, fmt.Errorf("list sqlite child sessions: %w", err)
+	}
+	defer rows.Close()
+
+	var sessions []session.Session
+	for rows.Next() {
+		var sess session.Session
+		var createdAt string
+		if err := rows.Scan(&sess.ID, &sess.ParentID, &createdAt); err != nil {
+			return nil, fmt.Errorf("scan sqlite child session: %w", err)
+		}
+		if createdAt != "" {
+			parsed, err := time.Parse(time.RFC3339Nano, createdAt)
+			if err != nil {
+				return nil, fmt.Errorf("parse sqlite child session created_at: %w", err)
+			}
+			sess.CreatedAt = parsed
+		}
+		sessions = append(sessions, sess)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate sqlite child sessions: %w", err)
+	}
+	return sessions, nil
+}
+
 func (s *Store) Fork(ctx context.Context, id string, opts session.ForkOptions) (session.Session, error) {
 	id, err := canonicalRequiredID(id)
 	if err != nil {

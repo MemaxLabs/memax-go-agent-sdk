@@ -102,6 +102,51 @@ func TestMemoryStoreGetListAndFork(t *testing.T) {
 	}
 }
 
+func TestMemoryStoreChildren(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemoryStore()
+	root, err := store.Create(ctx)
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	childA, err := store.CreateWithOptions(ctx, CreateOptions{ParentID: root.ID})
+	if err != nil {
+		t.Fatalf("CreateWithOptions childA returned error: %v", err)
+	}
+	childB, err := store.CreateWithOptions(ctx, CreateOptions{ParentID: root.ID})
+	if err != nil {
+		t.Fatalf("CreateWithOptions childB returned error: %v", err)
+	}
+	grandchild, err := store.CreateWithOptions(ctx, CreateOptions{ParentID: childA.ID})
+	if err != nil {
+		t.Fatalf("CreateWithOptions grandchild returned error: %v", err)
+	}
+
+	roots, err := Children(ctx, store, "")
+	if err != nil {
+		t.Fatalf("Children roots returned error: %v", err)
+	}
+	if len(roots) != 1 || roots[0].ID != root.ID {
+		t.Fatalf("root Children = %#v, want root", roots)
+	}
+
+	children, err := Children(ctx, store, root.ID)
+	if err != nil {
+		t.Fatalf("Children returned error: %v", err)
+	}
+	if len(children) != 2 || children[0].ID != childA.ID || children[1].ID != childB.ID {
+		t.Fatalf("Children = %#v, want childA then childB", children)
+	}
+
+	grandchildren, err := Children(ctx, store, childA.ID)
+	if err != nil {
+		t.Fatalf("Children grandchild returned error: %v", err)
+	}
+	if len(grandchildren) != 1 || grandchildren[0].ID != grandchild.ID {
+		t.Fatalf("grandchildren = %#v, want grandchild", grandchildren)
+	}
+}
+
 func TestMemoryStoreCanonicalizesInputSessionIDs(t *testing.T) {
 	store := NewMemoryStore()
 	sess, err := store.Create(context.Background())

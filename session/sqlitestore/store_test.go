@@ -74,6 +74,49 @@ func TestStoreRoundTripGetListAndFork(t *testing.T) {
 	}
 }
 
+func TestStoreChildren(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	root, err := store.Create(ctx)
+	if err != nil {
+		t.Fatalf("Create root returned error: %v", err)
+	}
+	childA, err := store.CreateWithOptions(ctx, session.CreateOptions{ParentID: root.ID})
+	if err != nil {
+		t.Fatalf("Create childA returned error: %v", err)
+	}
+	childB, err := store.CreateWithOptions(ctx, session.CreateOptions{ParentID: root.ID})
+	if err != nil {
+		t.Fatalf("Create childB returned error: %v", err)
+	}
+	grandchild, err := store.CreateWithOptions(ctx, session.CreateOptions{ParentID: childA.ID})
+	if err != nil {
+		t.Fatalf("Create grandchild returned error: %v", err)
+	}
+
+	roots, err := store.Children(ctx, "")
+	if err != nil {
+		t.Fatalf("Children roots returned error: %v", err)
+	}
+	if len(roots) != 1 || roots[0].ID != root.ID {
+		t.Fatalf("roots = %#v, want root", roots)
+	}
+	children, err := store.Children(ctx, root.ID)
+	if err != nil {
+		t.Fatalf("Children root returned error: %v", err)
+	}
+	if len(children) != 2 || children[0].ID != childA.ID || children[1].ID != childB.ID {
+		t.Fatalf("children = %#v, want childA then childB", children)
+	}
+	grandchildren, err := session.Children(ctx, store, childA.ID)
+	if err != nil {
+		t.Fatalf("session.Children returned error: %v", err)
+	}
+	if len(grandchildren) != 1 || grandchildren[0].ID != grandchild.ID {
+		t.Fatalf("grandchildren = %#v, want grandchild", grandchildren)
+	}
+}
+
 func TestStoreCanonicalizesInputSessionIDs(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()

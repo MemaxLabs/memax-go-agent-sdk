@@ -98,15 +98,23 @@ func TestJSONLStoreCanonicalizesMissingTranscriptSessionIDFallback(t *testing.T)
 }
 
 func TestJSONLStoreCreateWithParent(t *testing.T) {
-	store := NewJSONLStore(t.TempDir())
+	dir := t.TempDir()
+	store := NewJSONLStore(dir)
+	parentID := "00000000-0000-7000-8000-000000000000"
 	sess, err := store.CreateWithOptions(context.Background(), CreateOptions{
-		ParentID: "00000000-0000-7000-8000-000000000000",
+		ParentID: parentID,
 	})
 	if err != nil {
 		t.Fatalf("CreateWithOptions returned error: %v", err)
 	}
-	if sess.ParentID != "00000000-0000-7000-8000-000000000000" {
+	if sess.ParentID != parentID {
 		t.Fatalf("ParentID = %q, want parent id", sess.ParentID)
+	}
+	if _, err := os.Stat(filepath.Join(dir, parentID, sess.ID+transcriptExt)); err != nil {
+		t.Fatalf("stat child transcript: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, indexDir, sess.ID+indexExt)); err != nil {
+		t.Fatalf("stat child index: %v", err)
 	}
 	messages, err := store.Messages(context.Background(), sess.ID)
 	if err != nil {
@@ -114,6 +122,103 @@ func TestJSONLStoreCreateWithParent(t *testing.T) {
 	}
 	if len(messages) != 0 {
 		t.Fatalf("messages = %#v, want empty transcript", messages)
+	}
+}
+
+func TestJSONLStoreHierarchicalChildrenAndIndex(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	store := NewJSONLStore(dir)
+
+	root, err := store.Create(ctx)
+	if err != nil {
+		t.Fatalf("Create root returned error: %v", err)
+	}
+	child, err := store.CreateWithOptions(ctx, CreateOptions{ParentID: root.ID})
+	if err != nil {
+		t.Fatalf("Create child returned error: %v", err)
+	}
+	grandchild, err := store.CreateWithOptions(ctx, CreateOptions{ParentID: child.ID})
+	if err != nil {
+		t.Fatalf("Create grandchild returned error: %v", err)
+	}
+	if err := store.Append(ctx, child.ID, model.Message{
+		ID:      "child-message",
+		Role:    model.RoleUser,
+		Content: []model.ContentBlock{{Type: model.ContentText, Text: "child"}},
+	}); err != nil {
+		t.Fatalf("Append child returned error: %v", err)
+	}
+	if err := store.Append(ctx, grandchild.ID, model.Message{
+		ID:      "grandchild-message",
+		Role:    model.RoleUser,
+		Content: []model.ContentBlock{{Type: model.ContentText, Text: "grandchild"}},
+	}); err != nil {
+		t.Fatalf("Append grandchild returned error: %v", err)
+	}
+
+	for _, path := range []string{
+		filepath.Join(dir, root.ID+transcriptExt),
+		filepath.Join(dir, root.ID, child.ID+transcriptExt),
+		filepath.Join(dir, root.ID, child.ID, grandchild.ID+transcriptExt),
+		filepath.Join(dir, indexDir, root.ID+indexExt),
+		filepath.Join(dir, indexDir, child.ID+indexExt),
+		filepath.Join(dir, indexDir, grandchild.ID+indexExt),
+	} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("stat %s: %v", path, err)
+		}
+	}
+
+	gotChild, err := store.Get(ctx, child.ID)
+	if err != nil {
+		t.Fatalf("Get child returned error: %v", err)
+	}
+	if gotChild.ParentID != root.ID {
+		t.Fatalf("child ParentID = %q, want %q", gotChild.ParentID, root.ID)
+	}
+	childMessages, err := store.Messages(ctx, child.ID)
+	if err != nil {
+		t.Fatalf("Messages child returned error: %v", err)
+	}
+	if len(childMessages) != 1 || childMessages[0].PlainText() != "child" {
+		t.Fatalf("child messages = %#v, want child message", childMessages)
+	}
+	gotGrandchild, err := store.Get(ctx, grandchild.ID)
+	if err != nil {
+		t.Fatalf("Get grandchild returned error: %v", err)
+	}
+	if gotGrandchild.ParentID != child.ID {
+		t.Fatalf("grandchild ParentID = %q, want %q", gotGrandchild.ParentID, child.ID)
+	}
+
+	roots, err := store.Children(ctx, "")
+	if err != nil {
+		t.Fatalf("Children roots returned error: %v", err)
+	}
+	if len(roots) != 1 || roots[0].ID != root.ID {
+		t.Fatalf("roots = %#v, want root", roots)
+	}
+	children, err := store.Children(ctx, root.ID)
+	if err != nil {
+		t.Fatalf("Children root returned error: %v", err)
+	}
+	if len(children) != 1 || children[0].ID != child.ID {
+		t.Fatalf("children = %#v, want child", children)
+	}
+	grandchildren, err := store.Children(ctx, child.ID)
+	if err != nil {
+		t.Fatalf("Children child returned error: %v", err)
+	}
+	if len(grandchildren) != 1 || grandchildren[0].ID != grandchild.ID {
+		t.Fatalf("grandchildren = %#v, want grandchild", grandchildren)
+	}
+	sessions, err := store.List(ctx)
+	if err != nil {
+		t.Fatalf("List returned error: %v", err)
+	}
+	if len(sessions) != 3 {
+		t.Fatalf("List returned %d sessions, want 3: %#v", len(sessions), sessions)
 	}
 }
 

@@ -735,9 +735,9 @@ context-window policy.
 
 Sessions persist the conversation trajectory: user messages, assistant messages, tool uses, tool results, compact boundaries, and metadata. They must not silently persist workspace state. Checkpoints and virtual filesystem snapshots should be separate services referenced from session metadata.
 
-The SDK includes an in-memory store for tests and short-lived agents, plus an append-only JSONL store for durable transcripts. The JSONL store validates session IDs before path construction and reports corrupt transcript lines with line numbers.
+The SDK includes an in-memory store for tests and short-lived agents, plus an append-only JSONL store for durable transcripts. The JSONL store validates session IDs before path construction and reports corrupt transcript lines with line numbers. Root JSONL transcripts live at the store root. Child transcripts live under the parent transcript stem, and a `.index/` directory maps every session ID to its transcript path so child sessions remain directly resumable without walking the hierarchy. For nested transcripts, `.index/` is the durable lookup source; operators should back it up and restore it with the transcripts.
 
-Stores can optionally implement `CreateWithOptions` to preserve parent session IDs, `Get` and `List` to inspect existing sessions, and `Fork` to create a child transcript from a source session through a message ID. The built-in stores assign IDs to appended messages that do not already have one, while preserving caller-provided IDs. Helper functions in the `session` package use optional store interfaces when present and return clear unsupported-operation errors otherwise. `Query` resumes an existing transcript when `Options.SessionID` is set; otherwise it creates a new session. Events, model requests, and tool runtime values all carry parent session IDs so subagent and forked runs can be correlated without requiring a specific storage backend.
+Stores can optionally implement `CreateWithOptions` to preserve parent session IDs, `Get` and `List` to inspect existing sessions, `Children` to enumerate root or child sessions by parent ID, and `Fork` to create a child transcript from a source session through a message ID. The built-in stores assign IDs to appended messages that do not already have one, while preserving caller-provided IDs. Helper functions in the `session` package use optional store interfaces when present and return clear unsupported-operation errors otherwise. `Query` resumes an existing transcript when `Options.SessionID` is set; otherwise it creates a new session. Events, model requests, and tool runtime values all carry parent session IDs so subagent and forked runs can be correlated without requiring a specific storage backend.
 
 ## Subagents
 
@@ -891,5 +891,6 @@ Durable session stores should support:
 - list and inspect sessions. Initial implementations exist.
 - resume by ID. Initial `Options.SessionID` support exists.
 - fork from message ID. Initial implementations exist.
+- root and child session enumeration by parent ID. Initial implementations exist.
 - compact boundary records
 - parent tool-use ID for subagent messages

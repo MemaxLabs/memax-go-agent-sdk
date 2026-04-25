@@ -57,6 +57,12 @@ type StoreWithList interface {
 	List(context.Context) ([]Session, error)
 }
 
+// StoreWithChildren is implemented by stores that can enumerate sessions with
+// the given parent ID. An empty parent ID returns root sessions.
+type StoreWithChildren interface {
+	Children(context.Context, string) ([]Session, error)
+}
+
 type ForkOptions struct {
 	ParentID         string
 	ThroughMessageID string
@@ -161,6 +167,25 @@ func (s *MemoryStore) List(context.Context) ([]Session, error) {
 	return out, nil
 }
 
+// Children returns sessions whose ParentID matches parentID. An empty parentID
+// returns root sessions.
+func (s *MemoryStore) Children(_ context.Context, parentID string) ([]Session, error) {
+	parentID, err := canonicalParentID(parentID)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []Session
+	for _, record := range s.sessions {
+		if record.session.ParentID == parentID {
+			out = append(out, record.session)
+		}
+	}
+	sortSessions(out)
+	return out, nil
+}
+
 func (s *MemoryStore) Fork(_ context.Context, id string, opts ForkOptions) (Session, error) {
 	id, err := canonicalRequiredID(id)
 	if err != nil {
@@ -226,6 +251,34 @@ func List(ctx context.Context, store Store) ([]Session, error) {
 		return extended.List(ctx)
 	}
 	return nil, fmt.Errorf("session store does not support listing")
+}
+
+// Children returns sessions whose ParentID matches parentID. An empty parentID
+// returns root sessions. Stores without native child enumeration fall back to
+// List when available.
+func Children(ctx context.Context, store Store, parentID string) ([]Session, error) {
+	if store == nil {
+		return nil, fmt.Errorf("session store is required")
+	}
+	parentID, err := canonicalParentID(parentID)
+	if err != nil {
+		return nil, err
+	}
+	if extended, ok := store.(StoreWithChildren); ok {
+		return extended.Children(ctx, parentID)
+	}
+	sessions, err := List(ctx, store)
+	if err != nil {
+		return nil, err
+	}
+	children := make([]Session, 0, len(sessions))
+	for _, sess := range sessions {
+		if sess.ParentID == parentID {
+			children = append(children, sess)
+		}
+	}
+	sortSessions(children)
+	return children, nil
 }
 
 func Fork(ctx context.Context, store Store, id string, opts ForkOptions) (Session, error) {
