@@ -5,11 +5,13 @@ package modelregistry
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -144,9 +146,10 @@ func ParseModelsDev(data []byte) (*Registry, error) {
 	return registry, nil
 }
 
-// LookupCapabilities returns model capabilities for provider/modelName. It
-// handles gateway model names such as "anthropic/claude-..." by trying the
-// explicit model family before falling back to the selected transport provider.
+// LookupCapabilities returns model capabilities for provider/modelName.
+// Bare model names are scoped to the selected provider. Gateway model names
+// such as "anthropic/claude-..." can resolve through the explicit model family
+// or through gateway provider catalogs that index models by fully qualified ID.
 func (r *Registry) LookupCapabilities(provider, modelName string) (model.Capabilities, bool) {
 	if r == nil {
 		return model.Capabilities{}, false
@@ -171,12 +174,23 @@ func (r *Registry) LookupCapabilities(provider, modelName string) (model.Capabil
 			return caps, true
 		}
 	}
-	for _, provider := range r.Providers {
-		if caps, ok := capabilities(provider, modelKey, modelName); ok {
-			return caps, true
+	if strings.Contains(modelKey, "/") {
+		for _, key := range sortedProviderKeys(r.Providers) {
+			if caps, ok := capabilities(r.Providers[key], modelKey, modelName); ok {
+				return caps, true
+			}
 		}
 	}
 	return model.Capabilities{}, false
+}
+
+func sortedProviderKeys(providers map[string]Provider) []string {
+	keys := make([]string, 0, len(providers))
+	for key := range providers {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func (r *Registry) lookupInProvider(providerKey, modelKey, requested string) (model.Capabilities, bool) {
@@ -264,8 +278,10 @@ type LoadResult struct {
 }
 
 // Load fetches a models.dev-compatible registry using a local cache when
-// configured. If refresh fails and a cache exists, Load returns the stale cache
-// without failing the caller's startup path.
+// configured. If MaxAge is greater than zero, fresh cache entries are used
+// without a network request. If refresh fails and a cache exists, Load returns
+// the stale cache without failing the caller's startup path. Context
+// cancellation is returned directly and does not fall back to stale cache.
 func Load(ctx context.Context, opts LoadOptions) (*Registry, LoadResult, error) {
 	if opts.URL == "" {
 		opts.URL = ModelsDevURL
@@ -293,6 +309,12 @@ func Load(ctx context.Context, opts LoadOptions) (*Registry, LoadResult, error) 
 			}
 			return registry, LoadResult{Source: LoadSourceRemote, CachePath: opts.CachePath}, nil
 		}
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
+		if ctx.Err() != nil {
+			err = ctx.Err()
+		}
+		return nil, LoadResult{CachePath: opts.CachePath}, err
 	}
 	if opts.CachePath != "" {
 		if registry, cacheErr := loadCache(opts.CachePath); cacheErr == nil {

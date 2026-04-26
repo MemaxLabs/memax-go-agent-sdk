@@ -111,6 +111,16 @@ func TestLookupCapabilitiesScansGatewayProviderModels(t *testing.T) {
 	}
 }
 
+func TestLookupCapabilitiesDoesNotCrossProvidersForBareModelNames(t *testing.T) {
+	registry, err := ParseModelsDev([]byte(fixture))
+	if err != nil {
+		t.Fatalf("ParseModelsDev() error = %v", err)
+	}
+	if caps, ok := registry.LookupCapabilities("anthropic", "gpt-5.4"); ok {
+		t.Fatalf("LookupCapabilities() = %+v, want no cross-provider bare-name match", caps)
+	}
+}
+
 func TestLoadUsesFreshCache(t *testing.T) {
 	cachePath := filepath.Join(t.TempDir(), "models.json")
 	if err := os.WriteFile(cachePath, []byte(fixture), 0o644); err != nil {
@@ -191,5 +201,33 @@ func TestLoadFallsBackToStaleCache(t *testing.T) {
 	}
 	if _, ok := registry.LookupCapabilities("openai", "gpt-5.4"); !ok {
 		t.Fatalf("stale cache registry missing gpt-5.4")
+	}
+}
+
+func TestLoadDoesNotFallBackToStaleCacheOnCancellation(t *testing.T) {
+	cachePath := filepath.Join(t.TempDir(), "models.json")
+	if err := os.WriteFile(cachePath, []byte(fixture), 0o644); err != nil {
+		t.Fatalf("write cache: %v", err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	registry, result, err := Load(ctx, LoadOptions{
+		URL:       server.URL,
+		CachePath: cachePath,
+		MaxAge:    time.Nanosecond,
+	})
+	if err == nil {
+		t.Fatalf("Load() error = nil, want cancellation")
+	}
+	if registry != nil {
+		t.Fatalf("registry = %+v, want nil on cancellation", registry)
+	}
+	if result.Source != "" || result.Stale {
+		t.Fatalf("result = %+v, want no stale fallback on cancellation", result)
 	}
 }
