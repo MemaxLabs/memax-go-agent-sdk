@@ -1,1022 +1,250 @@
-# Memax Agent SDK
+<p align="center">
+  <a href="https://github.com/MemaxLabs/memax-go-agent-sdk">
+    <img src="https://memax.app/images/memax-wordmark.svg" alt="Memax" width="320" />
+  </a>
+</p>
 
-Memax Agent SDK is a Go-native autonomous agent runtime designed to grow into a
-shared foundation for coding agents, personal intelligence agents, and managed
-cloud agents. Today, the implementation is most mature on coding-agent
-orchestration; the broader product shape is the direction the runtime is being
-built toward. It is inspired by modern agent products and SDKs, but designed
-around application-owned tools instead of hard-coded system tools.
+<h1 align="center">Memax Agent SDK</h1>
 
-The core SDK should not assume access to the real filesystem, shell, browser,
-network, inbox, calendar, or OS permissions. Those capabilities are modeled as
-tools, and the tool implementation decides whether it talks to real
-infrastructure, a virtual filesystem, an in-memory workspace, a remote service,
-or a test fake.
+<p align="center">
+  A Go SDK for autonomous agents with application-owned tools and host-controlled policy.
+</p>
 
-## Product Shape
+<p align="center">
+  <a href="./LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache%202.0-blue.svg"></a>
+  <img alt="Go version" src="https://img.shields.io/badge/go-1.24+-00ADD8?logo=go&logoColor=white">
+</p>
 
-The long-term product has three layers:
+Memax Agent SDK is a Go SDK for building autonomous agents with
+**application-owned tools**, **host-controlled policy**, and **provider-neutral**
+orchestration.
 
-- **Runtime kernel**: turn loop, sessions, context policies, tool scheduling,
-  hooks, permissions, planner/task state, memory, subagents, budgets, and
-  observability.
-- **Capability adapters**: optional workspace, command, verification, browser,
-  doc, email, calendar, remote execution, and other host-owned integrations.
-- **Opinionated stacks**: batteries-included configurations built on the same
-  kernel and adapters, starting with coding workflows and later expanding to
-  personal intelligence and managed cloud agents. Initial `stack/coding` and
-  `stack/personal` packages now assemble domain-oriented tools, planner wiring,
-  and common safety policies into reusable runtime profiles, with named
-  workflow presets for each stack.
+It is designed for teams that want agent behavior without hard-coding access to
+the local filesystem, shell, browser, network, inbox, calendar, or other OS
+capabilities into the runtime. In Memax, those capabilities are exposed as
+**tools** owned by the host application.
 
-The SDK is intentionally built so the same kernel can eventually support:
+The result is an agent runtime that is easier to embed, test, secure, observe,
+and adapt across different products and environments.
 
-- coding-agent experiences in the Claude Code / Codex class
-- personal intelligence experiences in the OpenClaw / Hermes class
-- managed cloud-agent products in the Claude Managed Agents class
+## Why Memax Agent SDK
 
-Those are target stack shapes, not claims that the SDK already ships personal
-or managed-cloud stacks at the same maturity as its coding-first runtime work.
+Most agent systems couple orchestration tightly to a fixed environment. Memax is
+built around a different model:
 
-## Current Status
+- **Tools are owned by the host application.** The SDK does not assume direct
+  access to files, commands, web, or external services.
+- **Policies stay outside the core runtime.** Approval, permissions, budgets,
+  checkpoints, storage, and tool implementations remain application decisions.
+- **Providers are replaceable.** Model integrations are exposed through
+  provider-neutral interfaces, with support for multiple providers.
+- **Sessions are durable and inspectable.** The runtime is designed for
+  resumable work, event streaming, and host-side observability.
+- **Stacks are composable.** You can build from the low-level runtime or start
+  from higher-level presets for coding, personal-assistant, and managed-worker
+  workflows.
 
-This repository is embeddable today and is strongest at the neutral
-runtime-kernel layer plus coding-oriented adapters. It is now expanding from a
-coding-first focus into a broader agent-platform shape.
+## What the SDK includes
 
-Implemented capabilities
+### Runtime kernel
 
-Runtime kernel and orchestration primitives:
+The core runtime provides the orchestration primitives needed to run an agent in
+an application-controlled environment:
 
 - provider-neutral model streaming interfaces
-- typed tool registry and executor
-- compiled JSON Schema validation before tool execution
-- per-tool result size limits with truncation metadata
-- host-owned storage for oversized tool results with preview handles
-- tool and session lifecycle hooks
-- structured permission policies with host approval callbacks
-- in-memory and append-only JSONL session stores
+- session lifecycle management and append-only persistence
 - resumable and forkable sessions
-- bounded subagent tool with parent/child session correlation
-- task state tools for agent planning and progress tracking
-- host-owned planner policies with deterministic prompt plan injection and task-state adapters
-- opt-in tool selection and search for deferred tool loading
-- agent identity profiles, deterministic prompt assembly, and local skill manifests
-- project, user, and session memory injection through source-neutral prompt memory sources
-- opt-in memory search/save/delete tools for host-owned durable memory backends
-- final-result memory distillation candidates with optional host-controlled persistence
-- structured final-output contracts with JSON Schema validation and retry
-- provider-neutral model usage events and token telemetry
-- opt-in run budget governors for turns, model calls, tool calls, tokens, and duration
-- deterministic autonomy eval harness for scripted orchestration scenarios
-- OpenAI Responses API model adapter
-- Anthropic Messages API model adapter
-- context-window policies for recent-message limiting, token budgets, and summarizing compaction
-- optional OpenTelemetry tracing adapter
-- first autonomous query loop skeleton
+- context-window policies, summarization, and compaction
+- structured tool registry and execution
+- JSON Schema validation for tool inputs and structured outputs
+- permission hooks and approval callbacks
+- task state, planner integration, and bounded subagents
+- run budgets for turns, model calls, tool calls, tokens, and duration
+- usage events, traces, and observability hooks
 
-Coding-oriented adapters and toolkits:
+### Capability adapters and toolkits
 
-- memory-backed, OS-backed, and `io/fs`-backed file tools for examples and tests
-- checkpoint manager interfaces and checkpoint tools
-- workspace, patch, diff, restore, verification, and command toolkits over
-  host-owned backends
-- host-owned web search/fetch contracts plus optional `toolkit/webtools`
-  adapters for transcript-visible public web access
-- initial `stack/coding` assembly for batteries-included coding workflows
-- initial `stack/personal` assembly for durable-memory, metadata-first
-  note/document tools, metadata-first messaging tools, metadata-first
-  scheduling tools, task, approval, skill, and delegation-oriented personal
-  workflows
-- initial `stack/cloudmanaged` assembly for tenant-scoped managed-worker
-  workflows with explicit tenant admission, per-session quota validation, and
-  host-owned audit sinks
-- initial Redis-backed cloudmanaged quota store for shared multi-replica quota
-  enforcement
-- initial SQLite-backed cloudmanaged quota store for durable embedded managed
-  quota state
-- initial async cloudmanaged audit sink wrapper for buffered non-inline audit
-  delivery
-- initial durable cloudmanaged run store seam plus reference in-memory managed
-  background run tracking
-- runnable cloudmanaged remote-worker example over `ClaimHandler`,
-  `remote.Watch`, and a shared SQLite run store
-- provider-neutral cloudmanaged metrics for run lifecycle, tenant denials,
-  quota-store fallback, worker claims, heartbeats, and stale failures
-- runnable cloudmanaged observability example that combines audit records,
-  lifecycle events, low-cardinality metrics, and the remote worker path
-- provider-neutral telemetry fanout for sending the same SDK metrics to
-  multiple host-owned sinks without baking exporter policy into the runtime
-- initial SQLite-backed scheduling adapter for durable local calendar backends
-- skill discovery tools
+The repository also includes host-owned toolkits and adapters for common agent
+capabilities, including:
 
-`stack/coding` now exposes named presets so hosts can start from a workflow
-profile and then attach their own backends:
+- workspace, patch, diff, restore, and checkpoint operations
+- command execution and verification backends
+- web search and fetch contracts
+- memory and result storage integration
+- scheduling, messaging, notes, and telemetry support
+
+### Opinionated stacks
+
+For faster adoption, the SDK includes reusable stacks built on the same runtime:
+
+- **`stack/coding`** for coding-agent workflows
+- **`stack/personal`** for personal-assistant and knowledge workflows
+- **`stack/cloudmanaged`** for managed multi-tenant worker workflows
+
+These stacks provide pre-wired policies, tools, and presets while preserving the
+same host-owned execution model.
+
+## Current status
+
+Memax Agent SDK is usable today and strongest in **coding-agent orchestration**.
+The broader platform shape already includes personal and managed-cloud stacks,
+but those areas are still maturing.
+
+If you are evaluating the project today, the safest framing is:
+
+- the **runtime kernel is real and embeddable**
+- the **coding stack is the most mature path**
+- the **personal and cloud-managed stacks are active expansion areas**
+
+## Key features
+
+- Go-native autonomous agent runtime
+- application-owned tool execution model
+- OpenAI and Anthropic model adapters
+- resumable sessions and append-only transcript storage
+- structured permissions and approval callbacks
+- bounded subagent execution with parent/child session correlation
+- deterministic evaluation harness for orchestration scenarios
+- coding workflow presets such as `safe_local`, `ci_repair`, and
+  `interactive_dev`
+- personal workflow presets such as `personal_assistant` and
+  `research_partner`
+- managed-worker building blocks for queues, quotas, run stores, and remote
+  workers
+- optional OpenTelemetry integration
+
+## Installation
+
+Requires **Go 1.24+**.
+
+Add the SDK to your project:
+
+```sh
+go get github.com/MemaxLabs/memax-go-agent-sdk@latest
+```
+
+Or clone the repository and build from source:
+
+```sh
+git clone https://github.com/MemaxLabs/memax-go-agent-sdk.git
+cd memax-go-agent-sdk
+go test ./...
+```
+
+## Getting started
+
+There are two common ways to adopt the SDK:
+
+### 1. Start from a stack preset
+
+If you want a batteries-included starting point, begin with one of the stack
+packages and attach your own backends.
+
+Example shape using the coding stack:
 
 ```go
 cfg := coding.CIRepair()
 cfg.Workspace = workspaceStore
 cfg.Verifier.Verifier = verifier
 cfg.Command.Runner = runner
+
 stack, err := coding.New(cfg)
-```
-
-Coding-model depth stays explicit and provider-owned. The coding stack exposes
-stable `fast`, `balanced`, and `deep` profiles for CLI/product surfaces, then
-maps them to provider adapter options:
-
-```go
-modelOpts, err := coding.OpenAIModelOptions(coding.ModelProfileDeep)
 if err != nil {
     panic(err)
 }
-client := openai.NewFromEnv("gpt-5.4", modelOpts...)
-opts := stack.WithModel(client)
 ```
 
-Use `coding.AnthropicModelOptions` for Anthropic. Hosts can append provider
-options after the profile options when they need to override a concrete field.
+See the examples under [`examples/`](./examples) for end-to-end setup.
 
-Preset intent is locked down by deterministic eval coverage. See
-[docs/coding-stack-presets.md](docs/coding-stack-presets.md) for the full
-preset contract, default policy posture, runnable examples, and the
-authoritative eval scenario names.
+### 2. Embed the runtime directly
 
-| Preset | Intended workflow | Eval-backed recovery coverage |
-| --- | --- | --- |
-| `safe_local` | cautious local editing with checkpointing and verification | `coding_preset_safe_local`, `coding_preset_safe_local_rollback_recovery` |
-| `ci_repair` | reproducible repair loops with longer command budgets | `coding_preset_ci_repair`, `coding_preset_ci_repair_approval_recovery` |
-| `interactive_dev` | long-lived sessions such as watchers and dev servers | `coding_preset_interactive_dev`, `coding_preset_interactive_dev_session_cleanup` |
+If you need full control, build on the core runtime and register only the tools,
+policies, stores, and hooks your application wants to expose.
 
-The current implementation is strongest on coding-agent orchestration because
-that is the most demanding initial domain. The architecture is being hardened
-so those same runtime primitives can later power personal intelligence and
-managed cloud-agent stacks without forking the core.
+The root package centers on `Query` and `QueryAsync`, which drive a session,
+stream model events, execute requested tools through the registered tool
+registry, and continue until the run reaches a final result or stop condition.
 
-`stack/cloudmanaged` now keeps quota state behind a host-owned `QuotaStore`
-seam. The reference `MemoryQuotaStore` keeps the zero-config path for local or
-single-process managed hosts, while distributed deployments can attach a shared
-quota backend without reimplementing tenant validation or session-end cleanup.
-The first shared backend now exists as `stack/cloudmanaged/redistore`, using
-server-side atomic reservation plus TTL-backed cleanup safety. Quota is
-admission-time accounting by default rather than billing-accurate release-on-
-abort accounting, and store failures fail closed unless the host wraps the
-validator with a different policy. Audit sinks can now also be wrapped with
-`stack/cloudmanaged`'s async sink for buffered delivery when hosts do not want
-audit persistence to happen inline on the event-emission path. A durable
-SQLite-backed quota store now also exists as
-`stack/cloudmanaged/sqlitestore`, using `BEGIN IMMEDIATE` reservation
-transactions plus an explicit stale-session prune helper for hosts that prefer
-`database/sql` over Redis. Durable managed background runs now also sit behind
-an explicit `RunStore` seam in `stack/cloudmanaged`, with a reference
-`MemoryRunStore` plus `StartRun`, `GetRun`, and `CancelRun` helpers so hosts
-can track queued/running/succeeded/failed/canceled lifecycle without inventing
-their own job wrapper around `QueryAsync`. The same
-`stack/cloudmanaged/sqlitestore` package now also implements `RunStore`, so
-embedded managed hosts can keep quota state and durable run lifecycle in one
-SQLite database. Durable runs now also emit explicit `run_state_changed`
-observer events so audit sinks and managed dashboards can follow lifecycle
-transitions without polling alone. The managed stack now also exposes an
-explicit queued worker path through `EnqueueRun`, `ExecuteRun`, and
-`FailStaleRuns`, plus a `WatchStaleRuns` monitor loop for heartbeat timeout
-failure detection, so hosts can build worker fleets on top of the same durable
-run seam instead of inventing a second job abstraction. A reference
-`stack/cloudmanaged/remote` package now layers host-owned claim discovery and
-HTTP polling on top of the same `ExecuteRun` path, keeping remote workers on
-the same tenant-validator configuration as the enqueueing side instead of
-introducing SDK-level worker delegation tokens. The same remote package also
-includes a GET-only readiness handler so claim servers can expose a non-mutating
-store probe for orchestrators before workers start polling. The managed eval suite now
-also locks in mid-run tenant revocation as a first-class failure path for
-queued workers, plus a host-owned remote HTTP poll path over the same run
-contract. `examples/cloudmanaged_remote_stack` now shows both ends of that
-wire: the default mode runs an in-process demo, while `-mode=server` serves
-`ClaimHandler` plus `/ready`, and `-mode=worker` runs `remote.Watch` against
-the same SQLite run database.
-The managed stack now also records provider-neutral operational metrics through
-`Config.Base.Meter`: run lifecycle counters and duration measurements, tenant
-denial counters, quota store fallback counters, worker claim and heartbeat
-counters, heartbeat error counters, and stale-worker failure counters.
-When a host needs more than one metrics consumer, `telemetry.NewFanoutMeter`
-forwards each measurement to multiple provider-neutral meters synchronously,
-keeping exporter policy outside the runtime while allowing local capture and an
-OpenTelemetry adapter to run side by side.
-`stack/cloudmanaged.NewMetricsObserver` exposes the event-derived subset for
-hosts that need to mirror the same signals from a custom event stream.
-`examples/cloudmanaged_observability_stack` demonstrates the managed
-observability posture end to end: an expected startup tenant denial, a remote
-worker run over `ClaimHandler`/`remote.Watch`, audit records for ordered state,
-and low-cardinality metric output for dashboards.
+## Repository guide
 
-`stack/personal` now exposes named presets so hosts can start from a
-personal-intelligence workflow profile and then attach only the host-owned
-backends they need:
+### Core packages
 
-```go
-cfg := personal.PersonalAssistant()
-cfg.Memory = memorytools.Config{
-    Source: memoryStore,
-    Writer: memoryStore,
-}
-cfg.Tasks = taskStore
-cfg.Approval.Approver = approver
-stack, err := personal.New(cfg)
-```
+- `agent.go` — main runtime query loop
+- `session/` — session storage and lifecycle
+- `tool/` — tool registry and execution contracts
+- `planner/` — planner integration and task state wiring
+- `permission/` — permission policies and approval hooks
+- `prompt/`, `identity/`, `skill/` — prompt assembly and agent identity support
+- `model/`, `providers/` — provider-neutral model interfaces and adapters
 
-Preset intent is locked down by deterministic eval coverage. See
-[docs/personal-stack-presets.md](docs/personal-stack-presets.md) for the full
-preset contract, default policy posture, and authoritative eval scenario names.
+### Stacks
 
-| Preset | Intended workflow | Eval-backed coverage |
-| --- | --- | --- |
-| `personal_assistant` | careful personal assistance with durable recall plus approval-gated memory, note, message, and schedule writes | `personal_preset_personal_assistant`, `personal_preset_personal_assistant_memory_approval_recovery`, `personal_preset_personal_assistant_note_recall`, `personal_preset_personal_assistant_message_recall`, `personal_preset_personal_assistant_message_approval_recovery`, `personal_preset_personal_assistant_inbox_triage_reply_followup`, `personal_preset_personal_assistant_inbox_send_backend_failure`, `personal_preset_personal_assistant_jmap_inbox_reply`, `personal_preset_personal_assistant_schedule_recall`, `personal_preset_personal_assistant_schedule_approval_recovery`, `personal_preset_personal_assistant_schedule_conflict_recovery`, `personal_preset_personal_assistant_daily_briefing`, `personal_preset_personal_assistant_week_ahead_planning`, `personal_preset_personal_assistant_week_ahead_task_ledger`, `personal_preset_personal_assistant_week_ahead_task_ledger_sqlite`, `personal_preset_personal_assistant_scheduled_daily_briefing`, `personal_preset_personal_assistant_scheduled_daily_briefing_notification`, `personal_preset_personal_assistant_scheduled_notification_delivery_retry`, `personal_preset_personal_assistant_scheduled_run_stale_reconciliation`, `personal_preset_personal_assistant_scheduled_inbox_triage`, `personal_preset_personal_assistant_scheduled_inbox_triage_jmap` |
-| `research_partner` | longer-horizon personal research and scoped delegation | `personal_preset_research_partner` |
+- `stack/coding/` — coding-agent workflow assembly and presets
+- `stack/personal/` — personal-assistant workflow assembly and presets
+- `stack/cloudmanaged/` — managed multi-tenant worker assembly and stores
 
-The first real remote inbox backend for the personal stack now exists through
-`messaging/jmapclient` plus `messaging/jmapstore`. It preserves the same
-metadata-first contract as the in-memory thread store: search returns
-thread-level metadata only, and full message bodies appear only after an
-explicit thread read. The personal stack now also exposes host-owned proactive
-scheduled runs through `ScheduledRunStore`, `PeriodicTrigger`,
-`StartScheduledRun`, `FireScheduledTriggers`, `WatchScheduledTriggers`, and
-named `FireScheduledWorkflows`, with eval-backed lifecycle/idempotency for
-deterministic occurrences plus an embedded SQLite backend in
-`stack/personal/sqlitestore`. Scheduled runs emit `run_state_changed` observer
-events so hosts can monitor proactive workflow lifecycle without polling the
-scheduled-run store alone; those events are emitted after the scheduled-run
-store accepts each durable transition. Hosts can reconcile orphaned queued or
-running scheduled records through `FailStaleScheduledRuns` and
-`WatchStaleScheduledRuns` when the store implements the optional stale
-reconciliation interface. Hosts can attach `NewScheduledRunNotifier` as an
-event observer to mirror terminal scheduled-run completions, or every lifecycle
-state, into a host-owned notification outbox with idempotent run/status
-records; `stack/personal/sqlitestore` persists both scheduled runs and those
-notification records for restart-safe lookback. Notification stores can also
-opt in to the delivery extension: host workers claim pending outbox records,
-hold a bounded delivery lease, then mark records delivered or failed with a
-retry time. `DrainScheduledRunNotifications` provides the reusable one-pass
-worker helper for claim, host delivery, ack, and retry bookkeeping, while
-`WatchScheduledRunNotifications` wraps it in a long-running ticker worker for
-host services. Hosts can attach a drain result observer for successful-pass
-delivery metrics. Delivery transitions also emit structured observer events for
-claimed, delivered, failed, dead-lettered, and requeued outbox records, giving
-audit sinks an ordered lifecycle stream without polling. Hosts can call
-`GetScheduledRunNotificationStats` for a current health snapshot covering
-pending, leased, claimable, delivered, failed, dead-lettered, retry-attempt,
-oldest-undelivered, and next-claimable state, and can record those transition
-and snapshot signals through `NewScheduledRunNotificationMetrics` and
-`RecordScheduledRunNotificationStats`.
-Hosts can opt into `WithScheduledRunNotificationMaxAttempts`
-to move poison notifications to `dead_lettered` state after exhausted retries
-when the store implements the dead-letter extension. Stores can also implement
-`ScheduledRunNotificationRecoveryStore` so hosts can inspect a failed or
-dead-lettered record, repair the channel or payload, and call
-`RequeueScheduledRunNotification` to move it back to pending delivery while
-preserving attempt history. Host delivery errors are recorded as retryable or
-terminal outbox state, while store errors are returned to the worker. Email,
-push, chat, and webhook delivery remain host-owned; `stack/personal/webhook`
-is the reference webhook handler for hosts that want a signed HTTP delivery
-channel with idempotency headers and typed response errors.
-Week-ahead planning also has eval-backed durable task
-continuity:
-follow-ups can be written through
-`upsert_task`, reloaded in a later run through planner context, and updated
-without duplicating the task ledger.
+### Toolkits and adapters
 
-## Try It
+- `workspace/`, `checkpoint/`, `toolkit/`, `web/`, `memory/`, `messaging/`,
+  `notes/`, `scheduling/`, `telemetry/`
 
-Run the deterministic memory-workspace example:
+### Examples
+
+Representative examples include:
+
+- [`examples/coding_stack`](./examples/coding_stack)
+- [`examples/coding_safe_local_stack`](./examples/coding_safe_local_stack)
+- [`examples/personal_stack`](./examples/personal_stack)
+- [`examples/cloudmanaged_remote_stack`](./examples/cloudmanaged_remote_stack)
+- [`examples/server_embedding`](./examples/server_embedding)
+
+## Documentation
+
+Project documentation lives in [`docs/`](./docs):
+
+- [Architecture](./docs/architecture.md)
+- [Server integration](./docs/server.md)
+- [Coding stack presets](./docs/coding-stack-presets.md)
+- [Personal stack presets](./docs/personal-stack-presets.md)
+- [Observability](./docs/observability.md)
+- [Skills](./docs/skills.md)
+- [Roadmap](./docs/roadmap.md)
+- [Versioning](./docs/versioning.md)
+
+## Development
+
+Run the test suite:
 
 ```sh
-go run ./examples/memory_tools
+go test ./...
 ```
 
-It uses a scripted model and in-memory `list_files`, `read_file`, and `write_file` tools, so it does not require network access or model-provider credentials.
-
-The same file tools can run over different workspace implementations:
-
-```go
-memory := filetools.NewMemoryFS(map[string]string{"README.md": "hello"})
-disk, err := filetools.NewOSFS(
-    ".",
-    filetools.WithSymlinkContainment(true),
-    filetools.WithMaxReadBytes(512*1024),
-    filetools.WithMaxListEntries(5000),
-)
-readonly, err := filetools.NewReadOnlyFS(embedFS)
-```
-
-Additional deterministic examples:
+Explore runnable examples:
 
 ```sh
-go run ./examples/session_resume
-go run ./examples/advanced_stack
-go run ./examples/coding_safe_local_stack
 go run ./examples/coding_stack
-go run ./examples/coding_wait_repair_stack
-go run ./examples/coding_rollback_repair_stack
-go run ./examples/coding_model_profiles -provider openai -profile deep
-go run ./examples/cloudmanaged_remote_stack
-go run ./examples/cloudmanaged_observability_stack
-go run ./examples/personal_stack
-go run ./examples/personal_notes_stack
-go run ./examples/personal_messages_stack
-go run ./examples/personal_schedule_stack
-go run ./examples/personal_briefing_stack
-go run ./examples/personal_week_ahead_stack
-go run ./examples/personal_task_ledger_stack
-go run ./examples/personal_scheduled_task_ledger_stack
-go run ./examples/personal_notification_delivery_stack
-go run ./examples/personal_webhook_notification_stack
-go run ./examples/personal_proactive_stack
-go run ./examples/personal_scheduled_inbox_stack
-go run ./examples/personal_jmap_scheduled_inbox_stack
-go run ./examples/ci_embedding
-go run ./examples/skills_identity
-go run ./examples/eval_scenarios
 ```
 
-`session_resume` shows how to continue a durable transcript by passing `Options.SessionID`. `advanced_stack` composes task state, checkpointing, context budgeting, tool search, and memory-backed file tools in one run. `coding_safe_local_stack` demonstrates the `safe_local` baseline: checkpoint, guarded patch, host-owned verification, and task completion only after verification. `coding_stack` now demonstrates a `ci_repair` workflow that hits an approval gate, requests approval explicitly, retries the patch, reruns the check, and verifies before completion. `coding_wait_repair_stack` demonstrates an `interactive_dev` watch loop: start a managed watcher, wait for failing output, patch, wait for fresh passing output, stop the session, and verify. `coding_rollback_repair_stack` demonstrates the harder recovery loop: command-output cursors, checkpoint-before-patch denial, a bad checkpointed edit, failed verification with rollback guidance, explicit restore, repair, and task completion after verification. `coding_model_profiles` demonstrates CLI/config parsing for `fast`, `balanced`, and `deep` coding depth profiles and their OpenAI/Anthropic provider mappings. `cloudmanaged_remote_stack` demonstrates the split server/worker managed-runtime path over a shared SQLite run store. `cloudmanaged_observability_stack` demonstrates ordered audit records plus low-cardinality metrics for tenant denials, remote worker claims, heartbeats, and durable run lifecycle. `personal_stack` demonstrates a `personal_assistant` workflow where recalled durable memory changes the saved follow-up preference, approval gates the durable write, and the saved memory is then recalled through the normal tool layer. `personal_notes_stack` demonstrates the note-first variant: search metadata, read the relevant note, request approval for a new reusable note, and save content that reflects the recalled note style. `personal_messages_stack` demonstrates the thread-first messaging variant: search thread metadata, read the relevant conversation, request approval for an outbound reply, and send content that reflects the recalled guidance. `personal_inbox_stack` demonstrates an inbox-triage variant: search unread inbox metadata first, read the relevant thread, recover through reply approval, and create a same-day follow-up reminder after the approved reply. `personal_schedule_stack` demonstrates the schedule-first variant: search event metadata, read the relevant event, request approval for a reschedule, and change the calendar state only after the recalled event constraints are visible in the transcript. `personal_briefing_stack` demonstrates a briefing-first workflow: recall durable briefing style, search note, message, and schedule metadata, read only the matched full items, and synthesize a concise morning brief. `personal_week_ahead_stack` demonstrates a planning workflow: recall durable planning style, search notes, unread inbox, and calendar metadata, read selected details, and synthesize conflicts, commitments, prep blocks, and follow-ups. `personal_task_ledger_stack` demonstrates durable multi-run task continuity: the first run writes deterministic follow-up tasks through `upsert_task`, the SQLite ledger is reopened with a fresh database handle, and the second run lists persisted pending work before updating only the completed follow-up. `personal_scheduled_task_ledger_stack` demonstrates proactive task-ledger maintenance: a scheduled run lists persisted pending work before completing confirmed tasks, blocking waiting tasks, and deduplicating the same occurrence. `personal_notification_delivery_stack` demonstrates durable notification outbox delivery: a scheduled run completion is recorded, a host worker claims it, retries after a transient channel failure, marks it delivered, and prints provider-neutral delivery/outbox metrics while external push/email/webhook delivery stays host-owned. `personal_webhook_notification_stack` demonstrates the signed webhook variant end to end: a scheduled run records a notification, the host worker posts it to an HTTP receiver with idempotency and signature headers, and the outbox is acked delivered. `ci_embedding` shows a bounded, read-only agent run shaped for CI jobs. `skills_identity` shows how an agent profile and relevant skills become deterministic prompt guidance. `eval_scenarios` runs the deterministic autonomy scenario suite and exits non-zero on failure.
+Some examples require provider credentials or host-owned backends to be
+configured before they can run successfully.
 
-To try the embeddable HTTP shape:
+## Design principles
 
-```sh
-go run ./examples/server_embedding
-curl -s localhost:8080/query -d '{"prompt":"inspect workspace"}'
-```
+Memax is intentionally designed around a few core principles:
 
-For a live-provider HTTP server, set an explicit provider and model:
+- **host ownership over environment access**
+- **clear separation between runtime and capabilities**
+- **durable sessions and observable execution**
+- **composable stacks instead of a single fixed product surface**
+- **policy as configuration and integration, not hidden behavior**
 
-```sh
-AGENT_PROVIDER=openai OPENAI_API_KEY=... OPENAI_MODEL=... go run ./examples/server_live
-AGENT_PROVIDER=anthropic ANTHROPIC_API_KEY=... ANTHROPIC_MODEL=... go run ./examples/server_live
-```
+## Open source status
 
-To use the OpenAI adapter:
+This repository is being developed in the open as the foundation for a broader
+agent platform. APIs and higher-level stacks will continue to evolve, but the
+project is intended to be useful today for embedders who want a Go-native agent
+runtime with explicit control over tools and policy.
 
-```go
-client := openai.NewFromEnv("",
-    openai.WithBaseURL("https://gateway.example.com/v1"),
-    openai.WithTimeout(60*time.Second),
-    openai.WithMaxOutputTokens(4096),
-    openai.WithReasoningEffort(openai.ReasoningEffortMedium),
-    openai.WithReasoningArtifacts(),
-    openai.WithTextVerbosity(openai.TextVerbosityMedium),
-)
-events, err := memaxagent.Query(ctx, "Inspect the workspace.", memaxagent.Options{
-    Model: client,
-    Tools: registry,
-})
-```
+## License
 
-Set `OPENAI_BASE_URL` or use `openai.WithBaseURL` to route OpenAI requests
-through a gateway or compatible endpoint. Following OpenAI ecosystem
-conventions, this is the API-version base URL, so it normally includes `/v1`;
-the adapter sends requests to `BaseURL + "/responses"`. Use
-`openai.WithEndpoint` only when you need to override the full Responses API
-endpoint directly; `Endpoint` takes precedence over `BaseURL`.
-`openai.WithTimeout` applies a request-scoped timeout and can be combined with
-`openai.WithHTTPClient` when you need a custom transport. Reasoning effort,
-text verbosity, and service tier stay as OpenAI-specific options on the
-adapter; the provider-neutral `model.Request` contract does not grow
-OpenAI-only fields. `openai.WithReasoningArtifacts` requests encrypted
-reasoning content from the Responses API and lets the SDK persist/replay those
-opaque reasoning items across stateless turns without exposing them as normal
-assistant text. Use it when the host owns transcript continuity, especially
-with `openai.WithStore(false)`; if you rely on OpenAI's stored response state,
-the encrypted artifact path is usually redundant.
-
-To use the Anthropic adapter:
-
-```go
-client := anthropic.NewFromEnv("",
-    anthropic.WithBaseURL("https://gateway.example.com"),
-    anthropic.WithTimeout(60*time.Second),
-    anthropic.WithMaxTokens(4096),
-    anthropic.WithEffort(anthropic.EffortMedium),
-    anthropic.WithAdaptiveThinking(),
-)
-events, err := memaxagent.Query(ctx, "Inspect the workspace.", memaxagent.Options{
-    Model: client,
-    Tools: registry,
-})
-```
-
-Set `ANTHROPIC_BASE_URL` or use `anthropic.WithBaseURL` to route Anthropic
-requests through a gateway or compatible endpoint. Following Anthropic
-ecosystem conventions, this is the service root URL, so it normally does not
-include `/v1`; the adapter sends requests to `BaseURL + "/v1/messages"`. Use
-`anthropic.WithEndpoint` only when you need to override the full Messages API
-endpoint directly; `Endpoint` takes precedence over `BaseURL`.
-`anthropic.WithTimeout` applies a request-scoped timeout and can be combined
-with `anthropic.WithHTTPClient` when you need a custom transport. Anthropic
-effort and thinking controls stay on the Anthropic adapter; use adaptive
-thinking with effort for models that support adaptive thinking, or manual
-thinking budgets for older model families that still support them. When
-Anthropic returns `thinking` or `redacted_thinking` blocks, the adapter
-persists and replays them as opaque provider artifacts so multi-turn tool-use
-continuity is not silently lost.
-
-Runnable live-provider examples are available behind explicit environment variables:
-
-```sh
-OPENAI_API_KEY=... OPENAI_MODEL=... go run ./examples/live_openai
-ANTHROPIC_API_KEY=... ANTHROPIC_MODEL=... go run ./examples/live_anthropic
-```
-
-To emit OpenTelemetry spans, import `github.com/MemaxLabs/memax-go-agent-sdk/otel` as `sdkotel`:
-
-```go
-events, err := memaxagent.Query(ctx, "Inspect the workspace.", memaxagent.Options{
-    Model:  client,
-    Tools:  registry,
-    Tracer: sdkotel.NewTracer("my-agent-service"),
-    Meter:  sdkotel.NewMeter("my-agent-service"),
-})
-```
-
-When providers report token usage, `Query` emits `EventUsage` events and
-attaches aggregate usage to the final `EventResult`:
-
-```go
-for event := range events {
-    switch event.Kind {
-    case memaxagent.EventUsage:
-        log.Printf("usage: input=%d output=%d", event.Usage.InputTokens, event.Usage.OutputTokens)
-    case memaxagent.EventResult:
-        if event.Usage != nil {
-            log.Printf("total tokens: %d", event.Usage.TotalTokens)
-        }
-    }
-}
-```
-
-The full event ordering and telemetry contract is documented in
-[docs/observability.md](docs/observability.md), including progressive skill
-events, memory candidate events, context compaction provenance, streaming
-tool-use lifecycle events, and budget-denial behavior.
-
-To persist sessions in SQLite, use `session/sqlitestore` with any `database/sql` SQLite driver:
-
-```go
-db, err := sql.Open("sqlite", "file:memax.db")
-sessions, err := sqlitestore.New(ctx, db)
-```
-
-To preserve full oversized tool results outside the model transcript, configure
-`Options.ResultStore`. The model receives a bounded preview plus handle metadata:
-
-```go
-largeResults := resultstore.NewMemoryStore()
-events, err := memaxagent.Query(ctx, "Inspect the large report.", memaxagent.Options{
-    Model:       client,
-    Tools:       registry,
-    ResultStore: largeResults,
-})
-```
-
-For coding-agent style edits, use the optional `workspace` package and
-`toolkit/workspacetools`. The core SDK still does not assume real filesystem
-access; hosts provide a `workspace.Store` backed by memory, git, a database, or
-a remote sandbox, then register only the tools they want the model to use:
-
-```go
-ws := workspace.NewMemoryStore(map[string]string{
-    "README.md": "hello",
-})
-workspaceTools, err := workspacetools.NewTools(ws)
-registry := tool.NewRegistry(workspaceTools...)
-```
-
-For a real root-confined directory, use `workspace.NewOSStore`. It uses
-forward-slash workspace paths at the SDK boundary, contains symlinks by default,
-and keeps checkpoints as in-memory snapshots for the lifetime of the store:
-
-```go
-ws, err := workspace.NewOSStore("/path/to/repo")
-```
-
-The standard workspace tools support read/list, guarded atomic patches,
-standard unified diffs, dry-run patch previews, diffs, checkpoints, and restore
-through the normal tool, permission, hook, budget, and event pipeline. Unified
-diff failures include nearby current content so the model can repair stale
-patches instead of guessing. Hosts that need approval-style gating can use
-`workspacetools.NewApplyPatchToolWithReview` to inspect a validated
-`workspace.PatchSummary` before mutation. Use individual
-`workspacetools.New*Tool` constructors when a host wants to expose only a subset
-of capabilities. Workspace paths use forward-slash, workspace-relative syntax;
-OS-backed adapters should translate and contain paths at the adapter boundary.
-Patch, diff, checkpoint, and restore tools emit dedicated workspace lifecycle
-events derived from result metadata.
-
-For public web access, use the optional `web` contracts and
-`toolkit/webtools`. The core SDK does not search or fetch the internet by
-itself. Hosts provide a `web.Searcher` and/or `web.Fetcher` that owns the
-search provider, credentials, domain policy, caching, and audit behavior, then
-register `web_search` and `web_fetch` through the normal tool layer. Search
-results are metadata-first: titles, URLs, snippets, sources, and publish times
-are visible before the model asks to fetch a specific URL.
-
-For verification loops, use the optional `toolkit/verifytools` package. It
-defines a small host-owned `Verifier` interface so applications can expose
-tests, typechecks, lint, policy checks, or remote CI validators without giving
-the core SDK shell access. Failed verification returns a model-visible tool
-error with diagnostics, so the agent can repair, re-run verification, or restore
-a checkpoint through normal tools.
-
-For general test/build/lint commands, use the optional `toolkit/commandtools`
-package. It exposes `run_command` over a host-owned `Runner`; the core SDK
-still does not execute shell commands itself. `commandtools.NewTool` gives
-models the normal terminal UX: `command` is a shell string. The reference
-`OSRunner` still launches exact argv internally, applies cwd containment when
-rooted, enforces timeouts, and caps stdout/stderr. `OSRunner` is not a sandbox
-and does not filter commands or arguments; hosts that need an allowlist,
-container, network policy, or process sandbox should wrap or replace it. It
-does not inherit `os.Environ()` by default because environment variables often
-contain secrets:
-
-```go
-runner, err := commandtools.NewOSRunner("/path/to/repo")
-commandTool := commandtools.NewTool(commandtools.Config{
-    Runner:    runner,
-    MayMutate: false, // set true for generators, formatters, or scripts that write
-})
-registry.Register(commandTool)
-```
-
-Command results are normal tool results with exit code, timeout, duration, and
-output metadata. Non-zero exits are model-visible tool errors, enabling the
-agent to patch, rerun, or ask for approval through the normal loop.
-Use `toolkit/agentpolicy` to add command-prefix allowlists, denylists,
-input-bound approvals, or verify-before-final gates for selected commands. For
-hosts that need a model-facing exact-argv schema instead of a shell string, use
-`commandtools.NewExecTool` over the same runner interface.
-
-Command-prefix policies only match simple shell commands. If a model submits
-shell control syntax such as `&&`, `;`, pipes, redirects, command substitution,
-or newlines, command allow/deny policies reject the input instead of trying to
-prove which subcommands will run.
-
-For longer-lived commands such as dev servers or watch jobs, the same package
-also provides `start_command`, `write_command_input`,
-`resize_command_terminal`, `read_command_output`, `wait_command_output`,
-`stop_command`, and `list_commands` over host-owned session interfaces. This
-keeps background process lifecycle explicit and transcript-visible instead of
-hiding it behind a single opaque shell tool. `wait_command_output` is the
-monitoring primitive for watch loops: it waits for fresh output or lifecycle
-changes without forcing the model to poll blindly.
-`commandtools.OSSessionManager` is the reference local adapter: it launches
-argv directly, applies rooted cwd resolution,
-retains bounded stdout/stderr chunks with drop accounting, keeps stdin open for
-interactive writes, and supports start, write, resize, read, stop, list, and cleanup
-over real local processes. On Unix, started sessions get their own process
-group so `stop_command`, timeouts, and session cleanup signal ordinary child
-processes as well as the top-level command; shells that create additional
-process groups for job-control children may still require sandbox-level cleanup.
-When `start_command` sets
-`tty: true`, the adapter
-starts a PTY-backed terminal session and returns `pty` output chunks instead of
-pretending terminal-native output is plain stdout. `cols` and `rows` set the
-initial geometry, and `resize_command_terminal` updates it later for shells,
-REPLs, pagers, and TUIs that care about terminal width and height. Like
-`OSRunner`, it is not a
-sandbox and does not filter executables, arguments, or system access.
-On Unix the PTY path uses native pseudo terminals; on Windows it uses ConPTY
-when the host OS exposes the required APIs. Graceful stop is best-effort and
-platform dependent; on Unix it attempts an interrupt before forcing
-termination of the process group, while some Windows processes fall back to
-forced termination of the top-level process immediately.
-`commandtools.ScriptedSessionManager` remains available for deterministic tests
-and evals. `commandtools.SessionCleanupOptions(...)` installs `SessionEnded`
-cleanup hooks so session-owned commands do not outlive the parent agent run;
-hosts using managed sessions should install it by default.
-`commandtools/sessiontest` provides a shared adapter conformance harness for
-the start/read/wait/list/stop lifecycle and optional write, resize, and cleanup
-extensions. `commandtools.NewSessionTools(...)`
-builds the standard tool set for hosts that implement the full managed-session
-surface:
-
-```go
-manager, err := commandtools.NewOSSessionManager("/path/to/repo")
-sessionTools, err := commandtools.NewSessionTools(manager)
-registry := tool.NewRegistry(sessionTools...)
-runner := hook.NewRunner(commandtools.SessionCleanupOptions(manager)...)
-```
-
-To require a machine-readable final answer, configure `Options.Output` with a
-JSON Schema. The default prompt builder includes the contract, and `Query`
-validates the final answer. If validation fails, the SDK appends a repair prompt
-and retries once by default:
-
-```go
-events, err := memaxagent.Query(ctx, "Summarize the deployment risk.", memaxagent.Options{
-    Model: client,
-    Output: output.Contract{
-        Schema: map[string]any{
-            "type":     "object",
-            "required": []any{"risk", "summary"},
-            "properties": map[string]any{
-                "risk":    map[string]any{"type": "string", "enum": []any{"low", "medium", "high"}},
-                "summary": map[string]any{"type": "string"},
-            },
-            "additionalProperties": false,
-        },
-    },
-})
-```
-
-To configure agent identity and skills:
-
-```go
-events, err := memaxagent.Query(ctx, "Review the migration plan.", memaxagent.Options{
-    Model: client,
-    Identity: identity.Identity{
-        Name:    "Migration Reviewer",
-        Role:    "database change reviewer",
-        Mission: "identify correctness, rollback, and operational risks",
-    },
-    Skills: []skill.Skill{{
-        Name:        "database-review",
-        Description: "Review schema and data migration plans.",
-        WhenToUse:   "The task involves SQL, migrations, indexes, or rollback plans.",
-        Content:     "Check lock behavior, rollback path, data safety, and observability.",
-    }},
-})
-```
-
-Skills can come from the filesystem, embedded `fs.FS` values, HTTP endpoints,
-databases, or any custom `skill.Source`. Local `SKILL.md` directories can be
-loaded up front or exposed through `Options.SkillSource`:
-
-```go
-skills, err := skill.LoadDir(ctx, ".agents/skills")
-events, err := memaxagent.Query(ctx, "Review the migration plan.", memaxagent.Options{
-    Model:       client,
-    SkillSource: skill.StaticSource(skills),
-})
-```
-
-For larger skill catalogs, use progressive disclosure so the prompt contains
-metadata only and the model loads full instructions through the transcript:
-
-```go
-events, err := memaxagent.Query(ctx, "Review the migration plan.", memaxagent.Options{
-    Model:           client,
-    SkillSource:     skill.StaticSource(skills),
-    SkillDisclosure: skill.DisclosureProgressive,
-})
-```
-
-In progressive mode, the SDK automatically exposes a read-only `load_skill`
-tool. The tool returns the selected skill body as a normal tool result, so skill
-use is visible in events and durable session history instead of being hidden
-prompt state. Progressive discovery and skill tool activity also emit dedicated
-events: `EventSkillDiscovery`, `EventSkillSearch`, `EventSkillLoaded`, and
-`EventSkillResourceLoaded`.
-
-Other source adapters are available:
-
-```go
-embeddedSkills, err := skill.LoadFS(ctx, embedFS, "skills")
-source := &skill.PrefetchSource{
-    Source: skill.MultiSource{
-        skill.StaticSource(embeddedSkills),
-        skill.TimeoutSource{
-            Source:  skill.HTTPSource{URL: "https://example.com/skills.json"},
-            Timeout: 2 * time.Second,
-        },
-        skill.SourceFunc(loadSkillsFromDatabase),
-    },
-    TTL:            5 * time.Minute,
-    RefreshTimeout: 2 * time.Second,
-}
-```
-
-To let the model discover skills through the normal tool layer, register
-`toolkit/skilltools`. Search results are metadata-only by default; use
-`load_skill` for the full instructions.
-
-```go
-searchSkills, err := skilltools.NewSearchTool(skilltools.Config{
-    Source: skill.StaticSource(skills),
-})
-registry := tool.NewRegistry(searchSkills)
-```
-
-The supported `SKILL.md` metadata subset and source formats are documented in
-[docs/skills.md](docs/skills.md).
-
-To inject durable host context, pass explicit memories or a custom
-`memory.Source`. Sources are loaded once per `Query` run and receive the active
-session ID, parent session ID, identity, current model-visible messages, and
-bounded recent user-message query text:
-
-```go
-events, err := memaxagent.Query(ctx, "Review the billing change.", memaxagent.Options{
-    Model: client,
-    Memories: []memory.Memory{{
-        Name:    "billing-rules",
-        Scope:   memory.ScopeProject,
-        Content: "Billing changes require audit logging and rollback notes.",
-    }},
-    MemorySource: memory.SourceFunc(func(ctx context.Context, req memory.Request) ([]memory.Memory, error) {
-        return loadRelevantMemories(ctx, req.SessionID, req.Query)
-    }),
-})
-```
-
-To let the model explicitly search or request updates to host-owned durable
-memory, register `toolkit/memorytools` against a backend that implements the
-capabilities you want to expose:
-
-```go
-memories := memory.NewMemoryStore(nil)
-memoryTools, err := memorytools.NewTools(memorytools.Config{
-    Source:  memories,
-    Writer:  memories,
-    Deleter: memories,
-})
-registry := tool.NewRegistry(memoryTools...)
-```
-
-Cloud memory systems can implement `memory.Source`, `memory.Writer`, and
-`memory.Deleter` directly. Only registered tools are available to the model, so
-hosts can expose search-only memory, save-with-approval memory, or full
-read/write/delete memory through normal tool permissions.
-
-To propose durable memories from completed work without automatically writing
-anything, configure a `memory.Distiller`. Distillation runs only after a valid
-final answer and emits `EventMemoryCandidates` before `EventResult`. Hosts can
-also opt into a `MemoryCandidateHandler` to approve, filter, or persist those
-candidates after the event is emitted. Handler failures are reported as
-non-terminal `EventMemoryCandidateHandlerError` events so the final answer still
-reaches the caller:
-
-```go
-store := memory.NewMemoryStore(nil)
-events, err := memaxagent.Query(ctx, "Finish the migration review.", memaxagent.Options{
-    Model: client,
-    MemoryDistiller: memory.RuleDistiller{{
-        WhenResultContains: "rollback",
-        WhenPlanContains:   "migration",
-        Memory: memory.Memory{
-            Name:    "migration-rollback",
-            Scope:   memory.ScopeProject,
-            Content: "Migration reviews require rollback notes.",
-        },
-        Reason:     "completed review established rollback requirement",
-        Confidence: 0.9,
-    }},
-    MemoryCandidateHandler: memory.WriterHandler{
-        Writer:        store,
-        MinConfidence: 0.8,
-        Scopes:        []memory.Scope{memory.ScopeProject},
-    },
-})
-```
-
-To expose bounded worker agents as a tool, import `github.com/MemaxLabs/memax-go-agent-sdk/toolkit/subagents` and register the returned tool:
-
-```go
-delegate, err := subagents.NewTool(subagents.Config{
-    Agents: []subagents.Agent{{
-        Name:        "investigator",
-        Description: "Investigates a focused question in a child session.",
-        Options: memaxagent.Options{
-            Model:    client,
-            Sessions: sessions,
-            MaxTurns: 8,
-        },
-    }},
-})
-```
-
-Subagent delegation can be scoped to host task state. Configure
-`PlanSource: tasktools.SubagentPlanner(tasks, ...)` so a call with `task_id`
-gives the child only that task's plan step, evidence, and verification hints.
-Configure `ResultHandler: tasktools.NewSubagentProgressHandler(tasks)` to
-record successful child results as task progress. Both hooks are opt-in; child
-runs remain normal bounded `Query` calls through the `run_subagent` tool.
-
-To install common safety policies without hard-coding them into the runtime,
-use `toolkit/agentpolicy`. For example, require a checkpoint before mutating
-workspace patches:
-
-```go
-policy := agentpolicy.RequireCheckpointBeforePatch()
-events, err := memaxagent.Query(ctx, "Patch README.md safely.", memaxagent.Options{
-    Model: client,
-    Tools: registry,
-    Hooks: hook.NewRunner(policy.Options()...),
-})
-```
-
-The first patch attempt is denied as a recoverable tool result until
-`workspace_checkpoint` succeeds in the same session. Dry-run patch previews are
-allowed.
-
-For rollback guidance after failed verification, install
-`agentpolicy.RecommendRollbackOnFailedVerification()` into hooks and wrap the
-host verifier. The policy records successful `workspace_checkpoint` results and
-adds model-visible restore guidance to failed `workspace_verify` results. It
-does not restore automatically; rollback still happens through the normal
-`workspace_restore` tool so the transcript, permissions, hooks, and events stay
-observable.
-
-To prevent premature final answers after workspace changes, install
-`agentpolicy.RequireVerificationBeforeFinal()`. The policy tracks successful
-mutating workspace patches and restores, denies finalization until a successful
-`workspace_verify` result is observed in the same session, and appends the
-denial as a normal user repair prompt so the model can recover by calling tools.
-Use `Options.MaxFinalDenials` to cap these repair turns; zero uses the SDK
-default and negative disables before-final retries.
-
-Command execution can use the same policy surface. `agentpolicy.DenyCommands`
-and `agentpolicy.AllowCommands` match command prefixes, so hosts can block
-dangerous executables or expose a narrow command set:
-
-```go
-policy := agentpolicy.AllowCommands(
-    agentpolicy.MatchCommandPrefix("go", "test"),
-    agentpolicy.MatchCommandPrefix("go", "vet"),
-)
-```
-
-Prefix policies only match simple shell commands. If a model submits shell
-control syntax such as `&&`, `;`, pipes, redirects, command substitution, or
-newlines, command allow/deny policies reject the input instead of trying to
-prove which subcommands will run. Hosts that need strict process-level
-governance can expose `commandtools.NewExecTool`, which keeps `command` as an
-exact argv array.
-
-For sensitive commands, combine `approvaltools.NewTool` with
-`agentpolicy.RequireApprovalBeforeCommands(...)`. The command approval policy
-denies matching `run_command` attempts until the model requests approval for
-the command tool action. By default, a granted approval authorizes later
-commands matching the configured prefixes for that session. With
-`agentpolicy.WithCommandInputBoundApprovals()` and
-`agentpolicy.WithCommandSingleUseApprovals()`, approval applies only to the
-later matching JSON input and is consumed on first use.
-
-Commands that mutate generated files can also require verification before the
-final answer:
-
-```go
-policy := agentpolicy.RequireVerificationAfterCommands(
-    agentpolicy.MatchCommandPrefix("go", "generate"),
-)
-```
-
-After a matching command succeeds, finalization is denied until
-`workspace_verify` succeeds in the same session.
-
-For human or host approval flows, expose `approvaltools.NewTool` and combine it
-with `agentpolicy.RequireApprovalBeforeTools(...)`. The policy denies configured
-tools until the model calls `request_approval` for the tool name and the host
-approver grants it. Denials and approvals are normal tool results, so the model
-can either retry after approval or choose a safe fallback when approval is
-denied.
-
-The approver is the security boundary. `approvaltools.StaticApprover` is useful
-for tests and trusted automation, but production hosts should connect the tool to
-their own human review, policy service, or approval queue. By default approvals
-are reusable for the named tool until the session ends. For stricter workflows,
-use `agentpolicy.RequireApprovalBeforeToolsWithOptions` with
-`agentpolicy.WithSingleUseApprovals()` and/or
-`agentpolicy.WithInputBoundApprovals()`. Input-bound approval requires the model
-to include the proposed `tool_input` in its `request_approval` call; the policy
-then allows only a later tool call whose canonical input hash matches.
-Approval requests, grant/denial decisions, and consumed grants emit typed
-approval events plus `memax.approval.*` counters for audit and UI integration.
-Use the optional `summary` field on `request_approval` to provide host-facing
-review context such as title, risk, affected paths, change counts, and byte
-delta. `workspacetools.ApprovalSummaryFromPatchInput` derives that summary from
-a `workspace_apply_patch` input without reading workspace state.
-
-To bound an agent run across model calls, tool calls, tokens, turns, and wall
-time, set `Options.Budget`:
-
-```go
-events, err := memaxagent.Query(ctx, "Inspect the workspace.", memaxagent.Options{
-    Model: client,
-    Tools: registry,
-    Budget: budget.Policy{
-        MaxModelCalls: 8,
-        MaxToolCalls:  32,
-        MaxTotalTokens: 40_000,
-        MaxDuration:   2 * time.Minute,
-    },
-})
-```
-
-Budgets are checked at stable lifecycle boundaries: before a model call, after
-reported model usage, before a tool batch, and at turn start. Custom governors
-can implement `budget.Governor` for tenant-specific quotas or hosted cost
-systems.
-
-To provide an inspectable host plan without giving the model hidden state, set
-`Options.Planner`:
-
-```go
-events, err := memaxagent.Query(ctx, "Review the migration.", memaxagent.Options{
-    Model: client,
-    Tools: registry,
-    Planner: planner.Static(planner.Plan{
-        Goal:        "review migration safely",
-        Constraints: []string{"inspect files before judging risk"},
-        Steps: []planner.Step{{
-            ID:        "step-1",
-            Title:     "read migration file",
-            Status:    planner.StatusInProgress,
-            ToolHints: []string{"read_file"},
-            VerificationHints: []string{
-                "run workspace_verify test before final answer",
-            },
-        }},
-    }),
-})
-```
-
-Planner policies receive the active session ID, parent session ID, identity,
-messages, and recent user-query text. The default prompt builder injects the
-returned plan as the named `memax.plan` prompt part. Verification hints are
-advisory plan context; the host must still expose verification as a normal tool
-such as `workspace_verify`.
-
-Existing task state can drive the same planner context. `tasktools.Planner`
-adapts a task store into `planner.Policy`, so updates made through
-`upsert_task` are reflected in the next model request:
-
-```go
-tasks := tasktools.NewMemoryStore([]tasktools.Task{{
-    ID: "task-1", Title: "read migration", Status: tasktools.StatusInProgress,
-}})
-events, err := memaxagent.Query(ctx, "Continue the review.", memaxagent.Options{
-    Model: client,
-    Tools: tool.NewRegistry(tasktools.NewListTool(tasks), tasktools.NewUpsertTool(tasks)),
-    Planner: tasktools.Planner(tasks,
-        planner.WithTaskGoal("review migration safely"),
-        planner.WithTaskToolHints(tasktools.ListToolName, tasktools.UpsertToolName),
-        planner.WithTaskVerificationHints("run workspace_verify test before final answer"),
-    ),
-})
-```
-
-Use `toolkit/tasktools/sqlitestore` when the same task ledger should survive
-process restarts or be shared by multiple runs. It preserves the in-memory
-store's partial-update and generated-ID semantics while serializing writes
-through SQLite transactions. The eval suite covers week-ahead task-ledger
-resume through both the in-memory store and a freshly reopened SQLite store,
-plus proactive scheduled maintenance that lists persisted pending work before
-completing or blocking tasks.
-
-Verification can also feed task progress when the host opts in. Wrap a
-`verifytools.Verifier` with `tasktools.NewVerificationProgressVerifier` and ask
-the model to include `metadata.task_id` in the verification request. Passing
-checks mark the task completed by default; failing checks keep it in progress
-unless configured otherwise. The next planner turn reloads the task store and
-shows the updated status, notes, and evidence.
-
-To regression-test agent behavior without a live model, use `agenteval` with a
-scripted model and assertions:
-
-```go
-report := agenteval.Runner{}.Run(ctx, agenteval.Case{
-    Name:   "tool recovery",
-    Prompt: "read the file",
-    Options: memaxagent.Options{
-        Model: agenteval.NewScriptedModel(
-            []model.StreamEvent{{Kind: model.StreamToolUse, ToolUse: model.ToolUse{
-                ID: "tool-1", Name: "read", Input: json.RawMessage(`{"path":"README.md"}`),
-            }}},
-            []model.StreamEvent{{Kind: model.StreamText, Text: "done"}},
-        ),
-        Tools: registry,
-    },
-    Assertions: []agenteval.Assertion{
-        agenteval.ToolUsed("read"),
-        agenteval.FinalEquals("done"),
-    },
-})
-if err := report.Error(); err != nil {
-    return err
-}
-```
-
-The `agenteval/scenarios` package includes reusable deterministic cases for
-tool recovery, structured output repair, memory search/save, memory
-distillation candidates, session resume, context retry, subagent delegation,
-planner-guided tool use, planner/task-state updates, personal task-ledger
-continuity, provider usage mapping, and provider tool-use round trips. It also
-covers governance recovery for permission denials, hook denials, oversized tool
-results, budget stops, and deferred tool discovery:
-
-```go
-report := agenteval.Runner{}.Run(ctx, scenarios.All()...)
-```
-
-Cases that intentionally stop with an agent error can set `AllowError: true`
-and assert `Result.RunErr`, for example with `agenteval.RunErrorContains`.
-
-Next implementation work is tracked in [docs/roadmap.md](docs/roadmap.md).
-Server embedding guidance is available in [docs/server.md](docs/server.md).
+This project is licensed under the **Apache License 2.0**. See [LICENSE](./LICENSE).
