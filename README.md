@@ -131,6 +131,13 @@ cd memax-go-agent-sdk
 go test ./...
 ```
 
+## Real-world example
+
+A production-facing example built on top of this SDK is **[Memax Code](https://github.com/MemaxLabs/memax-code)**,
+the Memax coding-agent CLI. It uses the SDK as its runtime foundation while
+adding CLI ergonomics, session UX, rendering, local configuration, and
+product-focused defaults for coding workflows.
+
 ## Getting started
 
 There are two common ways to adopt the SDK:
