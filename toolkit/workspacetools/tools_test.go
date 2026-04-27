@@ -165,7 +165,7 @@ func TestAutoCheckpointApplyPatchToolCreatesCheckpointBeforeMutation(t *testing.
 		Name:  ApplyPatchToolName,
 		Input: json.RawMessage(`{"operations":[{"path":"README.md","old_content":"hello","new_content":"changed"}]}`),
 	})
-	if applied.Metadata[model.MetadataWorkspaceCheckpointID] != "checkpoint-1" || applied.Metadata["auto_checkpoint"] != true {
+	if applied.Metadata[model.MetadataWorkspaceCheckpointID] != "checkpoint-1" || applied.Metadata[model.MetadataWorkspaceAutoCheckpoint] != true {
 		t.Fatalf("metadata = %#v, want automatic checkpoint", applied.Metadata)
 	}
 	if !strings.Contains(applied.Content, "auto checkpoint: checkpoint-1") {
@@ -197,7 +197,7 @@ func TestAutoCheckpointUnifiedDiffApplyPatchToolCreatesCheckpointWithoutReviewer
 			"unified_diff": "--- a/README.md\n+++ b/README.md\n@@ -1,2 +1,2 @@\n hello\n-world\n+workspace"
 		}`),
 	})
-	if applied.Metadata[model.MetadataWorkspaceCheckpointID] != "checkpoint-1" || applied.Metadata["auto_checkpoint"] != true {
+	if applied.Metadata[model.MetadataWorkspaceCheckpointID] != "checkpoint-1" || applied.Metadata[model.MetadataWorkspaceAutoCheckpoint] != true {
 		t.Fatalf("metadata = %#v, want automatic checkpoint", applied.Metadata)
 	}
 }

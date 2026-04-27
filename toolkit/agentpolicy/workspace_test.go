@@ -187,9 +187,9 @@ func TestRollbackOnFailedVerificationRecordsAutoCheckpointedPatch(t *testing.T) 
 		SessionID: "session-1",
 		Use:       model.ToolUse{Name: workspacetools.ApplyPatchToolName},
 		Result: model.ToolResult{Metadata: map[string]any{
-			model.MetadataWorkspaceOperation:    "patch",
-			model.MetadataWorkspaceCheckpointID: "checkpoint-7",
-			"auto_checkpoint":                   true,
+			model.MetadataWorkspaceOperation:      "patch",
+			model.MetadataWorkspaceCheckpointID:   "checkpoint-7",
+			model.MetadataWorkspaceAutoCheckpoint: true,
 		}},
 	}); err != nil {
 		t.Fatalf("AfterToolUse returned error: %v", err)

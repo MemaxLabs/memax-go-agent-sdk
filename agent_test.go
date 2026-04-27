@@ -834,6 +834,61 @@ func TestQueryEmitsWorkspaceEventsAndMetrics(t *testing.T) {
 	}
 }
 
+func TestQueryEmitsWorkspaceCheckpointEventForAutoCheckpointedPatch(t *testing.T) {
+	store := workspace.NewMemoryStore(map[string]string{"README.md": "one"})
+	fake := &fakeModel{turns: [][]model.StreamEvent{
+		{{
+			Kind: model.StreamToolUse,
+			ToolUse: model.ToolUse{
+				ID:    "patch-1",
+				Name:  workspacetools.ApplyPatchToolName,
+				Input: json.RawMessage(`{"operations":[{"path":"README.md","old_content":"one","new_content":"two"}]}`),
+			},
+		}},
+		{{Kind: model.StreamText, Text: "done"}},
+	}}
+	meter := &recordingMeter{}
+	stream, err := Query(context.Background(), "patch README", Options{
+		Model: fake,
+		Tools: tool.NewRegistry(workspacetools.NewAutoCheckpointApplyPatchToolWithReview(store, nil)),
+		Meter: meter,
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+	var events []Event
+	for event := range stream {
+		if event.Kind == EventError {
+			t.Fatalf("unexpected error event: %v", event.Err)
+		}
+		events = append(events, event)
+	}
+	checkpointIndex := -1
+	patchIndex := -1
+	for i, event := range events {
+		switch event.Kind {
+		case EventWorkspaceCheckpoint:
+			checkpointIndex = i
+			if event.Workspace == nil || event.Workspace.Operation != "checkpoint" || event.Workspace.CheckpointID != "checkpoint-1" {
+				t.Fatalf("checkpoint event = %#v", event.Workspace)
+			}
+		case EventWorkspacePatch:
+			patchIndex = i
+			if event.Workspace == nil || event.Workspace.Operation != "patch" || event.Workspace.CheckpointID != "checkpoint-1" {
+				t.Fatalf("patch event = %#v", event.Workspace)
+			}
+		}
+	}
+	if checkpointIndex < 0 || patchIndex < 0 || checkpointIndex > patchIndex {
+		t.Fatalf("workspace event order checkpoint=%d patch=%d", checkpointIndex, patchIndex)
+	}
+	for _, counter := range []string{"memax.workspace.checkpoint", "memax.workspace.patch"} {
+		if !meter.hasCounter(counter) {
+			t.Fatalf("meter counters = %#v, missing %s", meter.counterNames(), counter)
+		}
+	}
+}
+
 func TestQueryEmitsVerificationEventsAndMetrics(t *testing.T) {
 	verifyTool := verifytools.NewTool(verifytools.Config{
 		Verifier: verifytools.VerifierFunc(func(_ context.Context, req verifytools.Request) (verifytools.Result, error) {

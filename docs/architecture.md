@@ -770,7 +770,10 @@ hook runner. They do not mutate the core agent loop or bypass tool permissions.
 hosts that want model-mediated checkpoint creation. The higher-level
 `stack/coding` defaults use a smoother contract: the patch tool creates a
 workspace checkpoint automatically immediately before a mutating patch and
-returns that checkpoint ID in patch metadata. Dry-run previews and denied patch
+returns that checkpoint ID in patch metadata. The event stream emits both a
+`workspace_checkpoint` event for the automatic checkpoint and a
+`workspace_patch` event for the mutation, so hosts keep the same observability
+surface as explicit checkpoint tool calls. Dry-run previews and denied patch
 reviews do not create checkpoints.
 
 `RecommendRollbackOnFailedVerification` records the latest successful explicit

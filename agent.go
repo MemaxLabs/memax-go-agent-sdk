@@ -1876,6 +1876,26 @@ func emitWorkspaceToolEvent(ctx context.Context, emit func(Event) bool, opts Opt
 	var meterName string
 	switch operation {
 	case "patch":
+		if metadatavalues.Bool(result.Metadata, model.MetadataWorkspaceAutoCheckpoint) && workspaceEvent.CheckpointID != "" {
+			checkpointEvent := newEvent(EventWorkspaceCheckpoint, sessionID, turn)
+			checkpointEvent.Workspace = &WorkspaceEvent{
+				Operation:    "checkpoint",
+				CheckpointID: workspaceEvent.CheckpointID,
+			}
+			if !emit(checkpointEvent) {
+				return false
+			}
+			opts.Meter.Add(ctx, "memax.workspace.checkpoint", 1,
+				telemetry.String("memax.session_id", sessionID),
+				telemetry.Int("memax.turn", turn),
+				telemetry.Int("memax.workspace.changes", 0),
+				telemetry.Int("memax.workspace.added", 0),
+				telemetry.Int("memax.workspace.modified", 0),
+				telemetry.Int("memax.workspace.deleted", 0),
+				telemetry.Int("memax.workspace.byte_delta", 0),
+				telemetry.String("memax.workspace.checkpoint_id", workspaceEvent.CheckpointID),
+			)
+		}
 		kind = EventWorkspacePatch
 		meterName = "memax.workspace.patch"
 	case "diff":

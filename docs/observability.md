@@ -33,6 +33,9 @@ configured:
    Command tool results can be followed by `EventCommandFinished`,
    `EventCommandStarted`, `EventCommandInput`, `EventCommandOutput`, or
    `EventCommandStopped`.
+   A coding-stack patch tool result that created an automatic checkpoint emits
+   `EventWorkspaceCheckpoint` before `EventWorkspacePatch`; both events carry
+   the same checkpoint ID.
 7. If the assistant returns a final answer, before-final hooks can deny
    finalization. A denial appends a user repair prompt and starts the next turn;
    no `EventResult` or terminal `EventError` is emitted for that denial unless

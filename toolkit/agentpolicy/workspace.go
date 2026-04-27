@@ -1130,7 +1130,7 @@ func (p *RollbackOnFailedVerification) AfterToolUse(ctx context.Context, input h
 		return nil
 	}
 	operation, _ := input.Result.Metadata[model.MetadataWorkspaceOperation].(string)
-	autoCheckpoint, _ := input.Result.Metadata["auto_checkpoint"].(bool)
+	autoCheckpoint, _ := input.Result.Metadata[model.MetadataWorkspaceAutoCheckpoint].(bool)
 	switch {
 	case input.Use.Name == workspacetools.CheckpointToolName && operation == "checkpoint":
 	case input.Use.Name == workspacetools.ApplyPatchToolName && operation == "patch" && autoCheckpoint:

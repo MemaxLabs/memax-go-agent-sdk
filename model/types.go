@@ -150,6 +150,9 @@ const (
 	// MetadataWorkspaceCheckpointID carries the checkpoint ID created, diffed,
 	// or restored by a workspace operation.
 	MetadataWorkspaceCheckpointID = "workspace_checkpoint_id"
+	// MetadataWorkspaceAutoCheckpoint marks a patch result whose checkpoint was
+	// created automatically by the patch tool immediately before mutation.
+	MetadataWorkspaceAutoCheckpoint = "auto_checkpoint"
 	// MetadataWorkspaceBaseID carries the checkpoint ID used as a diff base.
 	MetadataWorkspaceBaseID = "workspace_base_id"
 	// MetadataVerificationOperation identifies verification tool results that

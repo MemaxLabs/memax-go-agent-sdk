@@ -211,6 +211,7 @@ func CodingPresetSafeLocalRollbackRecovery() agenteval.Case {
 			agenteval.ToolUsed("workspace_apply_patch"),
 			agenteval.ToolUsed(verifytools.ToolName),
 			agenteval.ToolUsed("workspace_restore"),
+			agenteval.EventKindEmitted(memaxagent.EventWorkspaceCheckpoint),
 			agenteval.EventKindEmitted(memaxagent.EventWorkspacePatch),
 			agenteval.EventKindEmitted(memaxagent.EventVerification),
 			agenteval.EventKindEmitted(memaxagent.EventWorkspaceRestore),

@@ -814,7 +814,7 @@ func patchToolResult(result workspace.PatchResult) model.ToolResult {
 	}
 	if result.AutoCheckpointID != "" {
 		out.Metadata[model.MetadataWorkspaceCheckpointID] = result.AutoCheckpointID
-		out.Metadata["auto_checkpoint"] = true
+		out.Metadata[model.MetadataWorkspaceAutoCheckpoint] = true
 	}
 	return out
 }

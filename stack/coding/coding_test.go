@@ -146,7 +146,7 @@ func TestNewAssemblesCodingRuntime(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("approved patch should succeed: %s", result.Content)
 	}
-	if result.Metadata[model.MetadataWorkspaceCheckpointID] != "checkpoint-1" || result.Metadata["auto_checkpoint"] != true {
+	if result.Metadata[model.MetadataWorkspaceCheckpointID] != "checkpoint-1" || result.Metadata[model.MetadataWorkspaceAutoCheckpoint] != true {
 		t.Fatalf("patch metadata = %#v, want automatic checkpoint", result.Metadata)
 	}
 	content, err := ws.ReadFile(ctx, "README.md")
