@@ -98,7 +98,7 @@ func NormalizeToolUse(use ToolUse) ToolUse {
 // NormalizeToolInput returns a copy of input, defaulting empty or whitespace
 // input to {} so ToolUse values remain valid JSON transcript entries.
 func NormalizeToolInput(input json.RawMessage) json.RawMessage {
-	if len(strings.TrimSpace(string(input))) == 0 {
+	if len(strings.TrimSpace(string(input))) == 0 || !json.Valid(input) {
 		return json.RawMessage(`{}`)
 	}
 	return append(json.RawMessage(nil), input...)

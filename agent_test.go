@@ -239,6 +239,85 @@ func TestRepairToolUseAdjacencyHandlesPartialDuplicateAndNilResults(t *testing.T
 	}
 }
 
+func TestPrepareMessagesForModelNormalizesPersistedBlankHeavyAssistantText(t *testing.T) {
+	messages := []model.Message{
+		{
+			Role: model.RoleAssistant,
+			Content: []model.ContentBlock{
+				{Type: model.ContentProviderArtifact, ProviderArtifact: &model.ProviderArtifact{Provider: "anthropic", Type: "thinking", Data: json.RawMessage(`{"type":"thinking"}`)}},
+				{Type: model.ContentText, Text: "Let"},
+				{Type: model.ContentText, Text: "\n\n me"},
+				{Type: model.ContentText, Text: "\n\n verify"},
+				{Type: model.ContentText, Text: "\n\n the"},
+				{Type: model.ContentText, Text: "\n\n file"},
+				{Type: model.ContentText, Text: "\n\n."},
+			},
+		},
+	}
+
+	prepared := prepareMessagesForModel(messages)
+	if len(prepared) != 1 {
+		t.Fatalf("len(prepared) = %d, want 1", len(prepared))
+	}
+	got := prepared[0].PlainText()
+	if got != "Let me verify the file." {
+		t.Fatalf("PlainText = %q, want normalized sentence", got)
+	}
+	if len(prepared[0].Content) != 2 {
+		t.Fatalf("content len = %d, want artifact plus merged text: %#v", len(prepared[0].Content), prepared[0].Content)
+	}
+}
+
+func TestPrepareMessagesForModelPreservesPersistedMarkdownParagraphs(t *testing.T) {
+	messages := []model.Message{{
+		Role: model.RoleAssistant,
+		Content: []model.ContentBlock{
+			{Type: model.ContentText, Text: "# Heading"},
+			{Type: model.ContentText, Text: "\n\nBody paragraph"},
+			{Type: model.ContentText, Text: "\n\n- item"},
+			{Type: model.ContentText, Text: "\n\nNext paragraph"},
+		},
+	}}
+
+	prepared := prepareMessagesForModel(messages)
+	got := prepared[0].PlainText()
+	want := "# Heading\n\nBody paragraph\n\n- item\n\nNext paragraph"
+	if got != want {
+		t.Fatalf("PlainText = %q, want %q", got, want)
+	}
+}
+
+func TestPrepareMessagesForModelSynthesizesInterruptedToolResultBeforeResumePrompt(t *testing.T) {
+	messages := []model.Message{
+		{
+			Role: model.RoleAssistant,
+			Content: []model.ContentBlock{{
+				Type: model.ContentToolUse,
+				ToolUse: &model.ToolUse{
+					ID:    "call_1",
+					Name:  "run_command",
+					Input: json.RawMessage(`{"command":"sleep 10"}`),
+				},
+			}},
+		},
+		{
+			Role:    model.RoleUser,
+			Content: []model.ContentBlock{{Type: model.ContentText, Text: "continue"}},
+		},
+	}
+
+	prepared := prepareMessagesForModel(messages)
+	if len(prepared) != 3 {
+		t.Fatalf("len(prepared) = %d, want 3: %#v", len(prepared), prepared)
+	}
+	if prepared[1].Role != model.RoleTool || prepared[1].ToolResult == nil || prepared[1].ToolResult.ToolUseID != "call_1" || !prepared[1].ToolResult.IsError {
+		t.Fatalf("second prepared message = %#v, want synthetic interrupted tool result", prepared[1])
+	}
+	if prepared[2].Role != model.RoleUser || prepared[2].PlainText() != "continue" {
+		t.Fatalf("third prepared message = %#v, want resume prompt", prepared[2])
+	}
+}
+
 func messageHasToolUse(msg model.Message, id string) bool {
 	for _, block := range msg.Content {
 		if block.Type == model.ContentToolUse && block.ToolUse != nil && block.ToolUse.ID == id {

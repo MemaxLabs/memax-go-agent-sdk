@@ -67,6 +67,21 @@ func TestNormalizeToolUseDefaultsEmptyInputToObject(t *testing.T) {
 	}
 }
 
+func TestNormalizeToolUseDefaultsInvalidInputToObject(t *testing.T) {
+	for _, input := range []json.RawMessage{
+		json.RawMessage(`{"path"`),
+		json.RawMessage(`{"path":"README.md"`),
+	} {
+		got := NormalizeToolUse(ToolUse{ID: "tool-1", Name: "read", Input: input})
+		if string(got.Input) != `{}` {
+			t.Fatalf("NormalizeToolUse(%q).Input = %q, want {}", string(input), string(got.Input))
+		}
+		if _, err := json.Marshal(got); err != nil {
+			t.Fatalf("Marshal normalized tool use returned error: %v", err)
+		}
+	}
+}
+
 func TestNormalizeToolUseCopiesNonEmptyInput(t *testing.T) {
 	input := json.RawMessage(`{"path":"README.md"}`)
 	got := NormalizeToolUse(ToolUse{ID: "tool-1", Name: "read", Input: input})

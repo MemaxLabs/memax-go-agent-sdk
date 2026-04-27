@@ -616,6 +616,81 @@ func TestClientMergesConsecutiveToolResults(t *testing.T) {
 	}
 }
 
+func TestClientSynthesizesMissingToolResultBeforeFollowingUserText(t *testing.T) {
+	body := (&Client{Model: "test"}).requestBody(model.Request{
+		Messages: []model.Message{
+			{
+				Role: model.RoleAssistant,
+				Content: []model.ContentBlock{{
+					Type: model.ContentToolUse,
+					ToolUse: &model.ToolUse{
+						ID:    "toolu_1",
+						Name:  "run_command",
+						Input: json.RawMessage(`{"command":"sleep 10"}`),
+					},
+				}},
+			},
+			{
+				Role:    model.RoleUser,
+				Content: []model.ContentBlock{{Type: model.ContentText, Text: "continue"}},
+			},
+		},
+	})
+
+	if len(body.Messages) != 3 {
+		t.Fatalf("len(messages) = %d, want 3: %#v", len(body.Messages), body.Messages)
+	}
+	if body.Messages[1].Role != "user" || len(body.Messages[1].Content) != 1 || body.Messages[1].Content[0]["type"] != "tool_result" {
+		t.Fatalf("second provider message = %#v, want synthetic tool_result-only user message", body.Messages[1])
+	}
+	if body.Messages[1].Content[0]["tool_use_id"] != "toolu_1" || body.Messages[1].Content[0]["is_error"] != true {
+		t.Fatalf("synthetic tool result = %#v", body.Messages[1].Content[0])
+	}
+	if body.Messages[2].Role != "user" || body.Messages[2].Content[0]["text"] != "continue" {
+		t.Fatalf("third provider message = %#v, want following user text kept separate", body.Messages[2])
+	}
+}
+
+func TestClientKeepsToolResultMessageSeparateFromFollowingUserText(t *testing.T) {
+	body := (&Client{Model: "test"}).requestBody(model.Request{
+		Messages: []model.Message{
+			{
+				Role: model.RoleAssistant,
+				Content: []model.ContentBlock{{
+					Type: model.ContentToolUse,
+					ToolUse: &model.ToolUse{
+						ID:    "toolu_1",
+						Name:  "read_file",
+						Input: json.RawMessage(`{"path":"README.md"}`),
+					},
+				}},
+			},
+			{
+				Role: model.RoleTool,
+				ToolResult: &model.ToolResult{
+					ToolUseID: "toolu_1",
+					Name:      "read_file",
+					Content:   "contents",
+				},
+			},
+			{
+				Role:    model.RoleUser,
+				Content: []model.ContentBlock{{Type: model.ContentText, Text: "continue"}},
+			},
+		},
+	})
+
+	if len(body.Messages) != 3 {
+		t.Fatalf("len(messages) = %d, want 3: %#v", len(body.Messages), body.Messages)
+	}
+	if body.Messages[1].Role != "user" || len(body.Messages[1].Content) != 1 || body.Messages[1].Content[0]["type"] != "tool_result" {
+		t.Fatalf("second provider message = %#v, want tool_result-only user message", body.Messages[1])
+	}
+	if body.Messages[2].Role != "user" || body.Messages[2].Content[0]["type"] != "text" {
+		t.Fatalf("third provider message = %#v, want separate text user message", body.Messages[2])
+	}
+}
+
 func TestClientDoesNotSerializeMessageMetadata(t *testing.T) {
 	body := (&Client{Model: "test"}).requestBody(model.Request{
 		Messages: []model.Message{

@@ -399,7 +399,7 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 			}
 			messages := messageView.Messages
 			rawMessageCount := messageView.RawMessageCount
-			messages = repairToolUseAdjacency(messages)
+			messages = prepareMessagesForModel(messages)
 			durableTranscriptForDistillation := model.CloneMessages(messages)
 			if opts.Context != nil {
 				originalMessages := messages
@@ -420,8 +420,7 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 					shouldStop = true
 					return
 				}
-				messages = contextResult.Messages
-				messages = repairToolUseAdjacency(messages)
+				messages = prepareMessagesForModel(contextResult.Messages)
 				contextSpan.Set(telemetry.Int("memax.context.sent_messages", len(messages)))
 				contextSpan.End()
 				if !reflect.DeepEqual(messages, originalMessages) {
@@ -535,7 +534,7 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 				if opts.ContextRetry != nil && model.IsContextWindowExceeded(err) {
 					retryMessages, retryTools, retryPrompt, retryCompaction, retryErr := retryContextWindow(modelCtx, opts, &memories, &skills, sessionID, messages)
 					if retryErr == nil {
-						retryMessages = repairToolUseAdjacency(retryMessages)
+						retryMessages = prepareMessagesForModel(retryMessages)
 						if !reflect.DeepEqual(retryMessages, messages) {
 							if ok, applyErr := emitContextApplied(turnCtx, emit, opts, sessionID, turn, len(messages), len(retryMessages)); applyErr != nil {
 								err = applyErr
@@ -1475,6 +1474,60 @@ func applyContextPolicy(ctx context.Context, policy contextwindow.Policy, messag
 		return contextwindow.PolicyResult{}, err
 	}
 	return contextwindow.PolicyResult{Messages: out}, nil
+}
+
+func prepareMessagesForModel(messages []model.Message) []model.Message {
+	return repairToolUseAdjacency(normalizeAssistantTextMessages(messages))
+}
+
+func normalizeAssistantTextMessages(messages []model.Message) []model.Message {
+	if len(messages) == 0 {
+		return nil
+	}
+	out := make([]model.Message, 0, len(messages))
+	changed := false
+	for _, msg := range messages {
+		normalized := model.CloneMessage(msg)
+		if normalized.Role == model.RoleAssistant && len(normalized.Content) > 0 {
+			content, contentChanged := normalizeAssistantTextContent(normalized.Content)
+			normalized.Content = content
+			changed = changed || contentChanged
+		}
+		out = append(out, normalized)
+	}
+	if !changed {
+		return out
+	}
+	return out
+}
+
+func normalizeAssistantTextContent(blocks []model.ContentBlock) ([]model.ContentBlock, bool) {
+	out := make([]model.ContentBlock, 0, len(blocks))
+	var textStream assistantTextStreamNormalizer
+	changed := false
+	for _, block := range blocks {
+		if block.Type != model.ContentText {
+			textStream = assistantTextStreamNormalizer{}
+			out = append(out, block)
+			continue
+		}
+		text := textStream.push(block.Text)
+		if text == "" {
+			changed = true
+			continue
+		}
+		if text != block.Text {
+			changed = true
+		}
+		if len(out) > 0 && out[len(out)-1].Type == model.ContentText {
+			out[len(out)-1].Text += text
+			changed = true
+			continue
+		}
+		block.Text = text
+		out = append(out, block)
+	}
+	return out, changed
 }
 
 func repairToolUseAdjacency(messages []model.Message) []model.Message {
