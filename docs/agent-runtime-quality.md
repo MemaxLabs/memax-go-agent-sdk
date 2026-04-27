@@ -392,10 +392,11 @@ verification hints, scoped subagent plan handoff, opt-in progress updates from
 verification or subagent results, standard task-result metadata, and
 durable SQLite-backed task storage exist. Eval-backed personal task-ledger
 continuity across two runs exists. Initial
-hook-based agent policy presets exist for checkpoint-before-patch recovery and
-rollback guidance after failed verification, a verify-before-final gate for
-workspace mutations, and explicit host approval tools/policies for sensitive
-tool use.
+hook-based agent policy presets exist for low-level checkpoint-before-patch
+recovery and rollback guidance after failed verification, while the coding
+stack uses automatic pre-patch checkpoints for routine mutating patches. A
+verify-before-final gate for workspace mutations and explicit host approval
+tools/policies for sensitive tool use also exist.
 
 **Gap:** The SDK lacks explicit policies for when to plan, update, delegate,
 verify, ask the user, or stop.

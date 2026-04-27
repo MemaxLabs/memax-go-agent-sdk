@@ -93,14 +93,15 @@ system prompt.
 - Add structured output contracts. Initial `output.Contract`, `Options.Output`, prompt contract injection, JSON Schema validation, final-answer repair retry, and retry-exhaustion errors exist.
 - Add cost and token accounting. Initial provider-neutral `model.Usage`, stream usage events, `EventUsage`, final-result usage aggregation, token meter counters, and OpenAI/Anthropic usage mapping exist. Cost calculation remains future host/provider policy.
 - Add run budget governors. Initial `budget.Governor`, zero-value-disabled `budget.Policy`, `Options.Budget`, budget stop reason, and agent-loop enforcement exist for turn, model-call, tool-call, token, and elapsed-duration limits.
-- Add agent policy presets. Initial `toolkit/agentpolicy` hook preset exists
-  for checkpoint-before-patch recovery and model-mediated rollback guidance
-  after failed verification, plus bounded verify-before-final gating after
-  workspace mutations and explicit approval-before-tool gating with optional
-  single-use and input-bound grants. Command policy presets add command-prefix
-  allow/deny rules, exact-input approval for selected commands, and
-  verify-before-final gates after matching commands, without hard-coding policy
-  into the core loop.
+- Add agent policy presets. Initial `toolkit/agentpolicy` hook presets exist
+  for low-level checkpoint-before-patch recovery and model-mediated rollback
+  guidance after failed verification; the higher-level coding stack now uses
+  automatic pre-patch checkpoints for routine mutating patches. Bounded
+  verify-before-final gating after workspace mutations and explicit
+  approval-before-tool gating with optional single-use and input-bound grants
+  also exist. Command policy presets add command-prefix allow/deny rules,
+  exact-input approval for selected commands, and verify-before-final gates
+  after matching commands, without hard-coding policy into the core loop.
 - Migrate command execution ergonomics from exact argv to shell-string input.
   `commandtools.NewTool` now accepts model-facing shell command strings and
   records both the original command string and the exact executed argv in
@@ -115,7 +116,7 @@ system prompt.
   preserving durable transcript order. Eval coverage exists for safe overlap,
   mutating-tool ordering, permission-denial recovery, stream-failure cleanup,
   and cancellation.
-- Add autonomy eval harness. Initial `agenteval` runner, scripted model, result capture, expected-error assertions, reusable assertions, and `agenteval/scenarios` package exist for deterministic tool recovery, structured-output repair, memory search/save, memory distillation candidates, memory candidate handler persistence, session resume, context retry, subagent delegation, subagent scoped plan progress, planner-guided tool use, planner verification repair, planner/task progress from verification, composed planner/workspace/managed-command/verification repair loops including rollback-after-failed-verification with cursor-based command-output continuation, planner/task-state updates, progressive skill disclosure, httptest-backed provider usage mapping, provider tool-use round trips, permission/hook denial recovery, checkpoint-before-patch policy recovery, rollback-policy recovery, verify-before-final policy recovery, approval-policy recovery and denial fallback, command approval and command verify-before-final policy recovery, finalization-policy exhaustion, large-result storage recovery, budget-stop enforcement, and deferred tool discovery. Live evals remain future work.
+- Add autonomy eval harness. Initial `agenteval` runner, scripted model, result capture, expected-error assertions, reusable assertions, and `agenteval/scenarios` package exist for deterministic tool recovery, structured-output repair, memory search/save, memory distillation candidates, memory candidate handler persistence, session resume, context retry, subagent delegation, subagent scoped plan progress, planner-guided tool use, planner verification repair, planner/task progress from verification, composed planner/workspace/managed-command/verification repair loops including rollback-after-failed-verification with cursor-based command-output continuation, planner/task-state updates, progressive skill disclosure, httptest-backed provider usage mapping, provider tool-use round trips, permission/hook denial recovery, automatic pre-patch checkpointing, low-level checkpoint-before-patch policy recovery, rollback-policy recovery, verify-before-final policy recovery, approval-policy recovery and denial fallback, command approval and command verify-before-final policy recovery, finalization-policy exhaustion, large-result storage recovery, budget-stop enforcement, and deferred tool discovery. Live evals remain future work.
 - Add managed command sessions. Initial `toolkit/commandtools` session tools
   (`start_command`, `write_command_input`, `resize_command_terminal`,
   `read_command_output`, `wait_command_output`, `stop_command`,

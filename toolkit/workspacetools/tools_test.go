@@ -158,6 +158,82 @@ func TestUnifiedDiffApplyPatchToolAppliesDiff(t *testing.T) {
 	}
 }
 
+func TestAutoCheckpointApplyPatchToolCreatesCheckpointBeforeMutation(t *testing.T) {
+	store := workspace.NewMemoryStore(map[string]string{"README.md": "hello"})
+	applied := mustExecute(t, NewAutoCheckpointApplyPatchToolWithReview(store, nil), model.ToolUse{
+		ID:    "patch-1",
+		Name:  ApplyPatchToolName,
+		Input: json.RawMessage(`{"operations":[{"path":"README.md","old_content":"hello","new_content":"changed"}]}`),
+	})
+	if applied.Metadata[model.MetadataWorkspaceCheckpointID] != "checkpoint-1" || applied.Metadata["auto_checkpoint"] != true {
+		t.Fatalf("metadata = %#v, want automatic checkpoint", applied.Metadata)
+	}
+	if !strings.Contains(applied.Content, "auto checkpoint: checkpoint-1") {
+		t.Fatalf("content = %q, want checkpoint disclosure", applied.Content)
+	}
+
+	restored, err := store.Restore(context.Background(), "checkpoint-1")
+	if err != nil {
+		t.Fatalf("Restore() error = %v", err)
+	}
+	if restored.ID != "checkpoint-1" {
+		t.Fatalf("restored checkpoint = %q, want checkpoint-1", restored.ID)
+	}
+	content, err := store.ReadFile(context.Background(), "README.md")
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if content != "hello" {
+		t.Fatalf("content after restore = %q, want pre-patch snapshot", content)
+	}
+}
+
+func TestAutoCheckpointUnifiedDiffApplyPatchToolCreatesCheckpointWithoutReviewer(t *testing.T) {
+	store := workspace.NewMemoryStore(map[string]string{"README.md": "hello\nworld"})
+	applied := mustExecute(t, NewAutoCheckpointUnifiedDiffApplyPatchToolWithReview(store, nil), model.ToolUse{
+		ID:   "patch-1",
+		Name: ApplyPatchToolName,
+		Input: json.RawMessage(`{
+			"unified_diff": "--- a/README.md\n+++ b/README.md\n@@ -1,2 +1,2 @@\n hello\n-world\n+workspace"
+		}`),
+	})
+	if applied.Metadata[model.MetadataWorkspaceCheckpointID] != "checkpoint-1" || applied.Metadata["auto_checkpoint"] != true {
+		t.Fatalf("metadata = %#v, want automatic checkpoint", applied.Metadata)
+	}
+}
+
+func TestAutoCheckpointApplyPatchToolDoesNotCheckpointDryRunOrDeniedReview(t *testing.T) {
+	store := workspace.NewMemoryStore(map[string]string{"README.md": "hello"})
+	dryRun := mustExecute(t, NewAutoCheckpointApplyPatchToolWithReview(store, nil), model.ToolUse{
+		ID:    "patch-1",
+		Name:  ApplyPatchToolName,
+		Input: json.RawMessage(`{"dry_run":true,"operations":[{"path":"README.md","old_content":"hello","new_content":"changed"}]}`),
+	})
+	if dryRun.Metadata[model.MetadataWorkspaceCheckpointID] != nil {
+		t.Fatalf("dry-run metadata = %#v, want no checkpoint", dryRun.Metadata)
+	}
+
+	reviewer := PatchReviewerFunc(func(context.Context, PatchReviewRequest) (PatchReviewDecision, error) {
+		return PatchReviewDecision{Allow: false, Reason: "blocked"}, nil
+	})
+	if _, err := NewAutoCheckpointApplyPatchToolWithReview(store, reviewer).Execute(context.Background(), tool.Call{
+		Use: model.ToolUse{
+			ID:    "patch-2",
+			Name:  ApplyPatchToolName,
+			Input: json.RawMessage(`{"operations":[{"path":"README.md","old_content":"hello","new_content":"changed"}]}`),
+		},
+	}); err == nil {
+		t.Fatal("Execute() error = nil, want reviewer denial")
+	}
+	checkpoints, err := store.ListCheckpoints(context.Background())
+	if err != nil {
+		t.Fatalf("ListCheckpoints() error = %v", err)
+	}
+	if len(checkpoints) != 1 || checkpoints[0].ID != "checkpoint-0" {
+		t.Fatalf("checkpoints = %#v, want only initial checkpoint", checkpoints)
+	}
+}
+
 func TestUnifiedDiffApplyPatchToolSchemaRejectsOperations(t *testing.T) {
 	store := workspace.NewMemoryStore(map[string]string{"README.md": "hello"})
 	registry := tool.NewRegistry(NewUnifiedDiffApplyPatchTool(store))

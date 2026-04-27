@@ -32,9 +32,10 @@ func main() {
 }
 
 // runExample is a runnable walkthrough of a competitive coding-agent recovery
-// loop: observe a watcher, checkpoint before mutation, make a risky edit,
-// fail verification, follow rollback guidance, restore explicitly, repair,
-// resume command output by cursor, and only then complete the task.
+// loop: observe a watcher, rely on the stack's automatic pre-patch checkpoint,
+// make a risky edit, fail verification, follow rollback guidance, restore
+// explicitly, repair, resume command output by cursor, and only then complete
+// the task.
 func runExample(ctx context.Context, w io.Writer) error {
 	ws := workspace.NewMemoryStore(map[string]string{
 		"README.md": initialReadme,
@@ -43,7 +44,7 @@ func runExample(ctx context.Context, w io.Writer) error {
 		ID:     "task-1",
 		Title:  "Repair README status without changing owner",
 		Status: tasktools.StatusInProgress,
-		Notes:  "Use watch output, checkpoint before risky edits, rollback on failed verification, and verify before final answer.",
+		Notes:  "Use watch output, rely on automatic pre-patch checkpoints, rollback on failed verification, and verify before final answer.",
 	}})
 	exitOK := 0
 	// Later pages repeat prior chunks so after_seq filtering has to suppress
@@ -193,17 +194,11 @@ func (m *stackModel) Stream(context.Context, model.Request) (model.Stream, error
 	case 3:
 		return newStream(toolUse("tool-3", workspacetools.ApplyPatchToolName, patchInput(initialReadme, badReadme))), nil
 	case 4:
-		return newStream(toolUse("tool-4", workspacetools.CheckpointToolName, map[string]any{
-			"label": "before README repair",
-		})), nil
-	case 5:
-		return newStream(toolUse("tool-5", workspacetools.ApplyPatchToolName, patchInput(initialReadme, badReadme))), nil
-	case 6:
 		return newStream(toolUse("tool-6", commandtools.ReadOutputToolName, map[string]any{
 			"id":        "watch-1",
 			"after_seq": 1,
 		})), nil
-	case 7:
+	case 5:
 		return newStream(toolUse("tool-7", verifytools.ToolName, map[string]any{
 			"name":   "test",
 			"target": "README.md",
@@ -211,23 +206,23 @@ func (m *stackModel) Stream(context.Context, model.Request) (model.Stream, error
 				model.MetadataTaskID: "task-1",
 			},
 		})), nil
-	case 8:
+	case 6:
 		return newStream(toolUse("tool-8", workspacetools.RestoreToolName, map[string]any{
 			"id": "checkpoint-1",
 		})), nil
-	case 9:
+	case 7:
 		return newStream(toolUse("tool-9", workspacetools.ApplyPatchToolName, patchInput(initialReadme, goodReadme))), nil
-	case 10:
+	case 8:
 		return newStream(toolUse("tool-10", commandtools.ReadOutputToolName, map[string]any{
 			"id":        "watch-1",
 			"after_seq": 2,
 		})), nil
-	case 11:
+	case 9:
 		return newStream(toolUse("tool-11", commandtools.StopToolName, map[string]any{
 			"id":    "watch-1",
 			"force": true,
 		})), nil
-	case 12:
+	case 10:
 		return newStream(toolUse("tool-12", verifytools.ToolName, map[string]any{
 			"name":   "test",
 			"target": "README.md",

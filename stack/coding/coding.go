@@ -114,10 +114,10 @@ type Policies struct {
 
 // DefaultPolicies returns a practical default coding-governance preset.
 //
-// The default enables checkpoint-before-patch, rollback guidance on failed
-// verification, and verify-before-final. Approval-related policies remain off
-// until the host provides an approval tool and explicitly opts into those
-// gates. When approval policies are enabled, the default strictness is
+// The default enables automatic pre-patch checkpoints, rollback guidance on
+// failed verification, and verify-before-final. Approval-related policies
+// remain off until the host provides an approval tool and explicitly opts into
+// those gates. When approval policies are enabled, the default strictness is
 // single-use and input-bound.
 func DefaultPolicies() Policies {
 	return Policies{
@@ -216,7 +216,7 @@ func validateConfig(config Config) error {
 		return fmt.Errorf("coding stack: command session start input mode requires command session manager")
 	}
 	if policies.RequireCheckpointBeforePatch && config.Workspace == nil {
-		return fmt.Errorf("coding stack: checkpoint-before-patch requires workspace store")
+		return fmt.Errorf("coding stack: automatic pre-patch checkpoints require workspace store")
 	}
 	if policies.RequirePatchApproval {
 		if config.Workspace == nil {
@@ -272,12 +272,22 @@ func configureVerifier(config Config) (verifytools.Verifier, *agentpolicy.Rollba
 func registerTools(registry *tool.Registry, config Config, verifier verifytools.Verifier) error {
 	if config.Workspace != nil {
 		patchTool := workspacetools.NewApplyPatchToolWithReview(config.Workspace, config.PatchReviewer)
+		if config.Policies.RequireCheckpointBeforePatch {
+			patchTool = workspacetools.NewAutoCheckpointApplyPatchToolWithReview(config.Workspace, config.PatchReviewer)
+		}
 		if config.WorkspacePatchInputMode == WorkspacePatchInputUnifiedDiff {
 			unifiedStore, ok := any(config.Workspace).(workspacetools.UnifiedDiffPatchStore)
 			if !ok {
 				return fmt.Errorf("coding stack: unified-diff patch input mode requires workspace store with unified diff support")
 			}
 			patchTool = workspacetools.NewUnifiedDiffApplyPatchToolWithReview(unifiedStore, config.PatchReviewer)
+			if config.Policies.RequireCheckpointBeforePatch {
+				autoStore, ok := any(config.Workspace).(workspacetools.AutoCheckpointUnifiedDiffPatchStore)
+				if !ok {
+					return fmt.Errorf("coding stack: automatic pre-patch checkpoints require workspace store with checkpoint and unified diff support")
+				}
+				patchTool = workspacetools.NewAutoCheckpointUnifiedDiffApplyPatchToolWithReview(autoStore, config.PatchReviewer)
+			}
 		}
 		tools := []tool.Tool{
 			workspacetools.NewReadTool(config.Workspace),
@@ -339,9 +349,6 @@ func installHooks(opts *memaxagent.Options, config Config, rollbackPolicy *agent
 	var hookOptions []hook.Option
 	policies := config.Policies
 
-	if policies.RequireCheckpointBeforePatch {
-		hookOptions = append(hookOptions, agentpolicy.RequireCheckpointBeforePatch().Options()...)
-	}
 	if rollbackPolicy != nil {
 		hookOptions = append(hookOptions, rollbackPolicy.Options()...)
 	}

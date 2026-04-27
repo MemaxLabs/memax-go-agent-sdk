@@ -129,18 +129,6 @@ func TestNewAssemblesCodingRuntime(t *testing.T) {
 		}},
 	}
 	result := runTool(t, exec, workspacetools.ApplyPatchToolName, patch1)
-	if !result.IsError || !strings.Contains(result.Content, agentpolicy.CheckpointBeforePatchReason()) {
-		t.Fatalf("expected checkpoint denial, got error=%v content=%q", result.IsError, result.Content)
-	}
-
-	result = runTool(t, exec, workspacetools.CheckpointToolName, map[string]any{
-		"label": "before readme patch",
-	})
-	if result.IsError {
-		t.Fatalf("checkpoint should succeed: %s", result.Content)
-	}
-
-	result = runTool(t, exec, workspacetools.ApplyPatchToolName, patch1)
 	if !result.IsError || !strings.Contains(result.Content, agentpolicy.ApprovalBeforeToolReason(workspacetools.ApplyPatchToolName)) {
 		t.Fatalf("expected approval denial, got error=%v content=%q", result.IsError, result.Content)
 	}
@@ -158,12 +146,22 @@ func TestNewAssemblesCodingRuntime(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("approved patch should succeed: %s", result.Content)
 	}
+	if result.Metadata[model.MetadataWorkspaceCheckpointID] != "checkpoint-1" || result.Metadata["auto_checkpoint"] != true {
+		t.Fatalf("patch metadata = %#v, want automatic checkpoint", result.Metadata)
+	}
 	content, err := ws.ReadFile(ctx, "README.md")
 	if err != nil {
 		t.Fatalf("ReadFile() error = %v", err)
 	}
 	if content != "after\n" {
 		t.Fatalf("patched content = %q, want %q", content, "after\n")
+	}
+	checkpoints, err := ws.ListCheckpoints(ctx)
+	if err != nil {
+		t.Fatalf("ListCheckpoints() error = %v", err)
+	}
+	if len(checkpoints) != 2 || checkpoints[1].ID != "checkpoint-1" {
+		t.Fatalf("checkpoints = %#v, want initial plus automatic checkpoint", checkpoints)
 	}
 
 	patch2 := map[string]any{

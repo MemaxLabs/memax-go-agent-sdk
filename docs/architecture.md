@@ -766,15 +766,16 @@ metadata, not hidden runtime side effects.
 
 Policy presets live in `toolkit/agentpolicy` and install through the existing
 hook runner. They do not mutate the core agent loop or bypass tool permissions.
-`RequireCheckpointBeforePatch` is the first preset: it denies
-`workspace_apply_patch` until a successful `workspace_checkpoint` has been
-observed in the same session, while allowing dry-run patch previews. The denial
-is returned as a normal tool error so the model can recover by creating a
-checkpoint and retrying the patch.
+`RequireCheckpointBeforePatch` is available as a low-level hook policy for
+hosts that want model-mediated checkpoint creation. The higher-level
+`stack/coding` defaults use a smoother contract: the patch tool creates a
+workspace checkpoint automatically immediately before a mutating patch and
+returns that checkpoint ID in patch metadata. Dry-run previews and denied patch
+reviews do not create checkpoints.
 
-`RecommendRollbackOnFailedVerification` records the latest successful
-`workspace_checkpoint` per session through after-tool hooks and wraps a
-`verifytools.Verifier`. When verification fails, the wrapped verifier adds
+`RecommendRollbackOnFailedVerification` records the latest successful explicit
+or automatic workspace checkpoint per session through after-tool hooks and wraps
+a `verifytools.Verifier`. When verification fails, the wrapped verifier adds
 rollback metadata and a model-visible instruction to restore the checkpoint
 before continuing. It intentionally does not restore by itself: rollback is a
 normal `workspace_restore` tool call, so permissions, hooks, telemetry, and

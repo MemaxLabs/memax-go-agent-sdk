@@ -181,6 +181,32 @@ func TestRollbackOnFailedVerificationAddsGuidance(t *testing.T) {
 	}
 }
 
+func TestRollbackOnFailedVerificationRecordsAutoCheckpointedPatch(t *testing.T) {
+	policy := RecommendRollbackOnFailedVerification()
+	if err := policy.AfterToolUse(context.Background(), hook.AfterToolUseInput{
+		SessionID: "session-1",
+		Use:       model.ToolUse{Name: workspacetools.ApplyPatchToolName},
+		Result: model.ToolResult{Metadata: map[string]any{
+			model.MetadataWorkspaceOperation:    "patch",
+			model.MetadataWorkspaceCheckpointID: "checkpoint-7",
+			"auto_checkpoint":                   true,
+		}},
+	}); err != nil {
+		t.Fatalf("AfterToolUse returned error: %v", err)
+	}
+	verifier := policy.WrapVerifier(verifytools.VerifierFunc(func(context.Context, verifytools.Request) (verifytools.Result, error) {
+		return verifytools.Result{Name: "test", Passed: false, Output: "failed"}, nil
+	}))
+
+	result, err := verifier.Verify(context.Background(), verifytools.Request{SessionID: "session-1", Name: "test"})
+	if err != nil {
+		t.Fatalf("Verify returned error: %v", err)
+	}
+	if result.Metadata[MetadataRollbackCheckpointID] != "checkpoint-7" {
+		t.Fatalf("Metadata = %#v, want auto checkpoint ID", result.Metadata)
+	}
+}
+
 func TestRollbackOnFailedVerificationSkipsPassingResults(t *testing.T) {
 	policy := RecommendRollbackOnFailedVerification()
 	if err := policy.AfterToolUse(context.Background(), checkpointInput("session-1", "checkpoint-1")); err != nil {

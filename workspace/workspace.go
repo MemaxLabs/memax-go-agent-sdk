@@ -59,6 +59,9 @@ type PatchOptions struct {
 type PatchResult struct {
 	Changes []Change
 	DryRun  bool
+	// AutoCheckpointID is set by toolkit-level patch wrappers that create a
+	// restorable checkpoint immediately before applying a mutating patch.
+	AutoCheckpointID string
 }
 
 // Checkpoint is a restorable snapshot of workspace state.

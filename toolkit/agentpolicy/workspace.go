@@ -1114,19 +1114,27 @@ func (p *RollbackOnFailedVerification) WrapVerifier(verifier verifytools.Verifie
 	})
 }
 
-// AfterToolUse records successful workspace checkpoints.
+// AfterToolUse records successful workspace checkpoints. Auto-checkpointing
+// patch tools report the checkpoint ID on the patch result so rollback guidance
+// remains available without requiring the model to call workspace_checkpoint
+// explicitly before every edit.
 func (p *RollbackOnFailedVerification) AfterToolUse(ctx context.Context, input hook.AfterToolUseInput) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if input.Result.IsError || input.Use.Name != workspacetools.CheckpointToolName {
-		return nil
-	}
-	if operation, _ := input.Result.Metadata[model.MetadataWorkspaceOperation].(string); operation != "checkpoint" {
+	if input.Result.IsError {
 		return nil
 	}
 	checkpointID, _ := input.Result.Metadata[model.MetadataWorkspaceCheckpointID].(string)
 	if input.SessionID == "" || checkpointID == "" {
+		return nil
+	}
+	operation, _ := input.Result.Metadata[model.MetadataWorkspaceOperation].(string)
+	autoCheckpoint, _ := input.Result.Metadata["auto_checkpoint"].(bool)
+	switch {
+	case input.Use.Name == workspacetools.CheckpointToolName && operation == "checkpoint":
+	case input.Use.Name == workspacetools.ApplyPatchToolName && operation == "patch" && autoCheckpoint:
+	default:
 		return nil
 	}
 	p.mu.Lock()

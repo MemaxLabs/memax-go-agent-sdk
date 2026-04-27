@@ -24,7 +24,7 @@ to `RequirePatchApproval` and/or command approval policies, and provide an
 
 | Preset | Intended workflow | Policies enabled by default | Preset-specific posture | Example | Eval scenarios |
 | --- | --- | --- | --- | --- | --- |
-| `safe_local` | cautious local editing with explicit checkpointing and verification | `RequireCheckpointBeforePatch`, `RecommendRollbackOnFailedVerification`, `RequireVerificationBeforeFinal`, `SingleUseApprovals`, `InputBoundApprovals` | `MaxTurns=24`, `MaxToolConcurrency=4`, local-workspace guidance in the system prompt | [`examples/coding_safe_local_stack`](../examples/coding_safe_local_stack/main.go) | `coding_preset_safe_local`, `coding_preset_safe_local_rollback_recovery` |
+| `safe_local` | cautious local editing with automatic pre-patch checkpoints and verification | `RequireCheckpointBeforePatch`, `RecommendRollbackOnFailedVerification`, `RequireVerificationBeforeFinal`, `SingleUseApprovals`, `InputBoundApprovals` | `MaxTurns=24`, `MaxToolConcurrency=4`, local-workspace guidance in the system prompt | [`examples/coding_safe_local_stack`](../examples/coding_safe_local_stack/main.go) | `coding_preset_safe_local`, `coding_preset_safe_local_rollback_recovery` |
 | `ci_repair` | reproducible repair loops for build/test failures | `RequireCheckpointBeforePatch`, `RecommendRollbackOnFailedVerification`, `RequireVerificationBeforeFinal`, `SingleUseApprovals`, `InputBoundApprovals` | `MaxTurns=32`, `MaxToolConcurrency=6`, `DefaultTimeout=10m`, `MaxTimeout=30m`, CI repair guidance in the system prompt | [`examples/coding_stack`](../examples/coding_stack/main.go) | `coding_preset_ci_repair`, `coding_preset_ci_repair_approval_recovery` |
 | `interactive_dev` | long-lived sessions such as watchers, dev servers, and REPL-style tools | `RequireCheckpointBeforePatch`, `RecommendRollbackOnFailedVerification`, `RequireVerificationBeforeFinal`, `SingleUseApprovals`, `InputBoundApprovals` | `MaxTurns=40`, `MaxToolConcurrency=8`, managed-session guidance in the system prompt, session tool hints (`start_command`, `read_command_output`, `wait_command_output`, `write_command_input`, `stop_command`, `list_commands`, `resize_command_terminal`) when a session backend supports them, and explicit `resume_after_seq` cursor guidance for incremental output | [`examples/coding_wait_repair_stack`](../examples/coding_wait_repair_stack/main.go), [`examples/coding_rollback_repair_stack`](../examples/coding_rollback_repair_stack/main.go) | `coding_preset_interactive_dev`, `coding_preset_interactive_dev_wait_repair`, `coding_preset_interactive_dev_wait_cursor_repair`, `coding_preset_interactive_dev_session_cleanup`, `planner_workspace_command_rollback_repair_loop` |
 
@@ -65,8 +65,10 @@ for the runnable mapping example.
 
 Common sources of confusion:
 
-- A patch can still be denied under `safe_local` or `ci_repair` even when no
-  approval policy is enabled, because checkpoint-before-patch is on by default.
+- `RequireCheckpointBeforePatch` in `stack/coding` creates an automatic
+  checkpoint before mutating patches. Explicit `workspace_checkpoint` remains
+  available for model-chosen rollback points, but the model is not forced
+  through a checkpoint-denial retry before routine edits.
 - A final answer can still be rejected after a successful patch if verification
   has not cleared the preset's dirty state.
 - `interactive_dev` does not implicitly clean up sessions. The model is still

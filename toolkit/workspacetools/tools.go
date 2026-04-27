@@ -55,6 +55,20 @@ type UnifiedDiffPatchStore interface {
 	UnifiedDiffPatcher
 }
 
+// AutoCheckpointPatchStore is the capability set required by the auto-
+// checkpointing patch tool.
+type AutoCheckpointPatchStore interface {
+	Patcher
+	Checkpointer
+}
+
+// AutoCheckpointUnifiedDiffPatchStore is the capability set required by the
+// auto-checkpointing unified-diff-only patch tool.
+type AutoCheckpointUnifiedDiffPatchStore interface {
+	UnifiedDiffPatchStore
+	Checkpointer
+}
+
 // PatchReviewRequest is sent to a reviewer after a patch has been validated
 // and previewed but before mutation.
 type PatchReviewRequest struct {
@@ -212,6 +226,20 @@ func NewUnifiedDiffApplyPatchTool(store UnifiedDiffPatchStore) tool.Tool {
 	return NewUnifiedDiffApplyPatchToolWithReview(store, nil)
 }
 
+// NewAutoCheckpointApplyPatchToolWithReview returns a patch tool that creates
+// a workspace checkpoint immediately before mutating patch application. Dry-run
+// and reviewer-denied patches do not create checkpoints.
+func NewAutoCheckpointApplyPatchToolWithReview(store AutoCheckpointPatchStore, reviewer PatchReviewer) tool.Tool {
+	return newApplyPatchToolWithReview(store, reviewer, store)
+}
+
+// NewAutoCheckpointUnifiedDiffApplyPatchToolWithReview returns a
+// unified-diff-only patch tool that creates a workspace checkpoint immediately
+// before mutating patch application.
+func NewAutoCheckpointUnifiedDiffApplyPatchToolWithReview(store AutoCheckpointUnifiedDiffPatchStore, reviewer PatchReviewer) tool.Tool {
+	return newUnifiedDiffApplyPatchToolWithReview(store, reviewer, store)
+}
+
 // NewApplyPatchToolWithReview returns a destructive patch tool that validates
 // and previews the requested change, passes the summary to reviewer, and only
 // mutates the workspace when the reviewer allows it. Dry-run requests never
@@ -220,6 +248,10 @@ func NewUnifiedDiffApplyPatchTool(store UnifiedDiffPatchStore) tool.Tool {
 // external mutable state should treat review as advisory unless their adapter
 // performs preview, review, and apply inside one transaction or lease.
 func NewApplyPatchToolWithReview(store Patcher, reviewer PatchReviewer) tool.Tool {
+	return newApplyPatchToolWithReview(store, reviewer, nil)
+}
+
+func newApplyPatchToolWithReview(store Patcher, reviewer PatchReviewer, checkpointer Checkpointer) tool.Tool {
 	return tool.Definition{
 		ToolSpec: model.ToolSpec{
 			Name:           ApplyPatchToolName,
@@ -278,7 +310,7 @@ func NewApplyPatchToolWithReview(store Patcher, reviewer PatchReviewer) tool.Too
 			if err != nil {
 				return model.ToolResult{}, err
 			}
-			result, err := applyPatchInput(ctx, store, call.Use, input, reviewer)
+			result, err := applyPatchInput(ctx, store, call.Use, input, reviewer, checkpointer)
 			if err != nil {
 				return model.ToolResult{}, err
 			}
@@ -293,6 +325,10 @@ func NewApplyPatchToolWithReview(store Patcher, reviewer PatchReviewer) tool.Too
 // surrounding coding policies, approval summaries, and event handling stay the
 // same while hosts can choose the simpler patch input contract.
 func NewUnifiedDiffApplyPatchToolWithReview(store UnifiedDiffPatchStore, reviewer PatchReviewer) tool.Tool {
+	return newUnifiedDiffApplyPatchToolWithReview(store, reviewer, nil)
+}
+
+func newUnifiedDiffApplyPatchToolWithReview(store UnifiedDiffPatchStore, reviewer PatchReviewer, checkpointer Checkpointer) tool.Tool {
 	return tool.Definition{
 		ToolSpec: model.ToolSpec{
 			Name:           ApplyPatchToolName,
@@ -329,7 +365,7 @@ func NewUnifiedDiffApplyPatchToolWithReview(store UnifiedDiffPatchStore, reviewe
 			result, err := applyPatchInput(ctx, store, call.Use, patchInput{
 				UnifiedDiff: input.UnifiedDiff,
 				DryRun:      input.DryRun,
-			}, reviewer)
+			}, reviewer, checkpointer)
 			if err != nil {
 				return model.ToolResult{}, err
 			}
@@ -649,7 +685,7 @@ func maxInt(a, b int) int {
 	return b
 }
 
-func applyPatchInput(ctx context.Context, store Patcher, use model.ToolUse, input patchInput, reviewer PatchReviewer) (workspace.PatchResult, error) {
+func applyPatchInput(ctx context.Context, store Patcher, use model.ToolUse, input patchInput, reviewer PatchReviewer, checkpointer Checkpointer) (workspace.PatchResult, error) {
 	hasOperations := len(input.Operations) > 0
 	hasUnifiedDiff := strings.TrimSpace(input.UnifiedDiff) != ""
 	switch {
@@ -660,21 +696,29 @@ func applyPatchInput(ctx context.Context, store Patcher, use model.ToolUse, inpu
 		if !ok {
 			return workspace.PatchResult{}, fmt.Errorf("workspacetools: store does not support unified diff patches")
 		}
-		if input.DryRun || reviewer == nil {
+		if input.DryRun {
 			result, err := unified.ApplyUnifiedDiff(ctx, input.UnifiedDiff, workspace.PatchOptions{DryRun: input.DryRun})
 			if err != nil || reviewer == nil {
 				return result, err
 			}
 			return reviewPatch(ctx, reviewer, use, result, input.DryRun)
 		}
-		preview, err := unified.ApplyUnifiedDiff(ctx, input.UnifiedDiff, workspace.PatchOptions{DryRun: true})
+		if reviewer != nil {
+			preview, err := unified.ApplyUnifiedDiff(ctx, input.UnifiedDiff, workspace.PatchOptions{DryRun: true})
+			if err != nil {
+				return workspace.PatchResult{}, err
+			}
+			if _, err := reviewPatch(ctx, reviewer, use, preview, input.DryRun); err != nil {
+				return workspace.PatchResult{}, err
+			}
+		}
+		cp, err := autoCheckpoint(ctx, checkpointer, use)
 		if err != nil {
 			return workspace.PatchResult{}, err
 		}
-		if _, err := reviewPatch(ctx, reviewer, use, preview, input.DryRun); err != nil {
-			return workspace.PatchResult{}, err
-		}
-		return unified.ApplyUnifiedDiff(ctx, input.UnifiedDiff, workspace.PatchOptions{})
+		result, err := unified.ApplyUnifiedDiff(ctx, input.UnifiedDiff, workspace.PatchOptions{})
+		result.AutoCheckpointID = cp.ID
+		return result, err
 	default:
 		ops, err := patchOperations(input.Operations)
 		if err != nil {
@@ -704,8 +748,32 @@ func applyPatchInput(ctx context.Context, store Patcher, use model.ToolUse, inpu
 				return workspace.PatchResult{}, err
 			}
 		}
-		return store.ApplyPatch(ctx, ops)
+		cp, err := autoCheckpoint(ctx, checkpointer, use)
+		if err != nil {
+			return workspace.PatchResult{}, err
+		}
+		result, err := store.ApplyPatch(ctx, ops)
+		result.AutoCheckpointID = cp.ID
+		return result, err
 	}
+}
+
+func autoCheckpoint(ctx context.Context, checkpointer Checkpointer, use model.ToolUse) (workspace.Checkpoint, error) {
+	if checkpointer == nil {
+		return workspace.Checkpoint{}, nil
+	}
+	cp, err := checkpointer.Checkpoint(ctx, workspace.CheckpointOptions{
+		Label: "before " + use.Name,
+		Metadata: map[string]any{
+			"tool_use_id": use.ID,
+			"tool_name":   use.Name,
+			"automatic":   true,
+		},
+	})
+	if err != nil {
+		return workspace.Checkpoint{}, fmt.Errorf("workspacetools: create automatic checkpoint before patch: %w", err)
+	}
+	return cp, nil
 }
 
 func reviewPatch(ctx context.Context, reviewer PatchReviewer, use model.ToolUse, result workspace.PatchResult, dryRun bool) (workspace.PatchResult, error) {
@@ -731,7 +799,7 @@ func reviewPatch(ctx context.Context, reviewer PatchReviewer, use model.ToolUse,
 
 func patchToolResult(result workspace.PatchResult) model.ToolResult {
 	summary := workspace.SummarizeChanges(result.Changes)
-	return model.ToolResult{
+	out := model.ToolResult{
 		Content: formatPatchResult(result),
 		Metadata: map[string]any{
 			model.MetadataWorkspaceOperation: "patch",
@@ -744,12 +812,20 @@ func patchToolResult(result workspace.PatchResult) model.ToolResult {
 			"dry_run":                        result.DryRun,
 		},
 	}
+	if result.AutoCheckpointID != "" {
+		out.Metadata[model.MetadataWorkspaceCheckpointID] = result.AutoCheckpointID
+		out.Metadata["auto_checkpoint"] = true
+	}
+	return out
 }
 
 func formatPatchResult(result workspace.PatchResult) string {
 	content := formatChanges(result.Changes)
 	if result.DryRun {
 		return "dry run: " + content
+	}
+	if result.AutoCheckpointID != "" {
+		return "auto checkpoint: " + result.AutoCheckpointID + "\n" + content
 	}
 	return content
 }
