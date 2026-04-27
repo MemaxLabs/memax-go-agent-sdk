@@ -75,6 +75,114 @@ func TestQueryRunsToolAndContinuesToResult(t *testing.T) {
 	}
 }
 
+func TestQueryRepairsDanglingToolUseBeforeModelRequest(t *testing.T) {
+	ctx := context.Background()
+	store := session.NewMemoryStore()
+	sess, err := store.Create(ctx)
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if err := store.Append(ctx, sess.ID, model.Message{
+		Role: model.RoleAssistant,
+		Content: []model.ContentBlock{{
+			Type: model.ContentToolUse,
+			ToolUse: &model.ToolUse{
+				ID:    "tool-1",
+				Name:  "read",
+				Input: json.RawMessage(`{"path":"README.md"}`),
+			},
+		}},
+	}); err != nil {
+		t.Fatalf("append dangling tool use: %v", err)
+	}
+
+	client := &fakeModel{turns: [][]model.StreamEvent{{
+		{Kind: model.StreamText, Text: "recovered"},
+	}}}
+	events, err := Query(ctx, "continue", Options{
+		Model:     client,
+		Sessions:  store,
+		SessionID: sess.ID,
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+	if result, err := Drain(events); err != nil || result != "recovered" {
+		t.Fatalf("Drain = %q, %v; want recovered, nil", result, err)
+	}
+	if len(client.requests) != 1 {
+		t.Fatalf("len(requests) = %d, want 1", len(client.requests))
+	}
+	messages := client.requests[0].Messages
+	if len(messages) != 3 {
+		t.Fatalf("len(request messages) = %d, want 3: %#v", len(messages), messages)
+	}
+	if !messageHasToolUse(messages[0], "tool-1") {
+		t.Fatalf("first message = %#v, want dangling assistant tool use preserved", messages[0])
+	}
+	if messages[1].Role != model.RoleTool || messages[1].ToolResult == nil {
+		t.Fatalf("second message = %#v, want synthesized tool result", messages[1])
+	}
+	if got := messages[1].ToolResult; got.ToolUseID != "tool-1" || got.Name != "read" || !got.IsError || !strings.Contains(got.Content, "interrupted") {
+		t.Fatalf("synthesized tool result = %#v", got)
+	}
+	if messages[2].Role != model.RoleUser || messages[2].PlainText() != "continue" {
+		t.Fatalf("third message = %#v, want resumed user prompt", messages[2])
+	}
+}
+
+func TestRepairToolUseAdjacencyDropsOrphanToolResults(t *testing.T) {
+	messages := []model.Message{
+		{
+			Role: model.RoleTool,
+			ToolResult: &model.ToolResult{
+				ToolUseID: "orphan",
+				Name:      "read",
+				Content:   "stale",
+			},
+		},
+		{
+			Role: model.RoleAssistant,
+			Content: []model.ContentBlock{{
+				Type: model.ContentToolUse,
+				ToolUse: &model.ToolUse{
+					ID:    "tool-1",
+					Name:  "read",
+					Input: json.RawMessage(`{}`),
+				},
+			}},
+		},
+		{
+			Role: model.RoleTool,
+			ToolResult: &model.ToolResult{
+				ToolUseID: "wrong",
+				Name:      "read",
+				Content:   "wrong result",
+			},
+		},
+	}
+
+	repaired := repairToolUseAdjacency(messages)
+	if len(repaired) != 2 {
+		t.Fatalf("len(repaired) = %d, want 2: %#v", len(repaired), repaired)
+	}
+	if !messageHasToolUse(repaired[0], "tool-1") {
+		t.Fatalf("first repaired message = %#v, want assistant tool use", repaired[0])
+	}
+	if repaired[1].ToolResult == nil || repaired[1].ToolResult.ToolUseID != "tool-1" || !repaired[1].ToolResult.IsError {
+		t.Fatalf("second repaired message = %#v, want synthetic result for tool-1", repaired[1])
+	}
+}
+
+func messageHasToolUse(msg model.Message, id string) bool {
+	for _, block := range msg.Content {
+		if block.Type == model.ContentToolUse && block.ToolUse != nil && block.ToolUse.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
 func TestQueryPreservesWhitespaceOnlyAssistantTextDeltas(t *testing.T) {
 	events, err := Query(context.Background(), "summarize", Options{
 		Model: &fakeModel{turns: [][]model.StreamEvent{{
