@@ -156,6 +156,24 @@ func Query(ctx context.Context, prompt string, opts Options) (<-chan Event, erro
 	return events, nil
 }
 
+// EffectiveToolSpecs returns the model-facing tool specifications after the
+// agent applies runtime tool injection, such as progressive skill loading.
+// It returns the runtime superset and does not apply per-turn ToolSelector
+// filtering, which depends on the current conversation state.
+func EffectiveToolSpecs(opts Options) ([]model.ToolSpec, error) {
+	opts = opts.withDefaults()
+	registry := opts.Tools
+	if opts.shouldInjectSkillTools() {
+		skills := skillLoader{opts: opts}
+		var err error
+		registry, err = registryWithSkillTools(registry, opts, &skills)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return append([]model.ToolSpec(nil), registry.Specs()...), nil
+}
+
 // QueryAsync starts Query in a goroutine and reports startup failures as
 // EventError values instead of returning them synchronously.
 //
@@ -233,10 +251,14 @@ func validateTenantBoundary(ctx context.Context, opts Options, sessionID, parent
 	})
 }
 
+func (opts Options) shouldInjectSkillTools() bool {
+	return opts.SkillDisclosure == skillpkg.DisclosureProgressive && (opts.SkillSource != nil || len(opts.Skills) > 0)
+}
+
 func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Options, outputValidator output.Validator) {
 	memories := memoryLoader{opts: opts, sessionID: sessionID}
 	skills := skillLoader{opts: opts}
-	if opts.SkillDisclosure == skillpkg.DisclosureProgressive && (opts.SkillSource != nil || len(opts.Skills) > 0) {
+	if opts.shouldInjectSkillTools() {
 		registry, err := registryWithSkillTools(opts.Tools, opts, &skills)
 		if err != nil {
 			emitError(ctx, func(event Event) bool {

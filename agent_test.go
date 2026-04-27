@@ -483,6 +483,32 @@ func TestQueryProgressiveSkillDisclosureLoadsSkillThroughTool(t *testing.T) {
 	}
 }
 
+func TestEffectiveToolSpecsIncludesRuntimeSkillTools(t *testing.T) {
+	specs, err := EffectiveToolSpecs(Options{
+		Tools: tool.NewRegistry(),
+		SkillSource: skill.StaticSource{{
+			Name:    "review",
+			Content: "Review carefully.",
+		}},
+		SkillDisclosure: skill.DisclosureProgressive,
+	})
+	if err != nil {
+		t.Fatalf("EffectiveToolSpecs() error = %v", err)
+	}
+	var found bool
+	for _, spec := range specs {
+		if spec.Name == skill.LoadToolName {
+			found = true
+			if !spec.ReadOnly {
+				t.Fatalf("load_skill ReadOnly = false, want true")
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("EffectiveToolSpecs() did not include %s", skill.LoadToolName)
+	}
+}
+
 func TestQueryProgressiveSkillResourceLoadsThroughTool(t *testing.T) {
 	fake := &fakeModel{turns: [][]model.StreamEvent{
 		{
