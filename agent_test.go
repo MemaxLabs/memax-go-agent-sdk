@@ -119,6 +119,62 @@ func TestQueryPreservesWhitespaceOnlyAssistantTextDeltas(t *testing.T) {
 	}
 }
 
+func TestQueryNormalizesPathologicalBlankAssistantTextDeltas(t *testing.T) {
+	events, err := Query(context.Background(), "continue", Options{
+		Model: &fakeModel{turns: [][]model.StreamEvent{{
+			{Kind: model.StreamText, Text: "Now"},
+			{Kind: model.StreamText, Text: "\n\n\n\n\n\n\n\n"},
+			{Kind: model.StreamText, Text: " updating"},
+			{Kind: model.StreamText, Text: "\n\n\n\n\n\n\n\n"},
+			{Kind: model.StreamText, Text: " layout"},
+			{Kind: model.StreamText, Text: "\n\n\n\n\n\n\n\n"},
+			{Kind: model.StreamText, Text: ".\n\n"},
+			{Kind: model.StreamText, Text: "\n\n\n\n\n\n\n\n"},
+			{Kind: model.StreamText, Text: "ts"},
+			{Kind: model.StreamText, Text: "\n\n\n\n\n\n\n\n"},
+			{Kind: model.StreamText, Text: "x"},
+			{Kind: model.StreamText, Text: "\n\n\n\n\n\n\n\n"},
+			{Kind: model.StreamText, Text: " with"},
+			{Kind: model.StreamText, Text: "\n\n\n\n\n\n\n\n"},
+			{Kind: model.StreamText, Text: " Ge"},
+			{Kind: model.StreamText, Text: "\n\n\n\n\n\n\n\n"},
+			{Kind: model.StreamText, Text: "ist"},
+			{Kind: model.StreamText, Text: "\n\n\n\n\n\n\n\n"},
+			{Kind: model.StreamText, Text: " font"},
+			{Kind: model.StreamText, Text: "\n\n\n\n\n\n\n\n"},
+			{Kind: model.StreamText, Text: " loading"},
+			{Kind: model.StreamText, Text: "\n\n\n\n\n\n\n\n"},
+			{Kind: model.StreamText, Text: "."},
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+
+	var assistantChunks []string
+	var result string
+	for event := range events {
+		switch event.Kind {
+		case EventAssistant:
+			if event.Message != nil {
+				assistantChunks = append(assistantChunks, event.Message.PlainText())
+			}
+		case EventResult:
+			result = event.Result
+		case EventError:
+			t.Fatalf("query event error: %v", event.Err)
+		}
+	}
+
+	want := "Now updating layout.tsx with Geist font loading."
+	if got := strings.Join(assistantChunks, ""); got != want {
+		t.Fatalf("assistant chunks joined = %q, want %q", got, want)
+	}
+	if result != want {
+		t.Fatalf("result = %q, want %q", result, want)
+	}
+}
+
 func TestQueryStartsSafeToolBeforeAssistantStreamEnds(t *testing.T) {
 	started := make(chan struct{})
 	registry := tool.NewRegistry(tool.Definition{

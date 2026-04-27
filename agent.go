@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/budget"
 	"github.com/MemaxLabs/memax-go-agent-sdk/contextwindow"
@@ -2236,6 +2237,7 @@ func collectAssistant(
 	var uses []model.ToolUse
 	earlyResults := make(map[int]<-chan model.ToolResult)
 	var usage model.Usage
+	var textStream assistantTextStreamNormalizer
 
 	for {
 		event, err := stream.Recv()
@@ -2248,8 +2250,8 @@ func collectAssistant(
 
 		switch event.Kind {
 		case model.StreamText:
-			if event.Text != "" {
-				block := model.ContentBlock{Type: model.ContentText, Text: event.Text}
+			if text := textStream.push(event.Text); text != "" {
+				block := model.ContentBlock{Type: model.ContentText, Text: text}
 				blocks = append(blocks, block)
 				out := newEvent(EventAssistant, sessionID, turn)
 				out.Message = &model.Message{Role: model.RoleAssistant, Content: []model.ContentBlock{block}}
@@ -2317,6 +2319,112 @@ func collectAssistant(
 			}
 		}
 	}
+}
+
+type assistantTextStreamNormalizer struct {
+	pendingWhitespace string
+	lastRune          rune
+	emitted           bool
+}
+
+func (n *assistantTextStreamNormalizer) push(text string) string {
+	if text == "" {
+		return ""
+	}
+	leading, core, trailing := splitAssistantStreamText(text)
+	if core == "" {
+		n.pendingWhitespace += text
+		return ""
+	}
+	prefix := n.prefix(leading, core)
+	n.pendingWhitespace = trailing
+	n.remember(core)
+	return prefix + core
+}
+
+func (n *assistantTextStreamNormalizer) prefix(leading, core string) string {
+	whitespace := n.pendingWhitespace + leading
+	if whitespace == "" || !n.emitted {
+		return ""
+	}
+	newlines := strings.Count(whitespace, "\n")
+	if newlines <= 2 {
+		return whitespace
+	}
+	first := firstNonSpaceRune(core)
+	if first == 0 || assistantStreamStartsPunctuation(first) {
+		return ""
+	}
+	if assistantStreamHasHorizontalWhitespace(whitespace) {
+		return " "
+	}
+	if assistantStreamShouldJoin(n.lastRune, first) {
+		return ""
+	}
+	return "\n\n"
+}
+
+func (n *assistantTextStreamNormalizer) remember(text string) {
+	if r := lastNonSpaceRune(text); r != 0 {
+		n.lastRune = r
+		n.emitted = true
+	}
+}
+
+func splitAssistantStreamText(text string) (leading, core, trailing string) {
+	trimmedLeading := strings.TrimLeftFunc(text, unicode.IsSpace)
+	leading = text[:len(text)-len(trimmedLeading)]
+	core = strings.TrimRightFunc(trimmedLeading, unicode.IsSpace)
+	trailing = trimmedLeading[len(core):]
+	return leading, core, trailing
+}
+
+func firstNonSpaceRune(text string) rune {
+	for _, r := range text {
+		if !unicode.IsSpace(r) {
+			return r
+		}
+	}
+	return 0
+}
+
+func lastNonSpaceRune(text string) rune {
+	var last rune
+	for _, r := range text {
+		if !unicode.IsSpace(r) {
+			last = r
+		}
+	}
+	return last
+}
+
+func assistantStreamHasHorizontalWhitespace(text string) bool {
+	for _, r := range text {
+		if r != '\n' && r != '\r' && unicode.IsSpace(r) {
+			return true
+		}
+	}
+	return false
+}
+
+func assistantStreamStartsPunctuation(r rune) bool {
+	return strings.ContainsRune(".,;:!?)]}", r)
+}
+
+func assistantStreamShouldJoin(prev, next rune) bool {
+	if prev == 0 || next == 0 {
+		return false
+	}
+	if unicode.IsLetter(prev) || unicode.IsDigit(prev) {
+		return unicode.IsLetter(next) || unicode.IsDigit(next)
+	}
+	if strings.ContainsRune("./_-#", prev) && (unicode.IsLetter(next) || unicode.IsDigit(next)) {
+		if prev == '.' && unicode.IsUpper(next) {
+			return false
+		}
+		return true
+	}
+	return false
 }
 
 func hasUsage(usage model.Usage) bool {
