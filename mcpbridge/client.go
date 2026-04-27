@@ -118,17 +118,19 @@ func minimalProcessEnv(env []string) []string {
 	}
 	out := make([]string, 0, len(allowed))
 	for _, item := range env {
-		key, _, ok := strings.Cut(item, "=")
+		key, value, ok := strings.Cut(item, "=")
 		if !ok {
 			continue
 		}
 		if _, keep := allowed[key]; keep {
-			out = appendEnvOverride(out, key, strings.TrimPrefix(item, key+"="))
+			out = append(out, key+"="+value)
 		}
 	}
 	return out
 }
 
+// appendEnvOverride takes ownership of env's backing array and returns a copy
+// with any previous value for key replaced by key=value.
 func appendEnvOverride(env []string, key, value string) []string {
 	prefix := key + "="
 	out := env[:0]
@@ -532,6 +534,8 @@ func (m jsonrpcMessage) responseID() (int64, bool) {
 	if err := json.Unmarshal(m.ID, &id); err != nil {
 		return 0, false
 	}
+	// This client only emits positive request IDs. Treat id=0 as not ours so a
+	// malformed peer cannot complete an unrelated pending call.
 	if id == 0 {
 		return 0, false
 	}
