@@ -2323,6 +2323,8 @@ func collectAssistant(
 
 type assistantTextStreamNormalizer struct {
 	pendingWhitespace string
+	lastTokenFirst    rune
+	lastTokenLength   int
 	lastRune          rune
 	emitted           bool
 }
@@ -2358,7 +2360,7 @@ func (n *assistantTextStreamNormalizer) prefix(leading, core string) string {
 	if assistantStreamHasHorizontalWhitespace(whitespace) {
 		return " "
 	}
-	if assistantStreamShouldJoin(n.lastRune, first) {
+	if assistantStreamShouldJoin(n.lastRune, n.lastTokenFirst, n.lastTokenLength, core) {
 		return ""
 	}
 	return "\n\n"
@@ -2367,6 +2369,7 @@ func (n *assistantTextStreamNormalizer) prefix(leading, core string) string {
 func (n *assistantTextStreamNormalizer) remember(text string) {
 	if r := lastNonSpaceRune(text); r != 0 {
 		n.lastRune = r
+		n.lastTokenFirst, n.lastTokenLength = trailingToken(text)
 		n.emitted = true
 	}
 }
@@ -2398,6 +2401,39 @@ func lastNonSpaceRune(text string) rune {
 	return last
 }
 
+func leadingTokenRuneLength(text string) int {
+	count := 0
+	started := false
+	for _, r := range text {
+		if unicode.IsSpace(r) {
+			if started {
+				break
+			}
+			continue
+		}
+		started = true
+		count++
+	}
+	return count
+}
+
+func trailingToken(text string) (rune, int) {
+	var token []rune
+	for _, r := range text {
+		if unicode.IsSpace(r) {
+			if len(token) > 0 {
+				token = token[:0]
+			}
+			continue
+		}
+		token = append(token, r)
+	}
+	if len(token) == 0 {
+		return 0, 0
+	}
+	return token[0], len(token)
+}
+
 func assistantStreamHasHorizontalWhitespace(text string) bool {
 	for _, r := range text {
 		if r != '\n' && r != '\r' && unicode.IsSpace(r) {
@@ -2411,18 +2447,23 @@ func assistantStreamStartsPunctuation(r rune) bool {
 	return strings.ContainsRune(".,;:!?)]}", r)
 }
 
-func assistantStreamShouldJoin(prev, next rune) bool {
+func assistantStreamShouldJoin(prev, prevTokenFirst rune, prevTokenLength int, nextText string) bool {
+	next := firstNonSpaceRune(nextText)
 	if prev == 0 || next == 0 {
 		return false
-	}
-	if unicode.IsLetter(prev) || unicode.IsDigit(prev) {
-		return unicode.IsLetter(next) || unicode.IsDigit(next)
 	}
 	if strings.ContainsRune("./_-#", prev) && (unicode.IsLetter(next) || unicode.IsDigit(next)) {
 		if prev == '.' && unicode.IsUpper(next) {
 			return false
 		}
+		if prev == '.' && unicode.IsUpper(prevTokenFirst) && prevTokenLength > 3 {
+			return false
+		}
 		return true
+	}
+	if (unicode.IsLetter(prev) || unicode.IsDigit(prev)) && (unicode.IsLetter(next) || unicode.IsDigit(next)) {
+		nextTokenLength := leadingTokenRuneLength(nextText)
+		return prevTokenLength > 0 && nextTokenLength > 0 && (prevTokenLength <= 3 || nextTokenLength <= 3)
 	}
 	return false
 }

@@ -175,6 +175,46 @@ func TestQueryNormalizesPathologicalBlankAssistantTextDeltas(t *testing.T) {
 	}
 }
 
+func TestQueryDoesNotFuseLongWordsAcrossPathologicalBlankDeltas(t *testing.T) {
+	events, err := Query(context.Background(), "continue", Options{
+		Model: &fakeModel{turns: [][]model.StreamEvent{{
+			{Kind: model.StreamText, Text: "para1"},
+			{Kind: model.StreamText, Text: "\n\n\n"},
+			{Kind: model.StreamText, Text: "para2"},
+			{Kind: model.StreamText, Text: "\n\n\n"},
+			{Kind: model.StreamText, Text: "Hello."},
+			{Kind: model.StreamText, Text: "\n\n\n"},
+			{Kind: model.StreamText, Text: "ai"},
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+
+	var assistantChunks []string
+	var result string
+	for event := range events {
+		switch event.Kind {
+		case EventAssistant:
+			if event.Message != nil {
+				assistantChunks = append(assistantChunks, event.Message.PlainText())
+			}
+		case EventResult:
+			result = event.Result
+		case EventError:
+			t.Fatalf("query event error: %v", event.Err)
+		}
+	}
+
+	want := "para1\n\npara2\n\nHello.\n\nai"
+	if got := strings.Join(assistantChunks, ""); got != want {
+		t.Fatalf("assistant chunks joined = %q, want %q", got, want)
+	}
+	if result != want {
+		t.Fatalf("result = %q, want %q", result, want)
+	}
+}
+
 func TestQueryStartsSafeToolBeforeAssistantStreamEnds(t *testing.T) {
 	started := make(chan struct{})
 	registry := tool.NewRegistry(tool.Definition{
