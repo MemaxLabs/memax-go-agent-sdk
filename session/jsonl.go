@@ -29,10 +29,11 @@ func NewJSONLStore(dir string) *JSONLStore {
 }
 
 type transcriptEntry struct {
-	Type      string         `json:"type"`
-	Timestamp time.Time      `json:"timestamp"`
-	Session   *Session       `json:"session,omitempty"`
-	Message   *model.Message `json:"message,omitempty"`
+	Type       string                `json:"type"`
+	Timestamp  time.Time             `json:"timestamp"`
+	Session    *Session              `json:"session,omitempty"`
+	Message    *model.Message        `json:"message,omitempty"`
+	Compaction *CompactionCheckpoint `json:"compaction,omitempty"`
 }
 
 type transcriptIndexEntry struct {
@@ -131,13 +132,61 @@ func (s *JSONLStore) Append(_ context.Context, id string, msg model.Message) err
 }
 
 func (s *JSONLStore) Messages(ctx context.Context, id string) ([]model.Message, error) {
-	_, messages, err := s.readTranscript(ctx, id)
+	_, messages, _, err := s.readTranscript(ctx, id)
 	return messages, err
 }
 
 func (s *JSONLStore) Get(ctx context.Context, id string) (Session, error) {
-	session, _, err := s.readTranscript(ctx, id)
+	session, _, _, err := s.readTranscript(ctx, id)
 	return session, err
+}
+
+func (s *JSONLStore) MessageView(ctx context.Context, id string) (MessageView, error) {
+	_, messages, compaction, err := s.readTranscript(ctx, id)
+	if err != nil {
+		return MessageView{}, err
+	}
+	return messageView(messages, compaction)
+}
+
+func (s *JSONLStore) SaveCompaction(ctx context.Context, id string, checkpoint CompactionCheckpoint) error {
+	canonicalID, err := canonicalRequiredID(id)
+	if err != nil {
+		return err
+	}
+	path, err := s.path(canonicalID)
+	if err != nil {
+		return err
+	}
+	_, messages, _, err := s.readTranscript(ctx, canonicalID)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("unknown session: %s", canonicalID)
+		}
+		return err
+	}
+	if checkpoint.RawMessageCount > len(messages) {
+		return fmt.Errorf("compaction raw message count %d exceeds transcript length %d", checkpoint.RawMessageCount, len(messages))
+	}
+	checkpoint, err = normalizeCompactionCheckpoint(checkpoint)
+	if err != nil {
+		return err
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		return fmt.Errorf("open transcript for compaction append: %w", err)
+	}
+	defer file.Close()
+
+	entry := transcriptEntry{
+		Type:       "compaction",
+		Timestamp:  checkpoint.CreatedAt,
+		Compaction: &checkpoint,
+	}
+	if err := json.NewEncoder(file).Encode(entry); err != nil {
+		return fmt.Errorf("append compaction transcript entry: %w", err)
+	}
+	return nil
 }
 
 // Exists reports whether a transcript exists for id without reading the full
@@ -242,7 +291,7 @@ func (s *JSONLStore) Children(ctx context.Context, parentID string) ([]Session, 
 }
 
 func (s *JSONLStore) Fork(ctx context.Context, id string, opts ForkOptions) (Session, error) {
-	_, messages, err := s.readTranscript(ctx, id)
+	_, messages, _, err := s.readTranscript(ctx, id)
 	if err != nil {
 		return Session{}, err
 	}
@@ -266,18 +315,18 @@ func (s *JSONLStore) Fork(ctx context.Context, id string, opts ForkOptions) (Ses
 	return session, nil
 }
 
-func (s *JSONLStore) readTranscript(_ context.Context, id string) (Session, []model.Message, error) {
+func (s *JSONLStore) readTranscript(_ context.Context, id string) (Session, []model.Message, *CompactionCheckpoint, error) {
 	canonicalID, err := canonicalRequiredID(id)
 	if err != nil {
-		return Session{}, nil, err
+		return Session{}, nil, nil, err
 	}
 	path, err := s.path(id)
 	if err != nil {
-		return Session{}, nil, err
+		return Session{}, nil, nil, err
 	}
 	file, err := os.Open(path)
 	if err != nil {
-		return Session{}, nil, fmt.Errorf("open transcript: %w", err)
+		return Session{}, nil, nil, fmt.Errorf("open transcript: %w", err)
 	}
 	defer file.Close()
 
@@ -286,6 +335,7 @@ func (s *JSONLStore) readTranscript(_ context.Context, id string) (Session, []mo
 
 	session := Session{ID: canonicalID}
 	var messages []model.Message
+	var compaction *CompactionCheckpoint
 	line := 0
 	for scanner.Scan() {
 		line++
@@ -295,7 +345,7 @@ func (s *JSONLStore) readTranscript(_ context.Context, id string) (Session, []mo
 		}
 		var entry transcriptEntry
 		if err := json.Unmarshal(data, &entry); err != nil {
-			return Session{}, nil, fmt.Errorf("decode transcript line %d: %w", line, err)
+			return Session{}, nil, nil, fmt.Errorf("decode transcript line %d: %w", line, err)
 		}
 		if entry.Type == "session" && entry.Session != nil {
 			session = *entry.Session
@@ -304,15 +354,21 @@ func (s *JSONLStore) readTranscript(_ context.Context, id string) (Session, []mo
 			}
 			continue
 		}
+		if entry.Type == "compaction" && entry.Compaction != nil {
+			copied := *entry.Compaction
+			copied.Messages = model.CloneMessages(entry.Compaction.Messages)
+			compaction = &copied
+			continue
+		}
 		if entry.Type != "message" || entry.Message == nil {
 			continue
 		}
 		messages = append(messages, *entry.Message)
 	}
 	if err := scanner.Err(); err != nil {
-		return Session{}, nil, fmt.Errorf("scan transcript: %w", err)
+		return Session{}, nil, nil, fmt.Errorf("scan transcript: %w", err)
 	}
-	return session, messages, nil
+	return session, messages, compaction, nil
 }
 
 func (s *JSONLStore) path(id string) (string, error) {

@@ -363,7 +363,7 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 				return
 			}
 
-			messages, err := opts.Sessions.Messages(turnCtx, sessionID)
+			messageView, err := session.MessageViewForSession(turnCtx, opts.Sessions, sessionID)
 			if err != nil {
 				err = fmt.Errorf("load session messages: %w", err)
 				turnSpan.RecordError(err)
@@ -372,7 +372,9 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 				shouldStop = true
 				return
 			}
-			durableMessages := model.CloneMessages(messages)
+			messages := messageView.Messages
+			rawMessageCount := messageView.RawMessageCount
+			durableTranscriptForDistillation := model.CloneMessages(messages)
 			if opts.Context != nil {
 				originalMessages := messages
 				originalCount := len(messages)
@@ -412,6 +414,13 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 					if !emitContextCompacted(turnCtx, emit, opts, sessionID, turn, contextResult.Compaction) {
 						shouldStop = true
 						return
+					}
+					if saveErr := saveContextCompaction(turnCtx, opts.Sessions, sessionID, rawMessageCount, messages, contextResult.Compaction); saveErr != nil {
+						turnSpan.RecordError(fmt.Errorf("save context compaction: %w", saveErr))
+						opts.Meter.Add(turnCtx, "memax.context.compaction_checkpoint.errors", 1,
+							telemetry.String("memax.session_id", sessionID),
+							telemetry.Int("memax.turn", turn),
+						)
 					}
 				}
 			}
@@ -523,6 +532,15 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 								modelSpan.End()
 								shouldStop = true
 								return
+							}
+							if saveErr := saveContextCompaction(turnCtx, opts.Sessions, sessionID, rawMessageCount, messages, retryCompaction); saveErr != nil {
+								wrapped := fmt.Errorf("save context retry compaction: %w", saveErr)
+								modelSpan.RecordError(wrapped)
+								turnSpan.RecordError(wrapped)
+								opts.Meter.Add(modelCtx, "memax.context.compaction_checkpoint.errors", 1,
+									telemetry.String("memax.session_id", sessionID),
+									telemetry.Int("memax.turn", turn),
+								)
 							}
 						}
 						modelSpan.Set(telemetry.Int("memax.model.retry_tools", len(toolSpecs)))
@@ -660,7 +678,7 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 					shouldStop = true
 					return
 				}
-				durableMessages = append(durableMessages, model.CloneMessage(assistant))
+				durableTranscriptForDistillation = append(durableTranscriptForDistillation, model.CloneMessage(assistant))
 			}
 			if len(uses) == 0 {
 				cancelEarlyTools()
@@ -727,7 +745,7 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 					shouldStop = true
 					return
 				}
-				candidates, err := distillMemories(turnCtx, opts, sessionID, durableMessages, promptResult.Plan, result)
+				candidates, err := distillMemories(turnCtx, opts, sessionID, durableTranscriptForDistillation, promptResult.Plan, result)
 				if err != nil {
 					err = fmt.Errorf("distill memories: %w", err)
 					turnSpan.RecordError(err)
@@ -747,7 +765,7 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 						telemetry.String("memax.session_id", sessionID),
 						telemetry.Int("memax.turn", turn),
 					)
-					if err := handleMemoryCandidates(turnCtx, opts, sessionID, durableMessages, promptResult.Plan, result, candidates); err != nil {
+					if err := handleMemoryCandidates(turnCtx, opts, sessionID, durableTranscriptForDistillation, promptResult.Plan, result, candidates); err != nil {
 						err = fmt.Errorf("handle memory candidates: %w", err)
 						opts.Meter.Add(turnCtx, "memax.memory.candidate_handler.errors", 1,
 							telemetry.String("memax.session_id", sessionID),
@@ -1429,6 +1447,20 @@ func applyContextPolicy(ctx context.Context, policy contextwindow.Policy, messag
 		return contextwindow.PolicyResult{}, err
 	}
 	return contextwindow.PolicyResult{Messages: out}, nil
+}
+
+func saveContextCompaction(ctx context.Context, store session.Store, sessionID string, rawMessageCount int, messages []model.Message, record *contextwindow.CompactionRecord) error {
+	if record == nil {
+		return nil
+	}
+	return session.SaveCompaction(ctx, store, sessionID, session.CompactionCheckpoint{
+		RawMessageCount: rawMessageCount,
+		Messages:        messages,
+		Policy:          record.Policy,
+		Reason:          string(record.Reason),
+		SummaryHash:     record.SummaryHash,
+		SummaryPreview:  record.SummaryPreview,
+	})
 }
 
 func loadPlan(ctx context.Context, opts Options, sessionID string, messages []model.Message) (planner.Plan, error) {

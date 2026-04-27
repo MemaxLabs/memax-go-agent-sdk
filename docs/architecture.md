@@ -836,7 +836,9 @@ hooks, telemetry, and host control.
 
 ## Context Window
 
-Context-window policies transform session messages before each model request without mutating the durable session transcript. `RecentMessages` keeps a bounded suffix. `TokenBudget` keeps the newest messages under a caller-defined estimate budget. Both drop leading orphan tool-result messages after trimming.
+Context-window policies transform the model-visible message view before each model request. The raw session transcript remains append-only for audit and debugging, while stores that implement `session.StoreWithCompaction` persist a durable compaction checkpoint for the active view. Future model requests load that checkpoint plus raw messages appended after it, so long-running coding sessions do not re-summarize the same transcript prefix on every turn. Stores without compaction support still fall back to send-time projection.
+
+`RecentMessages` keeps a bounded suffix. `TokenBudget` keeps the newest messages under a caller-defined estimate budget. Both drop leading orphan tool-result messages after trimming.
 
 `SummarizingBudget` adds model-backed compaction behind the same `Policy` interface. It checks whether the full transcript fits, reserves part of the configured budget for a synthetic summary, asks a pluggable `Summarizer` to compact the older prefix, and prepends that summary to the newest structurally valid suffix. `ModelSummarizer` is the default model-client adapter; applications can provide their own summarizer for deterministic summaries, hosted summarization, cached summaries, or domain-specific compression.
 
@@ -848,6 +850,25 @@ surfaces that record as `EventContextCompacted` and records context compaction
 metrics. Summary messages carry SDK-owned metadata that session stores may
 persist for resume/debugging, while provider adapters intentionally omit that
 metadata from wire requests.
+
+The built-in memory, JSONL, and SQLite session stores persist compaction
+checkpoints. Their `Messages` methods continue to return the raw transcript;
+their `MessageView` methods return the active compacted view. This mirrors
+production coding-agent behavior: compaction is a conversation-state checkpoint,
+not a repeated hidden projection over the full transcript.
+
+The active view is the source for downstream turn-scoped subsystems such as
+planning and memory distillation. Raw transcripts remain available to hosts for
+audit and offline analysis, but the live agent loop should not silently
+re-expand old messages after a compaction checkpoint has become the
+conversation state. Persisting a checkpoint is best-effort: if a store cannot
+save it, the current turn continues using the compacted view and records
+telemetry via the `memax.context.compaction_checkpoint.errors` counter, while
+future turns may recompact from the raw transcript.
+
+Forked sessions intentionally do not inherit the parent session's active
+compaction checkpoint. A fork copies raw messages through the requested message
+boundary, then establishes its own compaction checkpoints after it diverges.
 
 `SummarizingBudget` marks its synthetic summary messages and replaces prior
 active SDK summaries on subsequent compactions. This keeps the model-visible

@@ -2444,6 +2444,255 @@ func TestQueryEmitsContextCompactedEvent(t *testing.T) {
 	}
 }
 
+func TestQueryUsesPersistedCompactionCheckpointOnNextRun(t *testing.T) {
+	store := session.NewMemoryStore()
+	sess, err := store.Create(context.Background())
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	if err := store.Append(context.Background(), sess.ID, model.Message{
+		Role:    model.RoleUser,
+		Content: []model.ContentBlock{{Type: model.ContentText, Text: strings.Repeat("old ", 20)}},
+	}); err != nil {
+		t.Fatalf("Append returned error: %v", err)
+	}
+	summarizeCalls := 0
+	policy := contextwindow.SummarizingBudget{
+		MaxTokens:        40,
+		MaxSummaryTokens: 12,
+		SummaryPrefix:    "S:",
+		Summarizer: contextwindow.SummarizerFunc(func(context.Context, []model.Message) (string, error) {
+			summarizeCalls++
+			return "summary", nil
+		}),
+	}
+	firstModel := &fakeModel{turns: [][]model.StreamEvent{{{Kind: model.StreamText, Text: "done"}}}}
+	events, err := Query(context.Background(), "recent", Options{
+		Model:     firstModel,
+		Sessions:  store,
+		SessionID: sess.ID,
+		Context:   policy,
+	})
+	if err != nil {
+		t.Fatalf("first Query returned error: %v", err)
+	}
+	for event := range events {
+		if event.Kind == EventError {
+			t.Fatalf("first query error: %v", event.Err)
+		}
+	}
+	if summarizeCalls != 1 {
+		t.Fatalf("summarizeCalls after first query = %d, want 1", summarizeCalls)
+	}
+
+	secondModel := &fakeModel{turns: [][]model.StreamEvent{{{Kind: model.StreamText, Text: "done again"}}}}
+	events, err = Query(context.Background(), "next", Options{
+		Model:     secondModel,
+		Sessions:  store,
+		SessionID: sess.ID,
+		Context:   policy,
+	})
+	if err != nil {
+		t.Fatalf("second Query returned error: %v", err)
+	}
+	for event := range events {
+		if event.Kind == EventError {
+			t.Fatalf("second query error: %v", event.Err)
+		}
+	}
+	if summarizeCalls != 1 {
+		t.Fatalf("summarizeCalls after second query = %d, want persisted checkpoint reuse", summarizeCalls)
+	}
+	if len(secondModel.requests) != 1 || len(secondModel.requests[0].Messages) == 0 {
+		t.Fatalf("second model request = %#v", secondModel.requests)
+	}
+	if !contextwindow.IsSummaryMessage(secondModel.requests[0].Messages[0]) {
+		t.Fatalf("second request first message = %#v, want persisted summary", secondModel.requests[0].Messages[0])
+	}
+	raw, err := store.Messages(context.Background(), sess.ID)
+	if err != nil {
+		t.Fatalf("Messages returned error: %v", err)
+	}
+	if len(raw) != 5 {
+		t.Fatalf("raw transcript len = %d, want original + two prompts + two assistant messages", len(raw))
+	}
+}
+
+func TestQueryContinuesWhenCompactionCheckpointSaveFails(t *testing.T) {
+	inner := session.NewMemoryStore()
+	store := &failingCompactionStore{
+		inner: inner,
+		err:   errors.New("checkpoint store unavailable"),
+	}
+	meter := &recordingMeter{}
+	sess, err := store.Create(context.Background())
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	if err := store.Append(context.Background(), sess.ID, model.Message{
+		Role:    model.RoleUser,
+		Content: []model.ContentBlock{{Type: model.ContentText, Text: strings.Repeat("old ", 20)}},
+	}); err != nil {
+		t.Fatalf("Append returned error: %v", err)
+	}
+
+	events, err := Query(context.Background(), "recent", Options{
+		Model:     &fakeModel{turns: [][]model.StreamEvent{{{Kind: model.StreamText, Text: "done"}}}},
+		Meter:     meter,
+		Sessions:  store,
+		SessionID: sess.ID,
+		Context: contextwindow.SummarizingBudget{
+			MaxTokens:        40,
+			MaxSummaryTokens: 12,
+			SummaryPrefix:    "S:",
+			Summarizer: contextwindow.SummarizerFunc(func(context.Context, []model.Message) (string, error) {
+				return "summary", nil
+			}),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+	var compacted bool
+	var result string
+	for event := range events {
+		switch event.Kind {
+		case EventContextCompacted:
+			compacted = true
+		case EventError:
+			t.Fatalf("query error: %v", event.Err)
+		case EventResult:
+			result = event.Result
+		}
+	}
+	if !compacted {
+		t.Fatal("missing context compacted event")
+	}
+	if result != "done" {
+		t.Fatalf("result = %q, want done despite checkpoint save failure", result)
+	}
+	raw, err := inner.Messages(context.Background(), sess.ID)
+	if err != nil {
+		t.Fatalf("Messages returned error: %v", err)
+	}
+	if len(raw) != 3 {
+		t.Fatalf("raw transcript len = %d, want old + prompt + assistant", len(raw))
+	}
+	if !meter.hasCounter("memax.context.compaction_checkpoint.errors") {
+		t.Fatalf("missing checkpoint error metric in %#v", meter.counterNames())
+	}
+}
+
+func TestQueryContinuesWhenRetryCompactionCheckpointSaveFails(t *testing.T) {
+	inner := session.NewMemoryStore()
+	store := &failingCompactionStore{
+		inner: inner,
+		err:   errors.New("checkpoint store unavailable"),
+	}
+	meter := &recordingMeter{}
+	retryModel := &contextRetryModel{
+		fake: &fakeModel{turns: [][]model.StreamEvent{{{Kind: model.StreamText, Text: "done"}}}},
+	}
+
+	events, err := Query(context.Background(), "start", Options{
+		Model:        retryModel,
+		Meter:        meter,
+		Sessions:     store,
+		ContextRetry: compactingContextPolicy{text: "retry compacted"},
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+	var compacted bool
+	var result string
+	for event := range events {
+		switch event.Kind {
+		case EventContextCompacted:
+			compacted = true
+		case EventError:
+			t.Fatalf("query error: %v", event.Err)
+		case EventResult:
+			result = event.Result
+		}
+	}
+	if !compacted {
+		t.Fatal("missing retry context compacted event")
+	}
+	if result != "done" {
+		t.Fatalf("result = %q, want done despite retry checkpoint save failure", result)
+	}
+	if !meter.hasCounter("memax.context.compaction_checkpoint.errors") {
+		t.Fatalf("missing checkpoint error metric in %#v", meter.counterNames())
+	}
+}
+
+func TestMemoryDistillerReceivesActiveCompactedView(t *testing.T) {
+	store := session.NewMemoryStore()
+	sess, err := store.Create(context.Background())
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	if err := store.Append(context.Background(), sess.ID, model.Message{
+		Role:    model.RoleUser,
+		Content: []model.ContentBlock{{Type: model.ContentText, Text: strings.Repeat("old raw detail ", 20)}},
+	}); err != nil {
+		t.Fatalf("Append returned error: %v", err)
+	}
+	policy := contextwindow.SummarizingBudget{
+		MaxTokens:        40,
+		MaxSummaryTokens: 12,
+		SummaryPrefix:    "S:",
+		Summarizer: contextwindow.SummarizerFunc(func(context.Context, []model.Message) (string, error) {
+			return "summary", nil
+		}),
+	}
+	events, err := Query(context.Background(), "recent", Options{
+		Model:     &fakeModel{turns: [][]model.StreamEvent{{{Kind: model.StreamText, Text: "done"}}}},
+		Sessions:  store,
+		SessionID: sess.ID,
+		Context:   policy,
+	})
+	if err != nil {
+		t.Fatalf("first Query returned error: %v", err)
+	}
+	for event := range events {
+		if event.Kind == EventError {
+			t.Fatalf("first query error: %v", event.Err)
+		}
+	}
+
+	var got memory.DistillRequest
+	events, err = Query(context.Background(), "next", Options{
+		Model:     &fakeModel{turns: [][]model.StreamEvent{{{Kind: model.StreamText, Text: "done again"}}}},
+		Sessions:  store,
+		SessionID: sess.ID,
+		Context:   policy,
+		MemoryDistiller: memory.DistillerFunc(func(_ context.Context, req memory.DistillRequest) ([]memory.Candidate, error) {
+			got = req
+			return nil, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("second Query returned error: %v", err)
+	}
+	for event := range events {
+		if event.Kind == EventError {
+			t.Fatalf("second query error: %v", event.Err)
+		}
+	}
+	if len(got.Messages) == 0 || !contextwindow.IsSummaryMessage(got.Messages[0]) {
+		t.Fatalf("distiller messages = %#v, want active compacted view beginning with summary", got.Messages)
+	}
+	if got.Messages[0].PlainText() != "S:summary" {
+		t.Fatalf("summary text = %q, want persisted summary", got.Messages[0].PlainText())
+	}
+	for _, msg := range got.Messages {
+		if strings.Contains(msg.PlainText(), "old raw detail") {
+			t.Fatalf("distiller messages = %#v, want compacted view without raw pre-checkpoint details", got.Messages)
+		}
+	}
+}
+
 func TestQueryRunsContextAppliedHook(t *testing.T) {
 	var got hook.ContextAppliedInput
 	hooks := hook.NewRunner(hook.WithContextApplied(func(_ context.Context, input hook.ContextAppliedInput) error {
@@ -2665,6 +2914,36 @@ func (p replaceContextPolicy) Apply(_ context.Context, messages []model.Message)
 	}, nil
 }
 
+type compactingContextPolicy struct {
+	text string
+}
+
+func (p compactingContextPolicy) Apply(ctx context.Context, messages []model.Message) ([]model.Message, error) {
+	result, err := p.ApplyWithResult(ctx, messages)
+	if err != nil {
+		return nil, err
+	}
+	return result.Messages, nil
+}
+
+func (p compactingContextPolicy) ApplyWithResult(_ context.Context, _ []model.Message) (contextwindow.PolicyResult, error) {
+	return contextwindow.PolicyResult{
+		Messages: []model.Message{{
+			Role:    model.RoleUser,
+			Content: []model.ContentBlock{{Type: model.ContentText, Text: p.text}},
+		}},
+		Compaction: &contextwindow.CompactionRecord{
+			Policy:             "test",
+			Reason:             contextwindow.CompactionReasonBudget,
+			OriginalMessages:   1,
+			SentMessages:       1,
+			SummarizedMessages: 1,
+			SummaryHash:        "test-hash",
+			SummaryPreview:     p.text,
+		},
+	}, nil
+}
+
 type blockingCreateStore struct {
 	inner   *session.MemoryStore
 	started chan struct{}
@@ -2676,6 +2955,11 @@ type countingMessageStore struct {
 	inner *session.MemoryStore
 	mu    sync.Mutex
 	calls int
+}
+
+type failingCompactionStore struct {
+	inner *session.MemoryStore
+	err   error
 }
 
 func (s *countingMessageStore) Create(ctx context.Context) (session.Session, error) {
@@ -2697,6 +2981,26 @@ func (s *countingMessageStore) messageCalls() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.calls
+}
+
+func (s *failingCompactionStore) Create(ctx context.Context) (session.Session, error) {
+	return s.inner.Create(ctx)
+}
+
+func (s *failingCompactionStore) Append(ctx context.Context, id string, msg model.Message) error {
+	return s.inner.Append(ctx, id, msg)
+}
+
+func (s *failingCompactionStore) Messages(ctx context.Context, id string) ([]model.Message, error) {
+	return s.inner.Messages(ctx, id)
+}
+
+func (s *failingCompactionStore) MessageView(ctx context.Context, id string) (session.MessageView, error) {
+	return s.inner.MessageView(ctx, id)
+}
+
+func (s *failingCompactionStore) SaveCompaction(context.Context, string, session.CompactionCheckpoint) error {
+	return s.err
 }
 
 func (s *blockingCreateStore) Create(ctx context.Context) (session.Session, error) {

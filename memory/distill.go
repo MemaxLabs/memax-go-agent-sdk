@@ -29,9 +29,10 @@ func (f DistillerFunc) Distill(ctx context.Context, req DistillRequest) ([]Candi
 	return f(ctx, req)
 }
 
-// DistillRequest gives distillers completed run context. Messages may contain
-// the full durable transcript for the run; model-backed distillers should apply
-// their own context budgeting or summarization before sending it to a model.
+// DistillRequest gives distillers completed run context. Messages contain the
+// agent's active model-visible transcript for the run, including any persisted
+// compaction checkpoint plus newer raw messages. Model-backed distillers may
+// still apply their own context budgeting before sending it to a model.
 type DistillRequest struct {
 	SessionID       string
 	ParentSessionID string

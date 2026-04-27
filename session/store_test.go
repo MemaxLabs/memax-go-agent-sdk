@@ -203,6 +203,90 @@ func TestMemoryStoreAssignsMessageID(t *testing.T) {
 	}
 }
 
+func TestMemoryStoreCompactionCheckpointPreservesRawTranscriptAndActiveView(t *testing.T) {
+	store := NewMemoryStore()
+	ctx := context.Background()
+	sess, err := store.Create(ctx)
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	for _, msg := range []model.Message{
+		{ID: "m1", Role: model.RoleUser, Content: []model.ContentBlock{{Type: model.ContentText, Text: "old"}}},
+		{ID: "m2", Role: model.RoleAssistant, Content: []model.ContentBlock{{Type: model.ContentText, Text: "middle"}}},
+	} {
+		if err := store.Append(ctx, sess.ID, msg); err != nil {
+			t.Fatalf("Append returned error: %v", err)
+		}
+	}
+	checkpoint := CompactionCheckpoint{
+		RawMessageCount: 2,
+		Messages: []model.Message{{
+			ID:      "summary",
+			Role:    model.RoleUser,
+			Content: []model.ContentBlock{{Type: model.ContentText, Text: "summary"}},
+		}},
+		Policy:      "test",
+		Reason:      "budget",
+		SummaryHash: "hash",
+	}
+	if err := store.SaveCompaction(ctx, sess.ID, checkpoint); err != nil {
+		t.Fatalf("SaveCompaction returned error: %v", err)
+	}
+	if err := store.Append(ctx, sess.ID, model.Message{
+		ID:      "m3",
+		Role:    model.RoleUser,
+		Content: []model.ContentBlock{{Type: model.ContentText, Text: "new"}},
+	}); err != nil {
+		t.Fatalf("Append returned error: %v", err)
+	}
+
+	raw, err := store.Messages(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("Messages returned error: %v", err)
+	}
+	if len(raw) != 3 || raw[0].PlainText() != "old" {
+		t.Fatalf("raw messages = %#v, want full transcript", raw)
+	}
+	view, err := store.MessageView(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("MessageView returned error: %v", err)
+	}
+	if len(view.Messages) != 2 || view.Messages[0].PlainText() != "summary" || view.Messages[1].PlainText() != "new" {
+		t.Fatalf("active messages = %#v, want summary plus new message", view.Messages)
+	}
+	if view.RawMessageCount != 3 {
+		t.Fatalf("RawMessageCount = %d, want current raw count 3", view.RawMessageCount)
+	}
+}
+
+func TestMemoryStoreSaveCompactionRejectsRawMessageCountOvershoot(t *testing.T) {
+	store := NewMemoryStore()
+	ctx := context.Background()
+	sess, err := store.Create(ctx)
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	if err := store.Append(ctx, sess.ID, model.Message{
+		ID:      "m1",
+		Role:    model.RoleUser,
+		Content: []model.ContentBlock{{Type: model.ContentText, Text: "old"}},
+	}); err != nil {
+		t.Fatalf("Append returned error: %v", err)
+	}
+
+	err = store.SaveCompaction(ctx, sess.ID, CompactionCheckpoint{
+		RawMessageCount: 2,
+		Messages: []model.Message{{
+			ID:      "summary",
+			Role:    model.RoleUser,
+			Content: []model.ContentBlock{{Type: model.ContentText, Text: "summary"}},
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "exceeds transcript length") {
+		t.Fatalf("SaveCompaction error = %v, want raw count overshoot", err)
+	}
+}
+
 func TestMemoryStoreReturnsDefensiveMessageCopies(t *testing.T) {
 	store := NewMemoryStore()
 	sess, err := store.Create(context.Background())

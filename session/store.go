@@ -78,8 +78,9 @@ type MemoryStore struct {
 }
 
 type memorySession struct {
-	session  Session
-	messages []model.Message
+	session    Session
+	messages   []model.Message
+	compaction *CompactionCheckpoint
 }
 
 func NewMemoryStore() *MemoryStore {
@@ -140,6 +141,46 @@ func (s *MemoryStore) Messages(_ context.Context, id string) ([]model.Message, e
 		return nil, fmt.Errorf("unknown session: %s", id)
 	}
 	return model.CloneMessages(record.messages), nil
+}
+
+func (s *MemoryStore) MessageView(_ context.Context, id string) (MessageView, error) {
+	id, err := canonicalRequiredID(id)
+	if err != nil {
+		return MessageView{}, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	record, ok := s.sessions[id]
+	if !ok {
+		return MessageView{}, fmt.Errorf("unknown session: %s", id)
+	}
+	return messageView(record.messages, record.compaction)
+}
+
+func (s *MemoryStore) SaveCompaction(_ context.Context, id string, checkpoint CompactionCheckpoint) error {
+	id, err := canonicalRequiredID(id)
+	if err != nil {
+		return err
+	}
+	checkpoint, err = normalizeCompactionCheckpoint(checkpoint)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record, ok := s.sessions[id]
+	if !ok {
+		return fmt.Errorf("unknown session: %s", id)
+	}
+	if checkpoint.RawMessageCount > len(record.messages) {
+		return fmt.Errorf("compaction raw message count %d exceeds transcript length %d", checkpoint.RawMessageCount, len(record.messages))
+	}
+	// MemoryStore keeps only the active checkpoint. Durable stores may retain
+	// checkpoint history, but the in-memory reference store only needs current
+	// model-visible state.
+	record.compaction = &checkpoint
+	s.sessions[id] = record
+	return nil
 }
 
 func (s *MemoryStore) Get(_ context.Context, id string) (Session, error) {
@@ -214,8 +255,9 @@ func (s *MemoryStore) Fork(_ context.Context, id string, opts ForkOptions) (Sess
 	}
 	session := Session{ID: newID, ParentID: parentID, CreatedAt: time.Now().UTC()}
 	s.sessions[newID] = memorySession{
-		session:  session,
-		messages: model.CloneMessages(messages),
+		session:    session,
+		messages:   model.CloneMessages(messages),
+		compaction: nil,
 	}
 	return session, nil
 }

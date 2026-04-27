@@ -121,6 +121,63 @@ func (s *Store) Messages(ctx context.Context, id string) ([]model.Message, error
 	return messages, nil
 }
 
+func (s *Store) MessageView(ctx context.Context, id string) (session.MessageView, error) {
+	messages, err := s.Messages(ctx, id)
+	if err != nil {
+		return session.MessageView{}, err
+	}
+	checkpoint, err := s.latestCompaction(ctx, id)
+	if err != nil {
+		return session.MessageView{}, err
+	}
+	return sessionMessageView(messages, checkpoint)
+}
+
+func (s *Store) SaveCompaction(ctx context.Context, id string, checkpoint session.CompactionCheckpoint) error {
+	id, err := canonicalRequiredID(id)
+	if err != nil {
+		return err
+	}
+	messageCount, err := s.messageCount(ctx, id)
+	if err != nil {
+		return err
+	}
+	if checkpoint.RawMessageCount > messageCount {
+		return fmt.Errorf("compaction raw message count %d exceeds transcript length %d", checkpoint.RawMessageCount, messageCount)
+	}
+	checkpoint, err = normalizeSessionCompaction(checkpoint)
+	if err != nil {
+		return err
+	}
+	data, err := json.Marshal(checkpoint)
+	if err != nil {
+		return fmt.Errorf("encode sqlite session compaction: %w", err)
+	}
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO memax_compactions (session_id, checkpoint_id, checkpoint_json, created_at)
+		VALUES (?, ?, ?, ?)
+	`, id, checkpoint.ID, string(data), checkpoint.CreatedAt.Format(time.RFC3339Nano))
+	if err != nil {
+		return fmt.Errorf("append sqlite session compaction: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) messageCount(ctx context.Context, id string) (int, error) {
+	id, err := canonicalRequiredID(id)
+	if err != nil {
+		return 0, err
+	}
+	if _, err := s.Get(ctx, id); err != nil {
+		return 0, err
+	}
+	var count int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM memax_messages WHERE session_id = ?`, id).Scan(&count); err != nil {
+		return 0, fmt.Errorf("count sqlite session messages: %w", err)
+	}
+	return count, nil
+}
+
 func (s *Store) Get(ctx context.Context, id string) (session.Session, error) {
 	id, err := canonicalRequiredID(id)
 	if err != nil {
@@ -267,6 +324,15 @@ func (s *Store) init(ctx context.Context) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS memax_messages_session_seq_idx
 			ON memax_messages (session_id, seq)`,
+		`CREATE TABLE IF NOT EXISTS memax_compactions (
+			seq INTEGER PRIMARY KEY AUTOINCREMENT,
+			session_id TEXT NOT NULL,
+			checkpoint_id TEXT NOT NULL,
+			checkpoint_json TEXT NOT NULL,
+			created_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS memax_compactions_session_seq_idx
+			ON memax_compactions (session_id, seq)`,
 	} {
 		if _, err := s.db.ExecContext(ctx, statement); err != nil {
 			return fmt.Errorf("initialize sqlite session store: %w", err)
@@ -317,4 +383,77 @@ func canonicalParentID(id string) (string, error) {
 		return "", fmt.Errorf("invalid parent session id: %q", id)
 	}
 	return canonical, nil
+}
+
+func (s *Store) latestCompaction(ctx context.Context, id string) (*session.CompactionCheckpoint, error) {
+	id, err := canonicalRequiredID(id)
+	if err != nil {
+		return nil, err
+	}
+	var data string
+	err = s.db.QueryRowContext(ctx, `
+		SELECT checkpoint_json
+		FROM memax_compactions
+		WHERE session_id = ?
+		ORDER BY seq DESC
+		LIMIT 1
+	`, id).Scan(&data)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get sqlite session compaction: %w", err)
+	}
+	var checkpoint session.CompactionCheckpoint
+	if err := json.Unmarshal([]byte(data), &checkpoint); err != nil {
+		return nil, fmt.Errorf("decode sqlite session compaction: %w", err)
+	}
+	return &checkpoint, nil
+}
+
+func sessionMessageView(raw []model.Message, checkpoint *session.CompactionCheckpoint) (session.MessageView, error) {
+	if checkpoint == nil {
+		return session.MessageView{
+			Messages:        model.CloneMessages(raw),
+			RawMessageCount: len(raw),
+		}, nil
+	}
+	if checkpoint.RawMessageCount > len(raw) {
+		return session.MessageView{}, fmt.Errorf("compaction raw message count %d exceeds transcript length %d", checkpoint.RawMessageCount, len(raw))
+	}
+	active := model.CloneMessages(checkpoint.Messages)
+	active = append(active, model.CloneMessages(raw[checkpoint.RawMessageCount:])...)
+	copied := *checkpoint
+	copied.Messages = model.CloneMessages(checkpoint.Messages)
+	return session.MessageView{
+		Messages:        active,
+		RawMessageCount: len(raw),
+		Compaction:      &copied,
+	}, nil
+}
+
+func normalizeSessionCompaction(checkpoint session.CompactionCheckpoint) (session.CompactionCheckpoint, error) {
+	if checkpoint.RawMessageCount < 0 {
+		return session.CompactionCheckpoint{}, fmt.Errorf("compaction raw message count must be non-negative")
+	}
+	if checkpoint.ID == "" {
+		id, err := newID()
+		if err != nil {
+			return session.CompactionCheckpoint{}, err
+		}
+		checkpoint.ID = id
+	} else {
+		canonical, ok := session.CanonicalID(checkpoint.ID)
+		if !ok {
+			return session.CompactionCheckpoint{}, fmt.Errorf("invalid compaction id: %q", checkpoint.ID)
+		}
+		checkpoint.ID = canonical
+	}
+	if checkpoint.CreatedAt.IsZero() {
+		checkpoint.CreatedAt = time.Now().UTC()
+	} else {
+		checkpoint.CreatedAt = checkpoint.CreatedAt.UTC()
+	}
+	checkpoint.Messages = model.CloneMessages(checkpoint.Messages)
+	return checkpoint, nil
 }
