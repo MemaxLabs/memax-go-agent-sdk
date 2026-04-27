@@ -159,7 +159,9 @@ func Query(ctx context.Context, prompt string, opts Options) (<-chan Event, erro
 // EffectiveToolSpecs returns the model-facing tool specifications after the
 // agent applies runtime tool injection, such as progressive skill loading.
 // It returns the runtime superset and does not apply per-turn ToolSelector
-// filtering, which depends on the current conversation state.
+// filtering, which depends on the current conversation state. It also does not
+// load SkillSource contents; it only exposes the runtime load_skill tool spec
+// when progressive skill loading is configured.
 func EffectiveToolSpecs(opts Options) ([]model.ToolSpec, error) {
 	opts = opts.withDefaults()
 	registry := opts.Tools

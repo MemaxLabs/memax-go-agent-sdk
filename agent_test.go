@@ -509,6 +509,20 @@ func TestEffectiveToolSpecsIncludesRuntimeSkillTools(t *testing.T) {
 	}
 }
 
+func TestEffectiveToolSpecsOmitsRuntimeSkillToolsWithoutSkillSource(t *testing.T) {
+	specs, err := EffectiveToolSpecs(Options{
+		Tools: tool.NewRegistry(),
+	})
+	if err != nil {
+		t.Fatalf("EffectiveToolSpecs() error = %v", err)
+	}
+	for _, spec := range specs {
+		if spec.Name == skill.LoadToolName {
+			t.Fatalf("EffectiveToolSpecs() included %s without SkillSource", skill.LoadToolName)
+		}
+	}
+}
+
 func TestQueryProgressiveSkillResourceLoadsThroughTool(t *testing.T) {
 	fake := &fakeModel{turns: [][]model.StreamEvent{
 		{
