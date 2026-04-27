@@ -249,6 +249,36 @@ func TestSummarizingBudgetUsesTriggerTokensForHysteresis(t *testing.T) {
 	}
 }
 
+func TestSummarizingBudgetIgnoresTriggerTokensAtOrBelowMaxTokens(t *testing.T) {
+	calls := 0
+	policy := SummarizingBudget{
+		MaxTokens:        10,
+		TriggerTokens:    5,
+		MaxSummaryTokens: 4,
+		SummaryPrefix:    "S:",
+		Estimate:         EstimateByRunes,
+		Summarizer: SummarizerFunc(func(_ context.Context, _ []model.Message) (string, error) {
+			calls++
+			return "s", nil
+		}),
+	}
+
+	result, err := policy.ApplyWithResult(context.Background(), []model.Message{
+		textMessage(model.RoleUser, "1234567890"),
+		textMessage(model.RoleAssistant, "abcde"),
+		textMessage(model.RoleUser, "recent"),
+	})
+	if err != nil {
+		t.Fatalf("ApplyWithResult returned error: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("summarizer calls = %d, want 1 when transcript exceeds MaxTokens", calls)
+	}
+	if result.Compaction == nil {
+		t.Fatal("compaction record is nil")
+	}
+}
+
 func TestSummarizingBudgetRejectsMissingSummarizer(t *testing.T) {
 	_, err := (SummarizingBudget{MaxTokens: 1}).Apply(context.Background(), []model.Message{
 		textMessage(model.RoleUser, "too large"),
