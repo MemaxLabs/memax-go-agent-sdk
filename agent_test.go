@@ -292,6 +292,48 @@ func TestQueryPreservesWhitespaceOnlyAssistantTextDeltas(t *testing.T) {
 	}
 }
 
+func TestQueryPreservesLegitimateParagraphBreaksAcrossDeltas(t *testing.T) {
+	events, err := Query(context.Background(), "summarize", Options{
+		Model: &fakeModel{turns: [][]model.StreamEvent{{
+			{Kind: model.StreamText, Text: "# Heading"},
+			{Kind: model.StreamText, Text: "\n\n"},
+			{Kind: model.StreamText, Text: "Body text here."},
+			{Kind: model.StreamText, Text: "\n\n"},
+			{Kind: model.StreamText, Text: "- bullet one"},
+			{Kind: model.StreamText, Text: "\n\n"},
+			{Kind: model.StreamText, Text: "the rest is prose"},
+			{Kind: model.StreamText, Text: "\n\n"},
+			{Kind: model.StreamText, Text: "/etc/hosts is a path."},
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+
+	var assistantChunks []string
+	var result string
+	for event := range events {
+		switch event.Kind {
+		case EventAssistant:
+			if event.Message != nil {
+				assistantChunks = append(assistantChunks, event.Message.PlainText())
+			}
+		case EventResult:
+			result = event.Result
+		case EventError:
+			t.Fatalf("query event error: %v", event.Err)
+		}
+	}
+
+	want := "# Heading\n\nBody text here.\n\n- bullet one\n\nthe rest is prose\n\n/etc/hosts is a path."
+	if got := strings.Join(assistantChunks, ""); got != want {
+		t.Fatalf("assistant chunks joined = %q, want %q", got, want)
+	}
+	if result != want {
+		t.Fatalf("result = %q, want %q", result, want)
+	}
+}
+
 func TestQueryNormalizesPathologicalBlankAssistantTextDeltas(t *testing.T) {
 	events, err := Query(context.Background(), "continue", Options{
 		Model: &fakeModel{turns: [][]model.StreamEvent{{
