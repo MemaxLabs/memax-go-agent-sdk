@@ -401,8 +401,8 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 			messages := messageView.Messages
 			rawMessageCount := messageView.RawMessageCount
 			messages = prepareMessagesForModel(messages)
-			// Distillation should summarize the same provider-safe replay view
-			// that the model sees, not raw interrupted transcript fragments.
+			// Distillation summarizes the pre-compaction provider-safe replay
+			// view, not raw interrupted transcript fragments.
 			durableTranscriptForDistillation := model.CloneMessages(messages)
 			if opts.Context != nil {
 				originalMessages := messages
@@ -1491,17 +1491,16 @@ func normalizeAssistantTextMessages(messages []model.Message) []model.Message {
 	for _, msg := range messages {
 		normalized := model.CloneMessage(msg)
 		if normalized.Role == model.RoleAssistant && len(normalized.Content) > 0 {
-			normalized.Content, _ = normalizeAssistantTextContent(normalized.Content)
+			normalized.Content = normalizeAssistantTextContent(normalized.Content)
 		}
 		out = append(out, normalized)
 	}
 	return out
 }
 
-func normalizeAssistantTextContent(blocks []model.ContentBlock) ([]model.ContentBlock, bool) {
+func normalizeAssistantTextContent(blocks []model.ContentBlock) []model.ContentBlock {
 	out := make([]model.ContentBlock, 0, len(blocks))
 	var textStream assistantTextStreamNormalizer
-	changed := false
 	for _, block := range blocks {
 		if block.Type != model.ContentText {
 			textStream = assistantTextStreamNormalizer{}
@@ -1510,21 +1509,16 @@ func normalizeAssistantTextContent(blocks []model.ContentBlock) ([]model.Content
 		}
 		text := textStream.push(block.Text)
 		if text == "" {
-			changed = true
 			continue
-		}
-		if text != block.Text {
-			changed = true
 		}
 		if len(out) > 0 && out[len(out)-1].Type == model.ContentText {
 			out[len(out)-1].Text += text
-			changed = true
 			continue
 		}
 		block.Text = text
 		out = append(out, block)
 	}
-	return out, changed
+	return out
 }
 
 func saveContextCompaction(ctx context.Context, store session.Store, sessionID string, rawMessageCount int, messages []model.Message, record *contextwindow.CompactionRecord) error {
@@ -2633,13 +2627,41 @@ func assistantStreamShouldJoinBlankSeparatedFragment(prev, prevTokenFirst rune, 
 	if !(unicode.IsLetter(prev) || unicode.IsDigit(prev)) || !(unicode.IsLetter(next) || unicode.IsDigit(next)) {
 		return false
 	}
+	if strings.EqualFold(leadingToken(nextText), "but") {
+		return false
+	}
 	if prevTokenLength == 1 && prev != 'I' && unicode.IsLower(next) {
 		return true
 	}
 	if prevTokenLength > 0 && prevTokenLength <= 3 && nextTokenLength > 0 && nextTokenLength <= 3 && unicode.IsLower(prevTokenFirst) && unicode.IsLower(next) {
 		return true
 	}
+	if unicode.IsLower(prevTokenFirst) && unicode.IsLower(next) && (prevTokenLength <= 2 || nextTokenLength <= 2 || assistantStreamCommonJoinWord(nextText)) {
+		return true
+	}
 	return false
+}
+
+func assistantStreamCommonJoinWord(text string) bool {
+	token := strings.ToLower(leadingToken(text))
+	switch token {
+	case "and", "for", "the":
+		return true
+	default:
+		return false
+	}
+}
+
+func leadingToken(text string) string {
+	text = strings.TrimLeftFunc(text, unicode.IsSpace)
+	var b strings.Builder
+	for _, r := range text {
+		if unicode.IsSpace(r) {
+			break
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 func hasUsage(usage model.Usage) bool {

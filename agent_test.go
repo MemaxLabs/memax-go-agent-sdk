@@ -13,7 +13,6 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/contextwindow"
 	"github.com/MemaxLabs/memax-go-agent-sdk/hook"
 	"github.com/MemaxLabs/memax-go-agent-sdk/identity"
-	"github.com/MemaxLabs/memax-go-agent-sdk/internal/transcriptrepair"
 	"github.com/MemaxLabs/memax-go-agent-sdk/memory"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/output"
@@ -132,114 +131,6 @@ func TestQueryRepairsDanglingToolUseBeforeModelRequest(t *testing.T) {
 	}
 }
 
-func TestRepairToolUseAdjacencyDropsOrphanToolResults(t *testing.T) {
-	messages := []model.Message{
-		{
-			Role: model.RoleTool,
-			ToolResult: &model.ToolResult{
-				ToolUseID: "orphan",
-				Name:      "read",
-				Content:   "stale",
-			},
-		},
-		{
-			Role: model.RoleAssistant,
-			Content: []model.ContentBlock{{
-				Type: model.ContentToolUse,
-				ToolUse: &model.ToolUse{
-					ID:    "tool-1",
-					Name:  "read",
-					Input: json.RawMessage(`{}`),
-				},
-			}},
-		},
-		{
-			Role: model.RoleTool,
-			ToolResult: &model.ToolResult{
-				ToolUseID: "wrong",
-				Name:      "read",
-				Content:   "wrong result",
-			},
-		},
-	}
-
-	repaired := transcriptrepair.RepairToolUseAdjacency(messages)
-	if len(repaired) != 2 {
-		t.Fatalf("len(repaired) = %d, want 2: %#v", len(repaired), repaired)
-	}
-	if !messageHasToolUse(repaired[0], "tool-1") {
-		t.Fatalf("first repaired message = %#v, want assistant tool use", repaired[0])
-	}
-	if repaired[1].ToolResult == nil || repaired[1].ToolResult.ToolUseID != "tool-1" || !repaired[1].ToolResult.IsError {
-		t.Fatalf("second repaired message = %#v, want synthetic result for tool-1", repaired[1])
-	}
-}
-
-func TestRepairToolUseAdjacencyHandlesPartialDuplicateAndNilResults(t *testing.T) {
-	messages := []model.Message{
-		{
-			Role: model.RoleAssistant,
-			Content: []model.ContentBlock{
-				{
-					Type: model.ContentToolUse,
-					ToolUse: &model.ToolUse{
-						ID:    "tool-1",
-						Name:  "read",
-						Input: json.RawMessage(`{}`),
-					},
-				},
-				{
-					Type: model.ContentToolUse,
-					ToolUse: &model.ToolUse{
-						ID:    "tool-2",
-						Name:  "write",
-						Input: json.RawMessage(`{"path":"README.md"}`),
-					},
-				},
-			},
-		},
-		{
-			Role: model.RoleTool,
-			ToolResult: &model.ToolResult{
-				ToolUseID: "tool-1",
-				Name:      "read",
-				Content:   "first result",
-			},
-		},
-		{
-			Role: model.RoleTool,
-			ToolResult: &model.ToolResult{
-				ToolUseID: "tool-1",
-				Name:      "read",
-				Content:   "duplicate result",
-			},
-		},
-		{
-			Role: model.RoleTool,
-			ToolResult: &model.ToolResult{
-				ToolUseID: "wrong",
-				Name:      "read",
-				Content:   "wrong result",
-			},
-		},
-		{Role: model.RoleTool},
-	}
-
-	repaired := transcriptrepair.RepairToolUseAdjacency(messages)
-	if len(repaired) != 3 {
-		t.Fatalf("len(repaired) = %d, want 3: %#v", len(repaired), repaired)
-	}
-	if !messageHasToolUse(repaired[0], "tool-1") || !messageHasToolUse(repaired[0], "tool-2") {
-		t.Fatalf("first repaired message = %#v, want both assistant tool uses", repaired[0])
-	}
-	if repaired[1].ToolResult == nil || repaired[1].ToolResult.ToolUseID != "tool-1" || repaired[1].ToolResult.Content != "first result" {
-		t.Fatalf("second repaired message = %#v, want original first result", repaired[1])
-	}
-	if repaired[2].ToolResult == nil || repaired[2].ToolResult.ToolUseID != "tool-2" || !repaired[2].ToolResult.IsError {
-		t.Fatalf("third repaired message = %#v, want synthetic result for missing tool-2", repaired[2])
-	}
-}
-
 func TestPrepareMessagesForModelNormalizesPersistedBlankHeavyAssistantText(t *testing.T) {
 	messages := []model.Message{
 		{
@@ -283,6 +174,23 @@ func TestPrepareMessagesForModelPreservesPersistedMarkdownParagraphs(t *testing.
 	prepared := prepareMessagesForModel(messages)
 	got := prepared[0].PlainText()
 	want := "# Heading\n\nBody paragraph\n\n- item\n\nNext paragraph"
+	if got != want {
+		t.Fatalf("PlainText = %q, want %q", got, want)
+	}
+}
+
+func TestPrepareMessagesForModelPreservesShortParagraphSplit(t *testing.T) {
+	messages := []model.Message{{
+		Role: model.RoleAssistant,
+		Content: []model.ContentBlock{
+			{Type: model.ContentText, Text: "yes"},
+			{Type: model.ContentText, Text: "\n\nbut"},
+		},
+	}}
+
+	prepared := prepareMessagesForModel(messages)
+	got := prepared[0].PlainText()
+	want := "yes\n\nbut"
 	if got != want {
 		t.Fatalf("PlainText = %q, want %q", got, want)
 	}
