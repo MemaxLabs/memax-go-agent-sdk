@@ -379,7 +379,106 @@ func TestQueryDoesNotFuseLongWordsAcrossPathologicalBlankDeltas(t *testing.T) {
 		}
 	}
 
-	want := "para1\n\npara2\n\nHello.\n\nai"
+	want := "para1 para2 Hello. ai"
+	if got := strings.Join(assistantChunks, ""); got != want {
+		t.Fatalf("assistant chunks joined = %q, want %q", got, want)
+	}
+	if result != want {
+		t.Fatalf("result = %q, want %q", result, want)
+	}
+}
+
+func TestQueryNormalizesDeepSeekAnthropicBlankAssistantTextDeltas(t *testing.T) {
+	events, err := Query(context.Background(), "continue", Options{
+		Model: &fakeModel{turns: [][]model.StreamEvent{{
+			{Kind: model.StreamText, Text: "All"},
+			{Kind: model.StreamText, Text: "\n\n changes"},
+			{Kind: model.StreamText, Text: "\n\n verified"},
+			{Kind: model.StreamText, Text: "\n\n."},
+			{Kind: model.StreamText, Text: "\n\n Let"},
+			{Kind: model.StreamText, Text: "\n\n me"},
+			{Kind: model.StreamText, Text: "\n\n confirm"},
+			{Kind: model.StreamText, Text: "\n\n the"},
+			{Kind: model.StreamText, Text: "\n\n workspace"},
+			{Kind: model.StreamText, Text: "\n\n diff"},
+			{Kind: model.StreamText, Text: "\n\n."},
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+
+	var assistantChunks []string
+	var result string
+	for event := range events {
+		switch event.Kind {
+		case EventAssistant:
+			if event.Message != nil {
+				assistantChunks = append(assistantChunks, event.Message.PlainText())
+			}
+		case EventResult:
+			result = event.Result
+		case EventError:
+			t.Fatalf("query event error: %v", event.Err)
+		}
+	}
+
+	want := "All changes verified. Let me confirm the workspace diff."
+	if got := strings.Join(assistantChunks, ""); got != want {
+		t.Fatalf("assistant chunks joined = %q, want %q", got, want)
+	}
+	if result != want {
+		t.Fatalf("result = %q, want %q", result, want)
+	}
+}
+
+func TestQueryNormalizesDeepSeekAnthropicSubwordMarkdownDeltas(t *testing.T) {
+	events, err := Query(context.Background(), "summarize", Options{
+		Model: &fakeModel{turns: [][]model.StreamEvent{{
+			{Kind: model.StreamText, Text: "###"},
+			{Kind: model.StreamText, Text: " Design"},
+			{Kind: model.StreamText, Text: " tokens"},
+			{Kind: model.StreamText, Text: "\n\n-"},
+			{Kind: model.StreamText, Text: " **"},
+			{Kind: model.StreamText, Text: "\n\nColor"},
+			{Kind: model.StreamText, Text: " palette"},
+			{Kind: model.StreamText, Text: "**"},
+			{Kind: model.StreamText, Text: ":"},
+			{Kind: model.StreamText, Text: " shifted"},
+			{Kind: model.StreamText, Text: " from"},
+			{Kind: model.StreamText, Text: " ind"},
+			{Kind: model.StreamText, Text: "\n\nigo"},
+			{Kind: model.StreamText, Text: "\n\n/p"},
+			{Kind: model.StreamText, Text: "\n\nur"},
+			{Kind: model.StreamText, Text: "\n\nple"},
+			{Kind: model.StreamText, Text: " to"},
+			{Kind: model.StreamText, Text: " V"},
+			{Kind: model.StreamText, Text: "\n\nerc"},
+			{Kind: model.StreamText, Text: "\n\nel"},
+			{Kind: model.StreamText, Text: "-blue"},
+			{Kind: model.StreamText, Text: "."},
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+
+	var assistantChunks []string
+	var result string
+	for event := range events {
+		switch event.Kind {
+		case EventAssistant:
+			if event.Message != nil {
+				assistantChunks = append(assistantChunks, event.Message.PlainText())
+			}
+		case EventResult:
+			result = event.Result
+		case EventError:
+			t.Fatalf("query event error: %v", event.Err)
+		}
+	}
+
+	want := "### Design tokens\n- **Color palette**: shifted from indigo/purple to Vercel-blue."
 	if got := strings.Join(assistantChunks, ""); got != want {
 		t.Fatalf("assistant chunks joined = %q, want %q", got, want)
 	}

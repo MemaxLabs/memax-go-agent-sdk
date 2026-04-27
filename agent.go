@@ -2413,6 +2413,7 @@ type assistantTextStreamNormalizer struct {
 	pendingWhitespace string
 	lastTokenFirst    rune
 	lastTokenLength   int
+	lastLineTrimmed   string
 	lastRune          rune
 	emitted           bool
 }
@@ -2438,12 +2439,21 @@ func (n *assistantTextStreamNormalizer) prefix(leading, core string) string {
 		return ""
 	}
 	newlines := strings.Count(whitespace, "\n")
-	if newlines <= 2 {
-		return whitespace
-	}
 	first := firstNonSpaceRune(core)
 	if first == 0 || assistantStreamStartsPunctuation(first) {
 		return ""
+	}
+	if newlines == 0 {
+		return whitespace
+	}
+	if newlines == 1 {
+		return "\n"
+	}
+	if breakPrefix, ok := assistantStreamPreservedBreakPrefix(core); ok {
+		return breakPrefix
+	}
+	if assistantStreamLineStartsList(n.lastLineTrimmed) && unicode.IsUpper(first) {
+		return "\n\n"
 	}
 	if assistantStreamHasHorizontalWhitespace(whitespace) {
 		return " "
@@ -2451,13 +2461,14 @@ func (n *assistantTextStreamNormalizer) prefix(leading, core string) string {
 	if assistantStreamShouldJoin(n.lastRune, n.lastTokenFirst, n.lastTokenLength, core) {
 		return ""
 	}
-	return "\n\n"
+	return " "
 }
 
 func (n *assistantTextStreamNormalizer) remember(text string) {
 	if r := lastNonSpaceRune(text); r != 0 {
 		n.lastRune = r
 		n.lastTokenFirst, n.lastTokenLength = trailingToken(text)
+		n.lastLineTrimmed = lastTrimmedLine(text)
 		n.emitted = true
 	}
 }
@@ -2532,7 +2543,59 @@ func assistantStreamHasHorizontalWhitespace(text string) bool {
 }
 
 func assistantStreamStartsPunctuation(r rune) bool {
-	return strings.ContainsRune(".,;:!?)]}", r)
+	return strings.ContainsRune(".,;:!?)]}/", r)
+}
+
+func assistantStreamPreservedBreakPrefix(nextText string) (string, bool) {
+	trimmed := strings.TrimSpace(nextText)
+	if trimmed == "" {
+		return "", false
+	}
+	switch {
+	case strings.HasPrefix(trimmed, "```"),
+		strings.HasPrefix(trimmed, "#"),
+		strings.HasPrefix(trimmed, ">"),
+		strings.HasPrefix(trimmed, "|"):
+		return "\n\n", true
+	case strings.HasPrefix(trimmed, "- "),
+		strings.HasPrefix(trimmed, "* "),
+		strings.HasPrefix(trimmed, "+ "),
+		trimmed == "-",
+		trimmed == "*",
+		trimmed == "+":
+		return "\n", true
+	case assistantStreamStartsOrderedList(trimmed):
+		return "\n", true
+	}
+	return "", false
+}
+
+func assistantStreamStartsOrderedList(text string) bool {
+	digits := 0
+	for _, r := range text {
+		if unicode.IsDigit(r) {
+			digits++
+			continue
+		}
+		return digits > 0 && r == '.'
+	}
+	return false
+}
+
+func assistantStreamLineStartsList(text string) bool {
+	text = strings.TrimSpace(text)
+	return strings.HasPrefix(text, "- ") ||
+		strings.HasPrefix(text, "* ") ||
+		strings.HasPrefix(text, "+ ") ||
+		assistantStreamStartsOrderedList(text)
+}
+
+func lastTrimmedLine(text string) string {
+	lines := strings.Split(strings.TrimRightFunc(text, unicode.IsSpace), "\n")
+	if len(lines) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(lines[len(lines)-1])
 }
 
 func assistantStreamShouldJoin(prev, prevTokenFirst rune, prevTokenLength int, nextText string) bool {
@@ -2540,7 +2603,7 @@ func assistantStreamShouldJoin(prev, prevTokenFirst rune, prevTokenLength int, n
 	if prev == 0 || next == 0 {
 		return false
 	}
-	if strings.ContainsRune("./_-#", prev) && (unicode.IsLetter(next) || unicode.IsDigit(next)) {
+	if strings.ContainsRune("./_-#`*", prev) && (unicode.IsLetter(next) || unicode.IsDigit(next)) {
 		if prev == '.' && unicode.IsUpper(next) {
 			return false
 		}
