@@ -174,6 +174,71 @@ func TestRepairToolUseAdjacencyDropsOrphanToolResults(t *testing.T) {
 	}
 }
 
+func TestRepairToolUseAdjacencyHandlesPartialDuplicateAndNilResults(t *testing.T) {
+	messages := []model.Message{
+		{
+			Role: model.RoleAssistant,
+			Content: []model.ContentBlock{
+				{
+					Type: model.ContentToolUse,
+					ToolUse: &model.ToolUse{
+						ID:    "tool-1",
+						Name:  "read",
+						Input: json.RawMessage(`{}`),
+					},
+				},
+				{
+					Type: model.ContentToolUse,
+					ToolUse: &model.ToolUse{
+						ID:    "tool-2",
+						Name:  "write",
+						Input: json.RawMessage(`{"path":"README.md"}`),
+					},
+				},
+			},
+		},
+		{
+			Role: model.RoleTool,
+			ToolResult: &model.ToolResult{
+				ToolUseID: "tool-1",
+				Name:      "read",
+				Content:   "first result",
+			},
+		},
+		{
+			Role: model.RoleTool,
+			ToolResult: &model.ToolResult{
+				ToolUseID: "tool-1",
+				Name:      "read",
+				Content:   "duplicate result",
+			},
+		},
+		{
+			Role: model.RoleTool,
+			ToolResult: &model.ToolResult{
+				ToolUseID: "wrong",
+				Name:      "read",
+				Content:   "wrong result",
+			},
+		},
+		{Role: model.RoleTool},
+	}
+
+	repaired := repairToolUseAdjacency(messages)
+	if len(repaired) != 3 {
+		t.Fatalf("len(repaired) = %d, want 3: %#v", len(repaired), repaired)
+	}
+	if !messageHasToolUse(repaired[0], "tool-1") || !messageHasToolUse(repaired[0], "tool-2") {
+		t.Fatalf("first repaired message = %#v, want both assistant tool uses", repaired[0])
+	}
+	if repaired[1].ToolResult == nil || repaired[1].ToolResult.ToolUseID != "tool-1" || repaired[1].ToolResult.Content != "first result" {
+		t.Fatalf("second repaired message = %#v, want original first result", repaired[1])
+	}
+	if repaired[2].ToolResult == nil || repaired[2].ToolResult.ToolUseID != "tool-2" || !repaired[2].ToolResult.IsError {
+		t.Fatalf("third repaired message = %#v, want synthetic result for missing tool-2", repaired[2])
+	}
+}
+
 func messageHasToolUse(msg model.Message, id string) bool {
 	for _, block := range msg.Content {
 		if block.Type == model.ContentToolUse && block.ToolUse != nil && block.ToolUse.ID == id {

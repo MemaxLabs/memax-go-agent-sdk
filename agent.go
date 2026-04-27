@@ -1544,7 +1544,7 @@ func repairToolUseAdjacency(messages []model.Message) []model.Message {
 		i = j - 1
 	}
 	if !changed {
-		return model.CloneMessages(messages)
+		return out
 	}
 	return out
 }
