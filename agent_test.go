@@ -13,6 +13,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/contextwindow"
 	"github.com/MemaxLabs/memax-go-agent-sdk/hook"
 	"github.com/MemaxLabs/memax-go-agent-sdk/identity"
+	"github.com/MemaxLabs/memax-go-agent-sdk/internal/transcriptrepair"
 	"github.com/MemaxLabs/memax-go-agent-sdk/memory"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/output"
@@ -162,7 +163,7 @@ func TestRepairToolUseAdjacencyDropsOrphanToolResults(t *testing.T) {
 		},
 	}
 
-	repaired := repairToolUseAdjacency(messages)
+	repaired := transcriptrepair.RepairToolUseAdjacency(messages)
 	if len(repaired) != 2 {
 		t.Fatalf("len(repaired) = %d, want 2: %#v", len(repaired), repaired)
 	}
@@ -224,7 +225,7 @@ func TestRepairToolUseAdjacencyHandlesPartialDuplicateAndNilResults(t *testing.T
 		{Role: model.RoleTool},
 	}
 
-	repaired := repairToolUseAdjacency(messages)
+	repaired := transcriptrepair.RepairToolUseAdjacency(messages)
 	if len(repaired) != 3 {
 		t.Fatalf("len(repaired) = %d, want 3: %#v", len(repaired), repaired)
 	}

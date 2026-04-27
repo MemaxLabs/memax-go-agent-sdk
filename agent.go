@@ -15,6 +15,7 @@ import (
 	"github.com/MemaxLabs/memax-go-agent-sdk/contextwindow"
 	"github.com/MemaxLabs/memax-go-agent-sdk/hook"
 	"github.com/MemaxLabs/memax-go-agent-sdk/internal/metadatavalues"
+	"github.com/MemaxLabs/memax-go-agent-sdk/internal/transcriptrepair"
 	"github.com/MemaxLabs/memax-go-agent-sdk/memory"
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/output"
@@ -400,6 +401,8 @@ func runLoop(ctx context.Context, events chan<- Event, sessionID string, opts Op
 			messages := messageView.Messages
 			rawMessageCount := messageView.RawMessageCount
 			messages = prepareMessagesForModel(messages)
+			// Distillation should summarize the same provider-safe replay view
+			// that the model sees, not raw interrupted transcript fragments.
 			durableTranscriptForDistillation := model.CloneMessages(messages)
 			if opts.Context != nil {
 				originalMessages := messages
@@ -1477,7 +1480,7 @@ func applyContextPolicy(ctx context.Context, policy contextwindow.Policy, messag
 }
 
 func prepareMessagesForModel(messages []model.Message) []model.Message {
-	return repairToolUseAdjacency(normalizeAssistantTextMessages(messages))
+	return transcriptrepair.RepairToolUseAdjacency(normalizeAssistantTextMessages(messages))
 }
 
 func normalizeAssistantTextMessages(messages []model.Message) []model.Message {
@@ -1485,18 +1488,12 @@ func normalizeAssistantTextMessages(messages []model.Message) []model.Message {
 		return nil
 	}
 	out := make([]model.Message, 0, len(messages))
-	changed := false
 	for _, msg := range messages {
 		normalized := model.CloneMessage(msg)
 		if normalized.Role == model.RoleAssistant && len(normalized.Content) > 0 {
-			content, contentChanged := normalizeAssistantTextContent(normalized.Content)
-			normalized.Content = content
-			changed = changed || contentChanged
+			normalized.Content, _ = normalizeAssistantTextContent(normalized.Content)
 		}
 		out = append(out, normalized)
-	}
-	if !changed {
-		return out
 	}
 	return out
 }
@@ -1528,91 +1525,6 @@ func normalizeAssistantTextContent(blocks []model.ContentBlock) ([]model.Content
 		out = append(out, block)
 	}
 	return out, changed
-}
-
-func repairToolUseAdjacency(messages []model.Message) []model.Message {
-	if len(messages) == 0 {
-		return nil
-	}
-	out := make([]model.Message, 0, len(messages))
-	changed := false
-	for i := 0; i < len(messages); i++ {
-		msg := messages[i]
-		if msg.Role == model.RoleTool {
-			changed = true
-			continue
-		}
-
-		out = append(out, model.CloneMessage(msg))
-		uses := assistantToolUses(msg)
-		if len(uses) == 0 {
-			continue
-		}
-
-		known := make(map[string]model.ToolUse, len(uses))
-		for _, use := range uses {
-			if use.ID == "" {
-				continue
-			}
-			known[use.ID] = use
-		}
-		seen := make(map[string]bool, len(uses))
-		j := i + 1
-		for j < len(messages) && messages[j].Role == model.RoleTool {
-			result := messages[j].ToolResult
-			if result == nil {
-				changed = true
-				j++
-				continue
-			}
-			if _, ok := known[result.ToolUseID]; !ok {
-				changed = true
-				j++
-				continue
-			}
-			if seen[result.ToolUseID] {
-				changed = true
-				j++
-				continue
-			}
-			out = append(out, model.CloneMessage(messages[j]))
-			seen[result.ToolUseID] = true
-			j++
-		}
-		for _, use := range uses {
-			if use.ID == "" || seen[use.ID] {
-				continue
-			}
-			changed = true
-			out = append(out, model.Message{
-				Role: model.RoleTool,
-				ToolResult: &model.ToolResult{
-					ToolUseID: use.ID,
-					Name:      use.Name,
-					Content:   "tool call was interrupted before a result was recorded; continue without relying on this tool output",
-					IsError:   true,
-				},
-			})
-		}
-		i = j - 1
-	}
-	if !changed {
-		return out
-	}
-	return out
-}
-
-func assistantToolUses(msg model.Message) []model.ToolUse {
-	if msg.Role != model.RoleAssistant {
-		return nil
-	}
-	var uses []model.ToolUse
-	for _, block := range msg.Content {
-		if block.Type == model.ContentToolUse && block.ToolUse != nil {
-			uses = append(uses, model.NormalizeToolUse(*block.ToolUse))
-		}
-	}
-	return uses
 }
 
 func saveContextCompaction(ctx context.Context, store session.Store, sessionID string, rawMessageCount int, messages []model.Message, record *contextwindow.CompactionRecord) error {
