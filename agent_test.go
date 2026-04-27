@@ -196,6 +196,30 @@ func TestPrepareMessagesForModelPreservesShortParagraphSplit(t *testing.T) {
 	}
 }
 
+func TestPrepareMessagesForModelDoesNotFuseCommonWordsAcrossBlankChunks(t *testing.T) {
+	messages := []model.Message{{
+		Role: model.RoleAssistant,
+		Content: []model.ContentBlock{
+			{Type: model.ContentText, Text: "Review"},
+			{Type: model.ContentText, Text: "\n\nfrom"},
+			{Type: model.ContentText, Text: "\n\nour"},
+			{Type: model.ContentText, Text: "\n\nold"},
+			{Type: model.ContentText, Text: "\n\nnotes"},
+			{Type: model.ContentText, Text: "\n\nbefore"},
+			{Type: model.ContentText, Text: "\n\nthis"},
+			{Type: model.ContentText, Text: "\n\none"},
+			{Type: model.ContentText, Text: "\n\n."},
+		},
+	}}
+
+	prepared := prepareMessagesForModel(messages)
+	got := prepared[0].PlainText()
+	want := "Review from our old notes before this one."
+	if got != want {
+		t.Fatalf("PlainText = %q, want %q", got, want)
+	}
+}
+
 func TestPrepareMessagesForModelSynthesizesInterruptedToolResultBeforeResumePrompt(t *testing.T) {
 	messages := []model.Message{
 		{
@@ -503,6 +527,86 @@ func TestQueryNormalizesDeepSeekAnthropicBriefThoughtDeltas(t *testing.T) {
 	}
 
 	want := "Let me verify the current state of the files and apply remaining tag style fixes."
+	if got := strings.Join(assistantChunks, ""); got != want {
+		t.Fatalf("assistant chunks joined = %q, want %q", got, want)
+	}
+	if result != want {
+		t.Fatalf("result = %q, want %q", result, want)
+	}
+}
+
+func TestQueryDoesNotFuseCommonFourLetterWordsAcrossBlankDeltas(t *testing.T) {
+	events, err := Query(context.Background(), "summarize", Options{
+		Model: &fakeModel{turns: [][]model.StreamEvent{{
+			{Kind: model.StreamText, Text: "It's"},
+			{Kind: model.StreamText, Text: "\n\na"},
+			{Kind: model.StreamText, Text: "\n\nnote"},
+			{Kind: model.StreamText, Text: "\n\nfrom"},
+			{Kind: model.StreamText, Text: "\n\nour"},
+			{Kind: model.StreamText, Text: "\n\nteam"},
+			{Kind: model.StreamText, Text: "\n\nabout"},
+			{Kind: model.StreamText, Text: "\n\nthis"},
+			{Kind: model.StreamText, Text: "\n\none"},
+			{Kind: model.StreamText, Text: "\n\n."},
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+
+	var assistantChunks []string
+	var result string
+	for event := range events {
+		switch event.Kind {
+		case EventAssistant:
+			if event.Message != nil {
+				assistantChunks = append(assistantChunks, event.Message.PlainText())
+			}
+		case EventResult:
+			result = event.Result
+		case EventError:
+			t.Fatalf("query event error: %v", event.Err)
+		}
+	}
+
+	want := "It's a note from our team about this one."
+	if got := strings.Join(assistantChunks, ""); got != want {
+		t.Fatalf("assistant chunks joined = %q, want %q", got, want)
+	}
+	if result != want {
+		t.Fatalf("result = %q, want %q", result, want)
+	}
+}
+
+func TestQueryPreservesParagraphStarterAfterBlankDeltas(t *testing.T) {
+	events, err := Query(context.Background(), "summarize", Options{
+		Model: &fakeModel{turns: [][]model.StreamEvent{{
+			{Kind: model.StreamText, Text: "This path is viable"},
+			{Kind: model.StreamText, Text: "\n\nBut"},
+			{Kind: model.StreamText, Text: " it needs tests"},
+			{Kind: model.StreamText, Text: "."},
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+
+	var assistantChunks []string
+	var result string
+	for event := range events {
+		switch event.Kind {
+		case EventAssistant:
+			if event.Message != nil {
+				assistantChunks = append(assistantChunks, event.Message.PlainText())
+			}
+		case EventResult:
+			result = event.Result
+		case EventError:
+			t.Fatalf("query event error: %v", event.Err)
+		}
+	}
+
+	want := "This path is viable\n\nBut it needs tests."
 	if got := strings.Join(assistantChunks, ""); got != want {
 		t.Fatalf("assistant chunks joined = %q, want %q", got, want)
 	}

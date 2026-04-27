@@ -2636,13 +2636,13 @@ func assistantStreamBlankSeparatedFragmentPrefix(prev, prevTokenFirst rune, prev
 	if assistantStreamWordJoinWord(nextText) {
 		return " ", true
 	}
+	if prevTokenFirst == 'a' && prevTokenLength == 1 && unicode.IsLower(next) {
+		return " ", true
+	}
 	if prevTokenLength == 1 && prev != 'I' && unicode.IsLower(next) {
 		return "", true
 	}
 	if prevTokenLength > 0 && prevTokenLength <= 3 && nextTokenLength > 0 && nextTokenLength <= 3 && unicode.IsLower(prevTokenFirst) && unicode.IsLower(next) {
-		return "", true
-	}
-	if prevTokenLength == 4 && nextTokenLength > 0 && nextTokenLength <= 3 && unicode.IsLetter(next) {
 		return "", true
 	}
 	if unicode.IsLower(next) {
@@ -2668,7 +2668,7 @@ func assistantStreamParagraphStarter(text string) bool {
 func assistantStreamWordJoinWord(text string) bool {
 	token := strings.ToLower(leadingToken(text))
 	switch token {
-	case "and", "for", "if", "is", "me", "nor", "of", "or", "the", "to":
+	case "a", "an", "and", "for", "if", "is", "it", "me", "nor", "of", "old", "one", "or", "our", "the", "to", "us", "we", "you":
 		return true
 	default:
 		return false
