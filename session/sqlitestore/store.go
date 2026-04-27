@@ -64,6 +64,7 @@ func (s *Store) Append(ctx context.Context, id string, msg model.Message) error 
 	if _, err := s.Get(ctx, id); err != nil {
 		return err
 	}
+	msg = session.NormalizeTranscriptMessage(msg)
 	if msg.ID == "" {
 		msg.ID, err = newID()
 		if err != nil {

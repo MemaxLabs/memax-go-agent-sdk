@@ -523,6 +523,45 @@ func TestEffectiveToolSpecsOmitsRuntimeSkillToolsWithoutSkillSource(t *testing.T
 	}
 }
 
+func TestCollectAssistantNormalizesEmptyToolInput(t *testing.T) {
+	stream := &fakeStream{events: []model.StreamEvent{{
+		Kind: model.StreamToolUse,
+		ToolUse: model.ToolUse{
+			ID:    "tool-1",
+			Name:  "workspace_apply_patch",
+			Input: json.RawMessage{},
+		},
+	}}}
+	var started model.ToolUse
+	assistant, uses, _, _, err := collectAssistant(
+		context.Background(),
+		func(Event) bool { return true },
+		stream,
+		"session-1",
+		1,
+		&recordingMeter{},
+		func(use model.ToolUse) (<-chan model.ToolResult, bool, error) {
+			started = use
+			return nil, false, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("collectAssistant returned error: %v", err)
+	}
+	if len(uses) != 1 || string(uses[0].Input) != `{}` {
+		t.Fatalf("uses = %#v, want normalized input", uses)
+	}
+	if got := string(started.Input); got != `{}` {
+		t.Fatalf("early tool input = %q, want {}", got)
+	}
+	if len(assistant.Content) != 1 || assistant.Content[0].ToolUse == nil || string(assistant.Content[0].ToolUse.Input) != `{}` {
+		t.Fatalf("assistant = %#v, want normalized tool block", assistant)
+	}
+	if _, err := json.Marshal(assistant); err != nil {
+		t.Fatalf("Marshal assistant returned error: %v", err)
+	}
+}
+
 func TestQueryProgressiveSkillResourceLoadsThroughTool(t *testing.T) {
 	fake := &fakeModel{turns: [][]model.StreamEvent{
 		{

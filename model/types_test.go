@@ -55,6 +55,30 @@ func TestMessageMetadataIsJSONSerializedForSessionStores(t *testing.T) {
 	}
 }
 
+func TestNormalizeToolUseDefaultsEmptyInputToObject(t *testing.T) {
+	for _, input := range []json.RawMessage{nil, json.RawMessage(""), json.RawMessage(" \n\t ")} {
+		got := NormalizeToolUse(ToolUse{ID: "tool-1", Name: "read", Input: input})
+		if string(got.Input) != `{}` {
+			t.Fatalf("NormalizeToolUse(%q).Input = %q, want {}", string(input), string(got.Input))
+		}
+		if _, err := json.Marshal(got); err != nil {
+			t.Fatalf("Marshal normalized tool use returned error: %v", err)
+		}
+	}
+}
+
+func TestNormalizeToolUseCopiesNonEmptyInput(t *testing.T) {
+	input := json.RawMessage(`{"path":"README.md"}`)
+	got := NormalizeToolUse(ToolUse{ID: "tool-1", Name: "read", Input: input})
+	if string(got.Input) != `{"path":"README.md"}` {
+		t.Fatalf("Input = %s, want original object", got.Input)
+	}
+	got.Input[0] = '['
+	if string(input) != `{"path":"README.md"}` {
+		t.Fatalf("NormalizeToolUse did not copy input: %s", input)
+	}
+}
+
 func TestCloneMessagesReturnsDeepCopy(t *testing.T) {
 	messages := []Message{{
 		Role: RoleAssistant,

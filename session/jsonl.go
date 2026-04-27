@@ -108,6 +108,7 @@ func (s *JSONLStore) Append(_ context.Context, id string, msg model.Message) err
 	if err != nil {
 		return err
 	}
+	msg = NormalizeTranscriptMessage(msg)
 	if msg.ID == "" {
 		msg.ID, err = newID()
 		if err != nil {
@@ -129,6 +130,19 @@ func (s *JSONLStore) Append(_ context.Context, id string, msg model.Message) err
 		return fmt.Errorf("append transcript entry: %w", err)
 	}
 	return nil
+}
+
+// NormalizeTranscriptMessage returns a copy of msg with provider-facing raw
+// JSON fields normalized for durable transcript storage.
+func NormalizeTranscriptMessage(msg model.Message) model.Message {
+	msg = model.CloneMessage(msg)
+	for i := range msg.Content {
+		if msg.Content[i].ToolUse != nil {
+			use := model.NormalizeToolUse(*msg.Content[i].ToolUse)
+			msg.Content[i].ToolUse = &use
+		}
+	}
+	return msg
 }
 
 func (s *JSONLStore) Messages(ctx context.Context, id string) ([]model.Message, error) {

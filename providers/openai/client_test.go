@@ -129,6 +129,54 @@ data: {"type":"response.completed"}
 	}
 }
 
+func TestClientStreamsEmptyToolArgumentsAsObject(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(`data: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"workspace_apply_patch","arguments":""}}
+
+data: {"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"workspace_apply_patch","arguments":""}}
+
+data: {"type":"response.completed"}
+
+`))
+	}))
+	defer server.Close()
+
+	client := &Client{APIKey: "test-key", Model: "test-model", Endpoint: server.URL}
+	stream, err := client.Stream(context.Background(), model.Request{
+		Messages: []model.Message{{
+			Role:    model.RoleUser,
+			Content: []model.ContentBlock{{Type: model.ContentText, Text: "hi"}},
+		}},
+		Tools: []model.ToolSpec{{Name: "workspace_apply_patch", Description: "Apply patch"}},
+	})
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	start, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("Recv tool start returned error: %v", err)
+	}
+	if start.Kind != model.StreamToolUseStart {
+		t.Fatalf("first event = %#v, want tool-use start", start)
+	}
+	complete, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("Recv complete tool returned error: %v", err)
+	}
+	if complete.Kind != model.StreamToolUse {
+		t.Fatalf("second event = %#v, want tool use", complete)
+	}
+	if got := string(complete.ToolUse.Input); got != `{}` {
+		t.Fatalf("tool input = %q, want {}", got)
+	}
+	if _, err := json.Marshal(complete.ToolUse); err != nil {
+		t.Fatalf("Marshal complete tool use returned error: %v", err)
+	}
+}
+
 func TestAPIErrorMarksContextWindowExceeded(t *testing.T) {
 	err := &apiError{Code: "context_length_exceeded", Message: "maximum context length reached"}
 	if !errors.Is(err, model.ErrContextWindowExceeded) {

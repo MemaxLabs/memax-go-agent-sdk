@@ -179,7 +179,7 @@ func (s *stream) handleData(eventName string, data []byte) (model.StreamEvent, e
 			ToolUse: model.ToolUse{
 				ID:    firstNonEmpty(call.CallID, call.ID),
 				Name:  call.Name,
-				Input: json.RawMessage(call.Arguments),
+				Input: model.NormalizeToolInput(json.RawMessage(call.Arguments)),
 			},
 		}, nil
 	case "response.completed":

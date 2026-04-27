@@ -86,6 +86,24 @@ type ToolUse struct {
 	Input json.RawMessage `json:"input"`
 }
 
+// NormalizeToolUse returns a copy of use whose Input is safe to marshal and
+// execute. Providers sometimes represent an empty tool argument object as an
+// empty string while streaming; the SDK contract exposes that as {} instead of
+// an invalid json.RawMessage.
+func NormalizeToolUse(use ToolUse) ToolUse {
+	use.Input = NormalizeToolInput(use.Input)
+	return use
+}
+
+// NormalizeToolInput returns a copy of input, defaulting empty or whitespace
+// input to {} so ToolUse values remain valid JSON transcript entries.
+func NormalizeToolInput(input json.RawMessage) json.RawMessage {
+	if len(strings.TrimSpace(string(input))) == 0 {
+		return json.RawMessage(`{}`)
+	}
+	return append(json.RawMessage(nil), input...)
+}
+
 type ToolResult struct {
 	ToolUseID string         `json:"tool_use_id"`
 	Name      string         `json:"name"`
@@ -343,8 +361,7 @@ func CloneContentBlocks(blocks []ContentBlock) []ContentBlock {
 	for i, block := range blocks {
 		out[i] = block
 		if block.ToolUse != nil {
-			use := *block.ToolUse
-			use.Input = append([]byte(nil), block.ToolUse.Input...)
+			use := NormalizeToolUse(*block.ToolUse)
 			out[i].ToolUse = &use
 		}
 		if block.ProviderArtifact != nil {

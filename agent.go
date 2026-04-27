@@ -2254,15 +2254,16 @@ func collectAssistant(
 			}
 		case model.StreamToolUse:
 			index := len(uses)
-			uses = append(uses, event.ToolUse)
-			blocks = append(blocks, model.ContentBlock{Type: model.ContentToolUse, ToolUse: &event.ToolUse})
+			use := model.NormalizeToolUse(event.ToolUse)
+			uses = append(uses, use)
+			blocks = append(blocks, model.ContentBlock{Type: model.ContentToolUse, ToolUse: &use})
 			out := newEvent(EventToolUse, sessionID, turn)
-			out.ToolUse = &event.ToolUse
+			out.ToolUse = &use
 			if !emit(out) {
 				return model.Message{Role: model.RoleAssistant, Content: blocks}, uses, earlyResults, usage, ctx.Err()
 			}
 			if startEarlyTool != nil {
-				results, started, err := startEarlyTool(event.ToolUse)
+				results, started, err := startEarlyTool(use)
 				if err != nil {
 					return model.Message{Role: model.RoleAssistant, Content: blocks}, uses, earlyResults, usage, err
 				}

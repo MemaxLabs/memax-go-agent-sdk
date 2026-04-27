@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -51,6 +52,36 @@ func TestJSONLStoreRoundTrip(t *testing.T) {
 	}
 	if got[1].ToolResult == nil || got[1].ToolResult.Content != "result" {
 		t.Fatalf("second message = %#v, want tool result", got[1])
+	}
+}
+
+func TestJSONLStoreAppendNormalizesEmptyToolInput(t *testing.T) {
+	store := NewJSONLStore(t.TempDir())
+	ctx := context.Background()
+	sess, err := store.Create(ctx)
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	err = store.Append(ctx, sess.ID, model.Message{
+		Role: model.RoleAssistant,
+		Content: []model.ContentBlock{{
+			Type: model.ContentToolUse,
+			ToolUse: &model.ToolUse{
+				ID:    "tool-1",
+				Name:  "workspace_apply_patch",
+				Input: json.RawMessage{},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Append returned error: %v", err)
+	}
+	messages, err := store.Messages(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("Messages returned error: %v", err)
+	}
+	if got := string(messages[0].Content[0].ToolUse.Input); got != `{}` {
+		t.Fatalf("stored tool input = %q, want {}", got)
 	}
 }
 

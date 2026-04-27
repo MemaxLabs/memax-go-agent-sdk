@@ -3,6 +3,7 @@ package sqlitestore
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -141,6 +142,36 @@ func TestStoreCanonicalizesInputSessionIDs(t *testing.T) {
 	}
 	if len(messages) != 1 || messages[0].ID != "m1" {
 		t.Fatalf("Messages = %#v, want appended message", messages)
+	}
+}
+
+func TestStoreAppendNormalizesEmptyToolInput(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	sess, err := store.Create(ctx)
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	err = store.Append(ctx, sess.ID, model.Message{
+		Role: model.RoleAssistant,
+		Content: []model.ContentBlock{{
+			Type: model.ContentToolUse,
+			ToolUse: &model.ToolUse{
+				ID:    "tool-1",
+				Name:  "workspace_apply_patch",
+				Input: json.RawMessage{},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Append returned error: %v", err)
+	}
+	messages, err := store.Messages(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("Messages returned error: %v", err)
+	}
+	if got := string(messages[0].Content[0].ToolUse.Input); got != `{}` {
+		t.Fatalf("stored tool input = %q, want {}", got)
 	}
 }
 
