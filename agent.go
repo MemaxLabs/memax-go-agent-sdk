@@ -2429,8 +2429,8 @@ func (n *assistantTextStreamNormalizer) prefix(leading, core string) string {
 	if newlines > 2 && assistantStreamShouldJoin(n.lastRune, n.lastTokenFirst, n.lastTokenLength, core) {
 		return ""
 	}
-	if newlines == 2 && assistantStreamShouldJoinBlankSeparatedFragment(n.lastRune, n.lastTokenFirst, n.lastTokenLength, core) {
-		return ""
+	if prefix, ok := assistantStreamBlankSeparatedFragmentPrefix(n.lastRune, n.lastTokenFirst, n.lastTokenLength, core); newlines == 2 && ok {
+		return prefix
 	}
 	if newlines > 2 {
 		return " "
@@ -2609,43 +2609,66 @@ func assistantStreamShouldJoin(prev, prevTokenFirst rune, prevTokenLength int, n
 	return false
 }
 
-func assistantStreamShouldJoinBlankSeparatedFragment(prev, prevTokenFirst rune, prevTokenLength int, nextText string) bool {
+func assistantStreamBlankSeparatedFragmentPrefix(prev, prevTokenFirst rune, prevTokenLength int, nextText string) (string, bool) {
 	next := firstNonSpaceRune(nextText)
 	if prev == 0 || next == 0 {
-		return false
+		return "", false
 	}
 	nextTokenLength := leadingTokenRuneLength(nextText)
 	if next == '/' {
-		return nextTokenLength > 0 && nextTokenLength <= 3
+		return "", nextTokenLength > 0 && nextTokenLength <= 3
 	}
-	if prevTokenFirst == '/' && prevTokenLength > 0 && prevTokenLength <= 3 && unicode.IsLower(next) {
-		return true
+	if prevTokenFirst == '/' && prevTokenLength > 0 && unicode.IsLower(next) {
+		return "", true
 	}
 	if strings.ContainsRune("/_-#`*", prev) && (unicode.IsLetter(next) || unicode.IsDigit(next)) {
-		return true
+		return "", true
+	}
+	if assistantStreamEndsSentence(prev) && unicode.IsUpper(next) && leadingTokenRuneLength(nextText) <= 3 {
+		return " ", true
 	}
 	if !(unicode.IsLetter(prev) || unicode.IsDigit(prev)) || !(unicode.IsLetter(next) || unicode.IsDigit(next)) {
-		return false
+		return "", false
 	}
-	if strings.EqualFold(leadingToken(nextText), "but") {
-		return false
+	if assistantStreamParagraphStarter(nextText) {
+		return "", false
+	}
+	if assistantStreamWordJoinWord(nextText) {
+		return " ", true
 	}
 	if prevTokenLength == 1 && prev != 'I' && unicode.IsLower(next) {
-		return true
+		return "", true
 	}
 	if prevTokenLength > 0 && prevTokenLength <= 3 && nextTokenLength > 0 && nextTokenLength <= 3 && unicode.IsLower(prevTokenFirst) && unicode.IsLower(next) {
-		return true
+		return "", true
 	}
-	if unicode.IsLower(prevTokenFirst) && unicode.IsLower(next) && (prevTokenLength <= 2 || nextTokenLength <= 2 || assistantStreamCommonJoinWord(nextText)) {
-		return true
+	if prevTokenLength == 4 && nextTokenLength > 0 && nextTokenLength <= 3 && unicode.IsLetter(next) {
+		return "", true
 	}
-	return false
+	if unicode.IsLower(next) {
+		return " ", true
+	}
+	return "", false
 }
 
-func assistantStreamCommonJoinWord(text string) bool {
+func assistantStreamEndsSentence(r rune) bool {
+	return r == '.' || r == '!' || r == '?'
+}
+
+func assistantStreamParagraphStarter(text string) bool {
 	token := strings.ToLower(leadingToken(text))
 	switch token {
-	case "and", "for", "the":
+	case "but", "so", "yet", "then", "thus", "therefore", "however":
+		return true
+	default:
+		return false
+	}
+}
+
+func assistantStreamWordJoinWord(text string) bool {
+	token := strings.ToLower(leadingToken(text))
+	switch token {
+	case "and", "for", "if", "is", "me", "nor", "of", "or", "the", "to":
 		return true
 	default:
 		return false

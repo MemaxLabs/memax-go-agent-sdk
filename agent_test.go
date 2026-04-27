@@ -138,10 +138,10 @@ func TestPrepareMessagesForModelNormalizesPersistedBlankHeavyAssistantText(t *te
 			Content: []model.ContentBlock{
 				{Type: model.ContentProviderArtifact, ProviderArtifact: &model.ProviderArtifact{Provider: "anthropic", Type: "thinking", Data: json.RawMessage(`{"type":"thinking"}`)}},
 				{Type: model.ContentText, Text: "Let"},
-				{Type: model.ContentText, Text: "\n\n me"},
-				{Type: model.ContentText, Text: "\n\n verify"},
-				{Type: model.ContentText, Text: "\n\n the"},
-				{Type: model.ContentText, Text: "\n\n file"},
+				{Type: model.ContentText, Text: "\n\nme"},
+				{Type: model.ContentText, Text: "\n\nverify"},
+				{Type: model.ContentText, Text: "\n\nthe"},
+				{Type: model.ContentText, Text: "\n\nfile"},
 				{Type: model.ContentText, Text: "\n\n."},
 			},
 		},
@@ -422,15 +422,15 @@ func TestQueryNormalizesDeepSeekAnthropicBlankAssistantTextDeltas(t *testing.T) 
 	events, err := Query(context.Background(), "continue", Options{
 		Model: &fakeModel{turns: [][]model.StreamEvent{{
 			{Kind: model.StreamText, Text: "All"},
-			{Kind: model.StreamText, Text: "\n\n changes"},
-			{Kind: model.StreamText, Text: "\n\n verified"},
+			{Kind: model.StreamText, Text: "\n\nchanges"},
+			{Kind: model.StreamText, Text: "\n\nverified"},
 			{Kind: model.StreamText, Text: "\n\n."},
-			{Kind: model.StreamText, Text: "\n\n Let"},
-			{Kind: model.StreamText, Text: "\n\n me"},
-			{Kind: model.StreamText, Text: "\n\n confirm"},
-			{Kind: model.StreamText, Text: "\n\n the"},
-			{Kind: model.StreamText, Text: "\n\n workspace"},
-			{Kind: model.StreamText, Text: "\n\n diff"},
+			{Kind: model.StreamText, Text: "\n\nLet"},
+			{Kind: model.StreamText, Text: "\n\nme"},
+			{Kind: model.StreamText, Text: "\n\nconfirm"},
+			{Kind: model.StreamText, Text: "\n\nthe"},
+			{Kind: model.StreamText, Text: "\n\nworkspace"},
+			{Kind: model.StreamText, Text: "\n\ndiff"},
 			{Kind: model.StreamText, Text: "\n\n."},
 		}}},
 	})
@@ -454,6 +454,55 @@ func TestQueryNormalizesDeepSeekAnthropicBlankAssistantTextDeltas(t *testing.T) 
 	}
 
 	want := "All changes verified. Let me confirm the workspace diff."
+	if got := strings.Join(assistantChunks, ""); got != want {
+		t.Fatalf("assistant chunks joined = %q, want %q", got, want)
+	}
+	if result != want {
+		t.Fatalf("result = %q, want %q", result, want)
+	}
+}
+
+func TestQueryNormalizesDeepSeekAnthropicBriefThoughtDeltas(t *testing.T) {
+	events, err := Query(context.Background(), "continue", Options{
+		Model: &fakeModel{turns: [][]model.StreamEvent{{
+			{Kind: model.StreamText, Text: "Let"},
+			{Kind: model.StreamText, Text: "\n\nme"},
+			{Kind: model.StreamText, Text: "\n\nverify"},
+			{Kind: model.StreamText, Text: "\n\nthe"},
+			{Kind: model.StreamText, Text: "\n\ncurrent"},
+			{Kind: model.StreamText, Text: "\n\nstate"},
+			{Kind: model.StreamText, Text: "\n\nof"},
+			{Kind: model.StreamText, Text: "\n\nthe"},
+			{Kind: model.StreamText, Text: "\n\nfiles"},
+			{Kind: model.StreamText, Text: "\n\nand"},
+			{Kind: model.StreamText, Text: "\n\napply"},
+			{Kind: model.StreamText, Text: "\n\nremaining"},
+			{Kind: model.StreamText, Text: "\n\ntag"},
+			{Kind: model.StreamText, Text: "\n\nstyle"},
+			{Kind: model.StreamText, Text: "\n\nfixes"},
+			{Kind: model.StreamText, Text: "\n\n."},
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+
+	var assistantChunks []string
+	var result string
+	for event := range events {
+		switch event.Kind {
+		case EventAssistant:
+			if event.Message != nil {
+				assistantChunks = append(assistantChunks, event.Message.PlainText())
+			}
+		case EventResult:
+			result = event.Result
+		case EventError:
+			t.Fatalf("query event error: %v", event.Err)
+		}
+	}
+
+	want := "Let me verify the current state of the files and apply remaining tag style fixes."
 	if got := strings.Join(assistantChunks, ""); got != want {
 		t.Fatalf("assistant chunks joined = %q, want %q", got, want)
 	}
