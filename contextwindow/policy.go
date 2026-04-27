@@ -198,10 +198,10 @@ type SummarizingBudget struct {
 	// MaxTokens is the target token budget for the compacted output.
 	MaxTokens int
 	// TriggerTokens is the token count at which compaction begins. When zero,
-	// MaxTokens is used, preserving the historical behavior. Setting
-	// TriggerTokens above MaxTokens creates hysteresis: the policy compacts down
-	// to MaxTokens, then allows newer messages to accumulate until TriggerTokens
-	// before summarizing again.
+	// or less than MaxTokens, MaxTokens is used, preserving the historical
+	// behavior. Setting TriggerTokens above MaxTokens creates hysteresis: the
+	// policy compacts down to MaxTokens, then allows newer messages to
+	// accumulate until TriggerTokens before summarizing again.
 	TriggerTokens    int
 	MaxSummaryTokens int
 	Estimate         Estimator

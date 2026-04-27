@@ -200,26 +200,52 @@ func TestSummarizingBudgetSkipsSummarizerWhenMessagesFit(t *testing.T) {
 }
 
 func TestSummarizingBudgetUsesTriggerTokensForHysteresis(t *testing.T) {
-	called := false
-	got, err := (SummarizingBudget{
-		MaxTokens:     10,
-		TriggerTokens: 20,
-		Estimate:      EstimateByRunes,
+	calls := 0
+	policy := SummarizingBudget{
+		MaxTokens:        10,
+		TriggerTokens:    20,
+		MaxSummaryTokens: 4,
+		SummaryPrefix:    "S:",
+		Estimate:         EstimateByRunes,
 		Summarizer: SummarizerFunc(func(_ context.Context, _ []model.Message) (string, error) {
-			called = true
-			return "summary", nil
+			calls++
+			return "s", nil
 		}),
-	}).Apply(context.Background(), []model.Message{
+	}
+
+	got, err := policy.Apply(context.Background(), []model.Message{
 		textMessage(model.RoleUser, "123456789012345"),
 	})
 	if err != nil {
 		t.Fatalf("Apply returned error: %v", err)
 	}
-	if called {
+	if calls != 0 {
 		t.Fatal("summarizer was called before trigger threshold")
 	}
 	if len(got) != 1 || got[0].PlainText() != "123456789012345" {
 		t.Fatalf("messages = %#v", got)
+	}
+
+	result, err := policy.ApplyWithResult(context.Background(), []model.Message{
+		textMessage(model.RoleUser, "1234567890"),
+		textMessage(model.RoleAssistant, "abcdefghi"),
+		textMessage(model.RoleUser, "recent"),
+	})
+	if err != nil {
+		t.Fatalf("ApplyWithResult returned error: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("summarizer calls = %d, want 1 after trigger threshold", calls)
+	}
+	total, err := estimateMessages(result.Messages, EstimateByRunes)
+	if err != nil {
+		t.Fatalf("estimateMessages returned error: %v", err)
+	}
+	if total > policy.MaxTokens {
+		t.Fatalf("compacted total = %d, want <= %d; messages = %#v", total, policy.MaxTokens, result.Messages)
+	}
+	if result.Compaction == nil {
+		t.Fatal("compaction record is nil after trigger threshold")
 	}
 }
 
