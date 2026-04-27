@@ -195,7 +195,14 @@ func (f SummarizerFunc) Summarize(ctx context.Context, messages []model.Message)
 // SummarizingBudget summarizes older messages when the transcript exceeds
 // MaxTokens, then prepends the summary to the newest structurally valid suffix.
 type SummarizingBudget struct {
-	MaxTokens        int
+	// MaxTokens is the target token budget for the compacted output.
+	MaxTokens int
+	// TriggerTokens is the token count at which compaction begins. When zero,
+	// MaxTokens is used, preserving the historical behavior. Setting
+	// TriggerTokens above MaxTokens creates hysteresis: the policy compacts down
+	// to MaxTokens, then allows newer messages to accumulate until TriggerTokens
+	// before summarizing again.
+	TriggerTokens    int
 	MaxSummaryTokens int
 	Estimate         Estimator
 	Summarizer       Summarizer
@@ -223,7 +230,8 @@ func (p SummarizingBudget) ApplyWithResult(ctx context.Context, messages []model
 	if err != nil {
 		return PolicyResult{}, err
 	}
-	if total <= p.MaxTokens {
+	triggerTokens := p.triggerTokens()
+	if total <= triggerTokens {
 		return PolicyResult{Messages: model.CloneMessages(messages)}, nil
 	}
 	if p.Summarizer == nil {
@@ -266,6 +274,13 @@ func (p SummarizingBudget) ApplyWithResult(ctx context.Context, messages []model
 		SummaryPreview:     previewText(summaryMessage.PlainText(), 200),
 	}
 	return PolicyResult{Messages: out, Compaction: record}, nil
+}
+
+func (p SummarizingBudget) triggerTokens() int {
+	if p.TriggerTokens > p.MaxTokens {
+		return p.TriggerTokens
+	}
+	return p.MaxTokens
 }
 
 func (p SummarizingBudget) summaryBudget() int {

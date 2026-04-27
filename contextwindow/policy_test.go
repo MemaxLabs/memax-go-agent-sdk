@@ -199,6 +199,30 @@ func TestSummarizingBudgetSkipsSummarizerWhenMessagesFit(t *testing.T) {
 	}
 }
 
+func TestSummarizingBudgetUsesTriggerTokensForHysteresis(t *testing.T) {
+	called := false
+	got, err := (SummarizingBudget{
+		MaxTokens:     10,
+		TriggerTokens: 20,
+		Estimate:      EstimateByRunes,
+		Summarizer: SummarizerFunc(func(_ context.Context, _ []model.Message) (string, error) {
+			called = true
+			return "summary", nil
+		}),
+	}).Apply(context.Background(), []model.Message{
+		textMessage(model.RoleUser, "123456789012345"),
+	})
+	if err != nil {
+		t.Fatalf("Apply returned error: %v", err)
+	}
+	if called {
+		t.Fatal("summarizer was called before trigger threshold")
+	}
+	if len(got) != 1 || got[0].PlainText() != "123456789012345" {
+		t.Fatalf("messages = %#v", got)
+	}
+}
+
 func TestSummarizingBudgetRejectsMissingSummarizer(t *testing.T) {
 	_, err := (SummarizingBudget{MaxTokens: 1}).Apply(context.Background(), []model.Message{
 		textMessage(model.RoleUser, "too large"),
