@@ -2,10 +2,14 @@ package mcpbridge
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -172,6 +176,100 @@ func TestMCPToolCallTimeoutIsModelVisible(t *testing.T) {
 	}
 }
 
+func TestJSONRPCConnCloseRunsCloseFuncAfterReadLoopEOF(t *testing.T) {
+	reader, writer := io.Pipe()
+	var closeCalls atomic.Int32
+	conn := newJSONRPCConn(reader, nopWriteCloser{}, func() error {
+		closeCalls.Add(1)
+		return nil
+	})
+	_ = writer.Close()
+	select {
+	case <-conn.done:
+	case <-time.After(time.Second):
+		t.Fatal("read loop did not observe EOF")
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatalf("second Close() error = %v", err)
+	}
+	if got := closeCalls.Load(); got != 1 {
+		t.Fatalf("closeFunc calls = %d, want 1", got)
+	}
+}
+
+func TestJSONRPCConnOversizedMessageDoesNotCloseFutureCalls(t *testing.T) {
+	clientReader, serverWriter := io.Pipe()
+	serverReader, clientWriter := io.Pipe()
+	client := &Client{conn: newJSONRPCConnWithMaxRead(clientReader, clientWriter, clientWriter.Close, 96)}
+	defer client.Close()
+
+	serverDone := make(chan error, 1)
+	go func() {
+		scanner := bufio.NewScanner(serverReader)
+		if !scanner.Scan() {
+			serverDone <- fmt.Errorf("read first request: %w", scanner.Err())
+			return
+		}
+		if _, err := serverWriter.Write(append(bytes.Repeat([]byte("x"), 160), '\n')); err != nil {
+			serverDone <- err
+			return
+		}
+		if !scanner.Scan() {
+			serverDone <- fmt.Errorf("read second request: %w", scanner.Err())
+			return
+		}
+		var req struct {
+			ID int64 `json:"id"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &req); err != nil {
+			serverDone <- err
+			return
+		}
+		serverDone <- json.NewEncoder(serverWriter).Encode(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      req.ID,
+			"result":  map[string]any{"ok": true},
+		})
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	var first map[string]any
+	err := client.call(ctx, "oversized", nil, &first)
+	if err == nil || !strings.Contains(err.Error(), "exceeded 96 bytes") {
+		t.Fatalf("first call error = %v, want oversized message error", err)
+	}
+	var second struct {
+		OK bool `json:"ok"`
+	}
+	if err := client.call(ctx, "second", nil, &second); err != nil {
+		t.Fatalf("second call after oversized message error = %v", err)
+	}
+	if !second.OK {
+		t.Fatalf("second call result = %#v, want ok", second)
+	}
+	if err := <-serverDone; err != nil {
+		t.Fatalf("server goroutine error = %v", err)
+	}
+}
+
+func TestStdioClientIncludesStderrTailOnInitializeFailure(t *testing.T) {
+	ctx := context.Background()
+	cfg := testServerConfig("docs", false)
+	cfg.StartupTimeout = time.Second
+	cfg.Env["MEMAX_MCPBRIDGE_TEST_SERVER_INIT_FAIL"] = "1"
+	_, err := NewStdioClient(ctx, cfg)
+	if err == nil {
+		t.Fatal("NewStdioClient() error = nil, want initialize failure")
+	}
+	if !strings.Contains(err.Error(), "test mcp init failed") {
+		t.Fatalf("NewStdioClient() error = %v, want stderr tail", err)
+	}
+}
+
 func testServerConfig(name string, parallel bool) ServerConfig {
 	return ServerConfig{
 		Name:                      name,
@@ -185,6 +283,10 @@ func testServerConfig(name string, parallel bool) ServerConfig {
 func TestMCPBridgeStdioServerHelper(t *testing.T) {
 	if os.Getenv("MEMAX_MCPBRIDGE_TEST_SERVER") != "1" {
 		return
+	}
+	if os.Getenv("MEMAX_MCPBRIDGE_TEST_SERVER_INIT_FAIL") == "1" {
+		_, _ = fmt.Fprintln(os.Stderr, "test mcp init failed")
+		os.Exit(2)
 	}
 	scanner := bufio.NewScanner(os.Stdin)
 	encoder := json.NewEncoder(os.Stdout)
@@ -262,6 +364,16 @@ func TestMCPBridgeStdioServerHelper(t *testing.T) {
 		}
 	}
 	os.Exit(0)
+}
+
+type nopWriteCloser struct{}
+
+func (nopWriteCloser) Write(p []byte) (int, error) {
+	return len(p), nil
+}
+
+func (nopWriteCloser) Close() error {
+	return nil
 }
 
 func writeRPCResult(encoder *json.Encoder, id int64, result any) {

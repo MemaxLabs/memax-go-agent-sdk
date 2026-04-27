@@ -2,6 +2,7 @@ package mcpbridge
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,9 +10,16 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+)
+
+const (
+	defaultMaxRPCMessageBytes = 64 * 1024 * 1024
+	defaultStderrTailBytes    = 16 * 1024
+	defaultCloseGrace         = 250 * time.Millisecond
 )
 
 // Client is a minimal MCP JSON-RPC client.
@@ -41,8 +49,11 @@ func NewStdioClient(ctx context.Context, cfg ServerConfig) (*Client, error) {
 		_ = stdin.Close()
 		return nil, fmt.Errorf("mcp %s stdout: %w", cfg.Name, err)
 	}
-	if cmd.Stderr == nil {
-		cmd.Stderr = io.Discard
+	stderrTail := newTailBuffer(defaultStderrTailBytes)
+	if cfg.Stderr != nil {
+		cmd.Stderr = io.MultiWriter(cfg.Stderr, stderrTail)
+	} else if cmd.Stderr == nil {
+		cmd.Stderr = stderrTail
 	}
 	if err := cmd.Start(); err != nil {
 		_ = stdin.Close()
@@ -51,21 +62,47 @@ func NewStdioClient(ctx context.Context, cfg ServerConfig) (*Client, error) {
 	}
 	conn := newJSONRPCConn(stdout, stdin, func() error {
 		_ = stdin.Close()
-		err := cmd.Process.Kill()
-		_ = cmd.Wait()
-		if errors.Is(err, os.ErrProcessDone) {
-			return nil
+		waitCh := make(chan error, 1)
+		go func() {
+			waitCh <- cmd.Wait()
+		}()
+		select {
+		case err := <-waitCh:
+			return normalizeProcessExit(err)
+		case <-time.After(defaultCloseGrace):
 		}
-		return err
+		killErr := cmd.Process.Kill()
+		_ = <-waitCh
+		if killErr != nil && !errors.Is(killErr, os.ErrProcessDone) {
+			return killErr
+		}
+		return nil
 	})
 	client := &Client{conn: conn}
 	initCtx, cancel := contextWithOptionalTimeout(ctx, cfg.startupTimeout())
-	defer cancel()
 	if err := client.Initialize(initCtx, cfg); err != nil {
+		cancel()
 		_ = client.Close()
+		if tail := stderrTail.String(); tail != "" {
+			return nil, fmt.Errorf("%w; stderr: %s", err, tail)
+		}
 		return nil, err
 	}
+	cancel()
 	return client, nil
+}
+
+func normalizeProcessExit(err error) error {
+	if err == nil || errors.Is(err, os.ErrProcessDone) {
+		return nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		if exitErr.ProcessState != nil && exitErr.ProcessState.Exited() {
+			return nil
+		}
+	}
+	return err
 }
 
 // NewClientForTransport returns a client over an already-open newline-delimited
@@ -128,20 +165,28 @@ type jsonrpcConn struct {
 	writer    io.WriteCloser
 	closeFunc func() error
 	nextID    atomic.Int64
+	maxRead   int
 
-	writeMu sync.Mutex
-	mu      sync.Mutex
-	pending map[int64]chan jsonrpcResponse
-	closed  bool
-	err     error
-	done    chan struct{}
+	closeOnce sync.Once
+	closeErr  error
+	writeMu   sync.Mutex
+	mu        sync.Mutex
+	pending   map[int64]chan jsonrpcResponse
+	closed    bool
+	err       error
+	done      chan struct{}
 }
 
 func newJSONRPCConn(reader io.Reader, writer io.WriteCloser, closeFunc func() error) *jsonrpcConn {
+	return newJSONRPCConnWithMaxRead(reader, writer, closeFunc, defaultMaxRPCMessageBytes)
+}
+
+func newJSONRPCConnWithMaxRead(reader io.Reader, writer io.WriteCloser, closeFunc func() error, maxRead int) *jsonrpcConn {
 	c := &jsonrpcConn{
 		reader:    reader,
 		writer:    writer,
 		closeFunc: closeFunc,
+		maxRead:   maxRead,
 		pending:   map[int64]chan jsonrpcResponse{},
 		done:      make(chan struct{}),
 	}
@@ -211,18 +256,24 @@ func (c *jsonrpcConn) Notify(ctx context.Context, method string, params any) err
 
 func (c *jsonrpcConn) Close() error {
 	c.mu.Lock()
-	if c.closed {
-		c.mu.Unlock()
-		return nil
+	if !c.closed {
+		c.closed = true
+		c.failPendingLocked(io.ErrClosedPipe)
+		close(c.done)
 	}
-	c.closed = true
-	c.failPendingLocked(io.ErrClosedPipe)
-	close(c.done)
 	c.mu.Unlock()
-	if c.closeFunc != nil {
-		return c.closeFunc()
-	}
-	return c.writer.Close()
+	return c.runClose()
+}
+
+func (c *jsonrpcConn) runClose() error {
+	c.closeOnce.Do(func() {
+		if c.closeFunc != nil {
+			c.closeErr = c.closeFunc()
+			return
+		}
+		c.closeErr = c.writer.Close()
+	})
+	return c.closeErr
 }
 
 func (c *jsonrpcConn) write(msg any) error {
@@ -239,14 +290,34 @@ func (c *jsonrpcConn) write(msg any) error {
 }
 
 func (c *jsonrpcConn) readLoop() {
-	scanner := bufio.NewScanner(c.reader)
-	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
-	for scanner.Scan() {
+	reader := bufio.NewReader(c.reader)
+	for {
+		line, oversized, readErr := readLineLimited(reader, c.maxRead)
+		if oversized {
+			c.failPending(fmt.Errorf("mcp json-rpc message exceeded %d bytes", c.maxRead))
+			if readErr != nil && !errors.Is(readErr, io.EOF) {
+				c.closeFromReadLoop(readErr)
+				return
+			}
+			if errors.Is(readErr, io.EOF) {
+				c.closeFromReadLoop(io.EOF)
+				return
+			}
+			continue
+		}
+		if readErr != nil && !(errors.Is(readErr, io.EOF) && len(line) > 0) {
+			c.closeFromReadLoop(readErr)
+			return
+		}
 		var resp jsonrpcResponse
-		if err := json.Unmarshal(scanner.Bytes(), &resp); err != nil {
+		if err := json.Unmarshal(line, &resp); err != nil {
 			continue
 		}
 		if resp.ID == 0 {
+			if errors.Is(readErr, io.EOF) {
+				c.closeFromReadLoop(io.EOF)
+				return
+			}
 			continue
 		}
 		c.mu.Lock()
@@ -256,8 +327,20 @@ func (c *jsonrpcConn) readLoop() {
 		if ch != nil {
 			ch <- resp
 		}
+		if errors.Is(readErr, io.EOF) {
+			c.closeFromReadLoop(io.EOF)
+			return
+		}
 	}
-	err := scanner.Err()
+}
+
+func (c *jsonrpcConn) failPending(err error) {
+	c.mu.Lock()
+	c.failPendingLocked(err)
+	c.mu.Unlock()
+}
+
+func (c *jsonrpcConn) closeFromReadLoop(err error) {
 	if err == nil {
 		err = io.EOF
 	}
@@ -271,6 +354,28 @@ func (c *jsonrpcConn) readLoop() {
 	c.mu.Unlock()
 }
 
+func readLineLimited(reader *bufio.Reader, limit int) ([]byte, bool, error) {
+	if limit <= 0 {
+		line, err := reader.ReadBytes('\n')
+		return bytes.TrimSuffix(line, []byte{'\n'}), false, err
+	}
+	var out []byte
+	for {
+		part, err := reader.ReadSlice('\n')
+		if len(out)+len(part) > limit {
+			for err == bufio.ErrBufferFull {
+				part, err = reader.ReadSlice('\n')
+			}
+			return nil, true, err
+		}
+		out = append(out, part...)
+		if err == bufio.ErrBufferFull {
+			continue
+		}
+		return bytes.TrimSuffix(out, []byte{'\n'}), false, err
+	}
+}
+
 func (c *jsonrpcConn) removePending(id int64) {
 	c.mu.Lock()
 	delete(c.pending, id)
@@ -282,6 +387,32 @@ func (c *jsonrpcConn) failPendingLocked(err error) {
 		delete(c.pending, id)
 		ch <- jsonrpcResponse{ID: id, Error: &rpcError{Code: -32000, Message: err.Error()}}
 	}
+}
+
+type tailBuffer struct {
+	mu    sync.Mutex
+	limit int
+	buf   []byte
+}
+
+func newTailBuffer(limit int) *tailBuffer {
+	return &tailBuffer{limit: limit}
+}
+
+func (b *tailBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.buf = append(b.buf, p...)
+	if b.limit > 0 && len(b.buf) > b.limit {
+		b.buf = append([]byte(nil), b.buf[len(b.buf)-b.limit:]...)
+	}
+	return len(p), nil
+}
+
+func (b *tailBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return strings.TrimSpace(string(b.buf))
 }
 
 type jsonrpcRequest struct {

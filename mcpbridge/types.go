@@ -2,6 +2,7 @@ package mcpbridge
 
 import (
 	"fmt"
+	"io"
 	"regexp"
 	"strings"
 	"time"
@@ -44,6 +45,9 @@ type ServerConfig struct {
 	// MaxResultBytes bounds each adapted MCP tool result. Zero uses the default;
 	// negative disables the SDK result limit.
 	MaxResultBytes int
+	// Stderr receives the server process stderr stream. When nil, the SDK keeps
+	// a small stderr tail and includes it in startup errors.
+	Stderr io.Writer
 }
 
 // Validate checks whether cfg can start a stdio MCP server.
