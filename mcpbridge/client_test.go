@@ -200,6 +200,33 @@ func TestJSONRPCConnCloseRunsCloseFuncAfterReadLoopEOF(t *testing.T) {
 	}
 }
 
+func TestJSONRPCConnReadLoopEOFRunsCloseFuncWithoutExplicitClose(t *testing.T) {
+	reader, writer := io.Pipe()
+	var closeCalls atomic.Int32
+	conn := newJSONRPCConn(reader, nopWriteCloser{}, func() error {
+		closeCalls.Add(1)
+		return nil
+	})
+	_ = writer.Close()
+	select {
+	case <-conn.done:
+	case <-time.After(time.Second):
+		t.Fatal("read loop did not observe EOF")
+	}
+	deadline := time.After(time.Second)
+	for closeCalls.Load() == 0 {
+		select {
+		case <-deadline:
+			t.Fatal("closeFunc was not called after read loop EOF")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+	if got := closeCalls.Load(); got != 1 {
+		t.Fatalf("closeFunc calls = %d, want 1", got)
+	}
+}
+
 func TestJSONRPCConnOversizedMessageDoesNotCloseFutureCalls(t *testing.T) {
 	clientReader, serverWriter := io.Pipe()
 	serverReader, clientWriter := io.Pipe()
@@ -239,7 +266,7 @@ func TestJSONRPCConnOversizedMessageDoesNotCloseFutureCalls(t *testing.T) {
 	defer cancel()
 	var first map[string]any
 	err := client.call(ctx, "oversized", nil, &first)
-	if err == nil || !strings.Contains(err.Error(), "exceeded 96 bytes") {
+	if err == nil || !strings.Contains(err.Error(), "response id unknown") {
 		t.Fatalf("first call error = %v, want oversized message error", err)
 	}
 	var second struct {
@@ -253,6 +280,20 @@ func TestJSONRPCConnOversizedMessageDoesNotCloseFutureCalls(t *testing.T) {
 	}
 	if err := <-serverDone; err != nil {
 		t.Fatalf("server goroutine error = %v", err)
+	}
+}
+
+func TestReadLineLimitedAllowsLimitSizedLineWithNewline(t *testing.T) {
+	reader := bufio.NewReader(strings.NewReader("abcd\n"))
+	line, oversized, err := readLineLimited(reader, 4)
+	if err != nil {
+		t.Fatalf("readLineLimited() error = %v", err)
+	}
+	if oversized {
+		t.Fatal("readLineLimited() oversized = true, want false")
+	}
+	if string(line) != "abcd" {
+		t.Fatalf("line = %q, want abcd", line)
 	}
 }
 

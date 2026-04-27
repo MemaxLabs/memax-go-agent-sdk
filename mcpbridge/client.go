@@ -72,7 +72,7 @@ func NewStdioClient(ctx context.Context, cfg ServerConfig) (*Client, error) {
 		case <-time.After(defaultCloseGrace):
 		}
 		killErr := cmd.Process.Kill()
-		_ = <-waitCh
+		<-waitCh
 		if killErr != nil && !errors.Is(killErr, os.ErrProcessDone) {
 			return killErr
 		}
@@ -294,7 +294,7 @@ func (c *jsonrpcConn) readLoop() {
 	for {
 		line, oversized, readErr := readLineLimited(reader, c.maxRead)
 		if oversized {
-			c.failPending(fmt.Errorf("mcp json-rpc message exceeded %d bytes", c.maxRead))
+			c.failPending(fmt.Errorf("mcp json-rpc message exceeded %d bytes; response id unknown, failed in-flight calls", c.maxRead))
 			if readErr != nil && !errors.Is(readErr, io.EOF) {
 				c.closeFromReadLoop(readErr)
 				return
@@ -344,14 +344,21 @@ func (c *jsonrpcConn) closeFromReadLoop(err error) {
 	if err == nil {
 		err = io.EOF
 	}
+	shouldCloseTransport := false
 	c.mu.Lock()
 	if !c.closed {
 		c.closed = true
 		c.err = err
 		c.failPendingLocked(err)
 		close(c.done)
+		shouldCloseTransport = true
 	}
 	c.mu.Unlock()
+	if shouldCloseTransport {
+		go func() {
+			_ = c.runClose()
+		}()
+	}
 }
 
 func readLineLimited(reader *bufio.Reader, limit int) ([]byte, bool, error) {
@@ -362,7 +369,11 @@ func readLineLimited(reader *bufio.Reader, limit int) ([]byte, bool, error) {
 	var out []byte
 	for {
 		part, err := reader.ReadSlice('\n')
-		if len(out)+len(part) > limit {
+		partLen := len(part)
+		if err != bufio.ErrBufferFull {
+			partLen = len(bytes.TrimSuffix(part, []byte{'\n'}))
+		}
+		if len(out)+partLen > limit {
 			for err == bufio.ErrBufferFull {
 				part, err = reader.ReadSlice('\n')
 			}
