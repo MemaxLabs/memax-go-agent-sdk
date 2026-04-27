@@ -4,11 +4,15 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 )
 
 const (
 	defaultProtocolVersion = "2024-11-05"
 	toolNamePrefix         = "mcp"
+	defaultStartupTimeout  = 30 * time.Second
+	defaultToolTimeout     = 120 * time.Second
+	defaultMaxResultBytes  = 128 * 1024
 )
 
 var toolNameSanitizer = regexp.MustCompile(`[^A-Za-z0-9_-]+`)
@@ -31,6 +35,15 @@ type ServerConfig struct {
 	SupportsParallelToolCalls bool
 	// ProtocolVersion is sent in initialize. Empty uses a conservative default.
 	ProtocolVersion string
+	// StartupTimeout bounds initialize and tools/list. Zero uses the default;
+	// negative disables the SDK timeout and relies only on the caller context.
+	StartupTimeout time.Duration
+	// ToolTimeout bounds each tools/call request. Zero uses the default;
+	// negative disables the SDK timeout and relies only on the caller context.
+	ToolTimeout time.Duration
+	// MaxResultBytes bounds each adapted MCP tool result. Zero uses the default;
+	// negative disables the SDK result limit.
+	MaxResultBytes int
 }
 
 // Validate checks whether cfg can start a stdio MCP server.
@@ -49,6 +62,36 @@ func (cfg ServerConfig) protocolVersion() string {
 		return version
 	}
 	return defaultProtocolVersion
+}
+
+func (cfg ServerConfig) startupTimeout() time.Duration {
+	if cfg.StartupTimeout < 0 {
+		return 0
+	}
+	if cfg.StartupTimeout > 0 {
+		return cfg.StartupTimeout
+	}
+	return defaultStartupTimeout
+}
+
+func (cfg ServerConfig) toolTimeout() time.Duration {
+	if cfg.ToolTimeout < 0 {
+		return 0
+	}
+	if cfg.ToolTimeout > 0 {
+		return cfg.ToolTimeout
+	}
+	return defaultToolTimeout
+}
+
+func (cfg ServerConfig) maxResultBytes() int {
+	if cfg.MaxResultBytes < 0 {
+		return 0
+	}
+	if cfg.MaxResultBytes > 0 {
+		return cfg.MaxResultBytes
+	}
+	return defaultMaxResultBytes
 }
 
 func normalizeName(name string) string {

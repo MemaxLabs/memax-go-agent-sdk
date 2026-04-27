@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
@@ -59,6 +60,9 @@ func TestStdioClientDiscoversAndExecutesToolsThroughSDKExecutor(t *testing.T) {
 	}
 	if result.Metadata["mcp_server"] != "docs" || result.Metadata["mcp_tool"] != "search" {
 		t.Fatalf("metadata = %#v", result.Metadata)
+	}
+	if result.Metadata["mcp_content_items"] != 1 {
+		t.Fatalf("content item metadata = %#v", result.Metadata)
 	}
 }
 
@@ -113,6 +117,58 @@ func TestStdioClientPropagatesMCPToolErrors(t *testing.T) {
 	}
 	if result.Content != "remote failure" {
 		t.Fatalf("result content = %q", result.Content)
+	}
+}
+
+func TestDiscoverToolsAppliesDefaultResultLimit(t *testing.T) {
+	ctx := context.Background()
+	cfg := testServerConfig("docs", false)
+	client, err := NewStdioClient(ctx, cfg)
+	if err != nil {
+		t.Fatalf("NewStdioClient() error = %v", err)
+	}
+	defer client.Close()
+
+	set, err := DiscoverTools(ctx, client, cfg)
+	if err != nil {
+		t.Fatalf("DiscoverTools() error = %v", err)
+	}
+	tools := set.Tools()
+	if len(tools) != 1 {
+		t.Fatalf("tools = %d, want 1", len(tools))
+	}
+	if got := tools[0].Spec().MaxResultBytes; got != defaultMaxResultBytes {
+		t.Fatalf("MaxResultBytes = %d, want %d", got, defaultMaxResultBytes)
+	}
+}
+
+func TestMCPToolCallTimeoutIsModelVisible(t *testing.T) {
+	ctx := context.Background()
+	cfg := testServerConfig("docs", false)
+	cfg.ToolTimeout = 10 * time.Millisecond
+	client, err := NewStdioClient(ctx, cfg)
+	if err != nil {
+		t.Fatalf("NewStdioClient() error = %v", err)
+	}
+	defer client.Close()
+
+	set, err := DiscoverTools(ctx, client, cfg)
+	if err != nil {
+		t.Fatalf("DiscoverTools() error = %v", err)
+	}
+	registry := tool.NewRegistry()
+	if err := set.Register(registry); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	executor := tool.Executor{Registry: registry}
+	results := executor.Run(ctx, []model.ToolUse{{
+		ID:    "call-1",
+		Name:  "mcp__docs__search",
+		Input: json.RawMessage(`{"query":"slow"}`),
+	}})
+	result := <-results
+	if !result.IsError {
+		t.Fatalf("timeout should be model-visible error: %#v", result)
 	}
 }
 
@@ -175,6 +231,9 @@ func TestMCPBridgeStdioServerHelper(t *testing.T) {
 			}
 			_ = json.Unmarshal(req.Params, &params)
 			query, _ := params.Arguments["query"].(string)
+			if query == "slow" {
+				time.Sleep(200 * time.Millisecond)
+			}
 			if query == "fail" {
 				writeRPCResult(encoder, req.ID, map[string]any{
 					"isError": true,

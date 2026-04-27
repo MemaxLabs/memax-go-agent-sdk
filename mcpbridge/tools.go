@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/MemaxLabs/memax-go-agent-sdk/model"
 	"github.com/MemaxLabs/memax-go-agent-sdk/tool"
@@ -24,7 +25,9 @@ func DiscoverTools(ctx context.Context, client *Client, cfg ServerConfig) (ToolS
 		return ToolSet{}, fmt.Errorf("mcp client is required")
 	}
 	var result listToolsResult
-	if err := client.call(ctx, "tools/list", map[string]any{}, &result); err != nil {
+	listCtx, cancel := contextWithOptionalTimeout(ctx, cfg.startupTimeout())
+	defer cancel()
+	if err := client.call(listCtx, "tools/list", map[string]any{}, &result); err != nil {
 		return ToolSet{}, fmt.Errorf("list mcp tools for %s: %w", cfg.Name, err)
 	}
 	serverName := normalizeName(cfg.Name)
@@ -47,6 +50,8 @@ func DiscoverTools(ctx context.Context, client *Client, cfg ServerConfig) (ToolS
 			description: strings.TrimSpace(remote.Description),
 			inputSchema: cloneSchema(remote.InputSchema),
 			concurrent:  cfg.SupportsParallelToolCalls,
+			toolTimeout: cfg.toolTimeout(),
+			maxResult:   cfg.maxResultBytes(),
 			client:      client,
 		})
 	}
@@ -83,6 +88,8 @@ type remoteTool struct {
 	description string
 	inputSchema map[string]any
 	concurrent  bool
+	toolTimeout time.Duration
+	maxResult   int
 	client      *Client
 }
 
@@ -97,6 +104,7 @@ func (t *remoteTool) Spec() model.ToolSpec {
 		InputSchema:     cloneSchema(t.inputSchema),
 		SearchHint:      "mcp " + t.serverName + " " + t.remoteName + " " + description,
 		ConcurrencySafe: t.concurrent,
+		MaxResultBytes:  t.maxResult,
 	}
 }
 
@@ -111,7 +119,9 @@ func (t *remoteTool) Execute(ctx context.Context, call tool.Call) (model.ToolRes
 		arguments = map[string]any{}
 	}
 	var result callToolResult
-	if err := t.client.call(ctx, "tools/call", callToolParams{
+	callCtx, cancel := contextWithOptionalTimeout(ctx, t.toolTimeout)
+	defer cancel()
+	if err := t.client.call(callCtx, "tools/call", callToolParams{
 		Name:      t.remoteName,
 		Arguments: arguments,
 	}, &result); err != nil {
@@ -121,9 +131,9 @@ func (t *remoteTool) Execute(ctx context.Context, call tool.Call) (model.ToolRes
 		Content: renderMCPContent(result.Content),
 		IsError: result.IsError,
 		Metadata: map[string]any{
-			"mcp_server":      t.serverName,
-			"mcp_tool":        t.remoteName,
-			"mcp_content_len": len(result.Content),
+			"mcp_server":        t.serverName,
+			"mcp_tool":          t.remoteName,
+			"mcp_content_items": len(result.Content),
 		},
 	}, nil
 }

@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // Client is a minimal MCP JSON-RPC client.
@@ -37,12 +38,15 @@ func NewStdioClient(ctx context.Context, cfg ServerConfig) (*Client, error) {
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		_ = stdin.Close()
 		return nil, fmt.Errorf("mcp %s stdout: %w", cfg.Name, err)
 	}
 	if cmd.Stderr == nil {
 		cmd.Stderr = io.Discard
 	}
 	if err := cmd.Start(); err != nil {
+		_ = stdin.Close()
+		_ = stdout.Close()
 		return nil, fmt.Errorf("start mcp server %s: %w", cfg.Name, err)
 	}
 	conn := newJSONRPCConn(stdout, stdin, func() error {
@@ -55,7 +59,9 @@ func NewStdioClient(ctx context.Context, cfg ServerConfig) (*Client, error) {
 		return err
 	})
 	client := &Client{conn: conn}
-	if err := client.Initialize(ctx, cfg); err != nil {
+	initCtx, cancel := contextWithOptionalTimeout(ctx, cfg.startupTimeout())
+	defer cancel()
+	if err := client.Initialize(initCtx, cfg); err != nil {
 		_ = client.Close()
 		return nil, err
 	}
@@ -94,6 +100,13 @@ func (c *Client) Initialize(ctx context.Context, cfg ServerConfig) error {
 		return fmt.Errorf("send initialized notification to mcp server %s: %w", cfg.Name, err)
 	}
 	return nil
+}
+
+func contextWithOptionalTimeout(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout <= 0 {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, timeout)
 }
 
 func (c *Client) call(ctx context.Context, method string, params any, result any) error {
