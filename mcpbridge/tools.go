@@ -49,6 +49,8 @@ func DiscoverTools(ctx context.Context, client *Client, cfg ServerConfig) (ToolS
 			localName:   localName,
 			description: strings.TrimSpace(remote.Description),
 			inputSchema: cloneSchema(remote.InputSchema),
+			readOnly:    boolAnnotation(remote.Annotations.ReadOnlyHint),
+			destructive: boolAnnotation(remote.Annotations.DestructiveHint),
 			concurrent:  cfg.SupportsParallelToolCalls,
 			toolTimeout: cfg.toolTimeout(),
 			maxResult:   cfg.maxResultBytes(),
@@ -87,6 +89,8 @@ type remoteTool struct {
 	localName   string
 	description string
 	inputSchema map[string]any
+	readOnly    bool
+	destructive bool
 	concurrent  bool
 	toolTimeout time.Duration
 	maxResult   int
@@ -102,8 +106,10 @@ func (t *remoteTool) Spec() model.ToolSpec {
 		Name:            t.localName,
 		Description:     description,
 		InputSchema:     cloneSchema(t.inputSchema),
-		SearchHint:      "mcp " + t.serverName + " " + t.remoteName + " " + description,
+		SearchHint:      "mcp " + t.serverName + " " + t.remoteName,
+		ReadOnly:        t.readOnly,
 		ConcurrencySafe: t.concurrent,
+		Destructive:     t.destructive,
 		MaxResultBytes:  t.maxResult,
 	}
 }
@@ -147,9 +153,16 @@ type listToolsResult struct {
 }
 
 type listedTool struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description,omitempty"`
-	InputSchema map[string]any `json:"inputSchema,omitempty"`
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	InputSchema map[string]any  `json:"inputSchema,omitempty"`
+	Annotations toolAnnotations `json:"annotations,omitempty"`
+}
+
+type toolAnnotations struct {
+	ReadOnlyHint    *bool `json:"readOnlyHint,omitempty"`
+	DestructiveHint *bool `json:"destructiveHint,omitempty"`
+	IdempotentHint  *bool `json:"idempotentHint,omitempty"`
 }
 
 type callToolParams struct {
@@ -205,6 +218,10 @@ func renderMCPContent(items []contentItem) string {
 		}
 	}
 	return b.String()
+}
+
+func boolAnnotation(value *bool) bool {
+	return value != nil && *value
 }
 
 func cloneSchema(in map[string]any) map[string]any {

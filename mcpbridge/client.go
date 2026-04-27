@@ -36,9 +36,13 @@ func NewStdioClient(ctx context.Context, cfg ServerConfig) (*Client, error) {
 	if cfg.CWD != "" {
 		cmd.Dir = cfg.CWD
 	}
-	cmd.Env = os.Environ()
+	if cfg.InheritEnv {
+		cmd.Env = append([]string(nil), os.Environ()...)
+	} else {
+		cmd.Env = minimalProcessEnv(os.Environ())
+	}
 	for key, value := range cfg.Env {
-		cmd.Env = append(cmd.Env, key+"="+value)
+		cmd.Env = appendEnvOverride(cmd.Env, key, value)
 	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -52,7 +56,7 @@ func NewStdioClient(ctx context.Context, cfg ServerConfig) (*Client, error) {
 	stderrTail := newTailBuffer(defaultStderrTailBytes)
 	if cfg.Stderr != nil {
 		cmd.Stderr = io.MultiWriter(cfg.Stderr, stderrTail)
-	} else if cmd.Stderr == nil {
+	} else {
 		cmd.Stderr = stderrTail
 	}
 	if err := cmd.Start(); err != nil {
@@ -60,7 +64,7 @@ func NewStdioClient(ctx context.Context, cfg ServerConfig) (*Client, error) {
 		_ = stdout.Close()
 		return nil, fmt.Errorf("start mcp server %s: %w", cfg.Name, err)
 	}
-	conn := newJSONRPCConn(stdout, stdin, func() error {
+	conn := newJSONRPCConnWithMaxRead(stdout, stdin, func() error {
 		_ = stdin.Close()
 		waitCh := make(chan error, 1)
 		go func() {
@@ -77,7 +81,7 @@ func NewStdioClient(ctx context.Context, cfg ServerConfig) (*Client, error) {
 			return killErr
 		}
 		return nil
-	})
+	}, cfg.maxRPCMessageBytes())
 	client := &Client{conn: conn}
 	initCtx, cancel := contextWithOptionalTimeout(ctx, cfg.startupTimeout())
 	if err := client.Initialize(initCtx, cfg); err != nil {
@@ -90,6 +94,50 @@ func NewStdioClient(ctx context.Context, cfg ServerConfig) (*Client, error) {
 	}
 	cancel()
 	return client, nil
+}
+
+func minimalProcessEnv(env []string) []string {
+	allowed := map[string]struct{}{
+		"COMSPEC":                 {},
+		"HOME":                    {},
+		"LANG":                    {},
+		"LC_ALL":                  {},
+		"LC_CTYPE":                {},
+		"LOGNAME":                 {},
+		"PATH":                    {},
+		"PATHEXT":                 {},
+		"SHELL":                   {},
+		"SystemRoot":              {},
+		"TEMP":                    {},
+		"TMP":                     {},
+		"TMPDIR":                  {},
+		"USER":                    {},
+		"USERNAME":                {},
+		"WINDIR":                  {},
+		"__CF_USER_TEXT_ENCODING": {},
+	}
+	out := make([]string, 0, len(allowed))
+	for _, item := range env {
+		key, _, ok := strings.Cut(item, "=")
+		if !ok {
+			continue
+		}
+		if _, keep := allowed[key]; keep {
+			out = appendEnvOverride(out, key, strings.TrimPrefix(item, key+"="))
+		}
+	}
+	return out
+}
+
+func appendEnvOverride(env []string, key, value string) []string {
+	prefix := key + "="
+	out := env[:0]
+	for _, item := range env {
+		if !strings.HasPrefix(item, prefix) {
+			out = append(out, item)
+		}
+	}
+	return append(out, prefix+value)
 }
 
 func normalizeProcessExit(err error) error {
@@ -309,16 +357,31 @@ func (c *jsonrpcConn) readLoop() {
 			c.closeFromReadLoop(readErr)
 			return
 		}
-		var resp jsonrpcResponse
-		if err := json.Unmarshal(line, &resp); err != nil {
+		var msg jsonrpcMessage
+		if err := json.Unmarshal(line, &msg); err != nil {
 			continue
 		}
-		if resp.ID == 0 {
+		if msg.Method != "" {
+			c.respondMethodNotFound(msg)
 			if errors.Is(readErr, io.EOF) {
 				c.closeFromReadLoop(io.EOF)
 				return
 			}
 			continue
+		}
+		id, ok := msg.responseID()
+		if !ok {
+			if errors.Is(readErr, io.EOF) {
+				c.closeFromReadLoop(io.EOF)
+				return
+			}
+			continue
+		}
+		resp := jsonrpcResponse{
+			JSONRPC: msg.JSONRPC,
+			ID:      id,
+			Result:  msg.Result,
+			Error:   msg.Error,
 		}
 		c.mu.Lock()
 		ch := c.pending[resp.ID]
@@ -332,6 +395,20 @@ func (c *jsonrpcConn) readLoop() {
 			return
 		}
 	}
+}
+
+func (c *jsonrpcConn) respondMethodNotFound(msg jsonrpcMessage) {
+	if len(msg.ID) == 0 || string(msg.ID) == "null" {
+		return
+	}
+	_ = c.write(jsonrpcRawErrorResponse{
+		JSONRPC: "2.0",
+		ID:      msg.ID,
+		Error: &rpcError{
+			Code:    -32601,
+			Message: "method not found",
+		},
+	})
 }
 
 func (c *jsonrpcConn) failPending(err error) {
@@ -439,11 +516,39 @@ type jsonrpcNotification struct {
 	Params  any    `json:"params,omitempty"`
 }
 
+type jsonrpcMessage struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id,omitempty"`
+	Method  string          `json:"method,omitempty"`
+	Result  json.RawMessage `json:"result,omitempty"`
+	Error   *rpcError       `json:"error,omitempty"`
+}
+
+func (m jsonrpcMessage) responseID() (int64, bool) {
+	if len(m.ID) == 0 || string(m.ID) == "null" {
+		return 0, false
+	}
+	var id int64
+	if err := json.Unmarshal(m.ID, &id); err != nil {
+		return 0, false
+	}
+	if id == 0 {
+		return 0, false
+	}
+	return id, true
+}
+
 type jsonrpcResponse struct {
 	JSONRPC string          `json:"jsonrpc"`
 	ID      int64           `json:"id"`
 	Result  json.RawMessage `json:"result,omitempty"`
 	Error   *rpcError       `json:"error,omitempty"`
+}
+
+type jsonrpcRawErrorResponse struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id"`
+	Error   *rpcError       `json:"error"`
 }
 
 type rpcError struct {

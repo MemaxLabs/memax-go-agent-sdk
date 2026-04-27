@@ -92,6 +92,33 @@ func TestDiscoverToolsHonorsParallelConfig(t *testing.T) {
 	}
 }
 
+func TestDiscoverToolsAppliesMCPAnnotations(t *testing.T) {
+	ctx := context.Background()
+	cfg := testServerConfig("docs", false)
+	cfg.Env["MEMAX_MCPBRIDGE_TEST_TOOL_ANNOTATIONS"] = "1"
+	client, err := NewStdioClient(ctx, cfg)
+	if err != nil {
+		t.Fatalf("NewStdioClient() error = %v", err)
+	}
+	defer client.Close()
+
+	set, err := DiscoverTools(ctx, client, cfg)
+	if err != nil {
+		t.Fatalf("DiscoverTools() error = %v", err)
+	}
+	tools := set.Tools()
+	if len(tools) != 1 {
+		t.Fatalf("tools = %d, want 1", len(tools))
+	}
+	spec := tools[0].Spec()
+	if !spec.ReadOnly {
+		t.Fatalf("ReadOnly = false, want true")
+	}
+	if spec.Destructive {
+		t.Fatalf("Destructive = true, want false")
+	}
+}
+
 func TestStdioClientPropagatesMCPToolErrors(t *testing.T) {
 	ctx := context.Background()
 	cfg := testServerConfig("docs", false)
@@ -283,6 +310,74 @@ func TestJSONRPCConnOversizedMessageDoesNotCloseFutureCalls(t *testing.T) {
 	}
 }
 
+func TestJSONRPCConnRejectsServerInitiatedRequests(t *testing.T) {
+	clientReader, serverWriter := io.Pipe()
+	serverReader, clientWriter := io.Pipe()
+	client := &Client{conn: newJSONRPCConn(clientReader, clientWriter, clientWriter.Close)}
+	defer client.Close()
+
+	rejected := make(chan error, 1)
+	serverDone := make(chan error, 1)
+	go func() {
+		if _, err := serverWriter.Write([]byte(`{"jsonrpc":"2.0","id":"server-1","method":"ping"}` + "\n")); err != nil {
+			rejected <- err
+			return
+		}
+		scanner := bufio.NewScanner(serverReader)
+		if !scanner.Scan() {
+			rejected <- fmt.Errorf("read method-not-found response: %w", scanner.Err())
+			return
+		}
+		var serverResponse struct {
+			ID    json.RawMessage `json:"id"`
+			Error *rpcError       `json:"error"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &serverResponse); err != nil {
+			rejected <- err
+			return
+		}
+		if string(serverResponse.ID) != `"server-1"` || serverResponse.Error == nil || serverResponse.Error.Code != -32601 {
+			rejected <- fmt.Errorf("server request response = %#v, want -32601 for server-1", serverResponse)
+			return
+		}
+		rejected <- nil
+		if !scanner.Scan() {
+			serverDone <- fmt.Errorf("read client request: %w", scanner.Err())
+			return
+		}
+		var req struct {
+			ID int64 `json:"id"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &req); err != nil {
+			serverDone <- err
+			return
+		}
+		serverDone <- json.NewEncoder(serverWriter).Encode(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      req.ID,
+			"result":  map[string]any{"ok": true},
+		})
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := <-rejected; err != nil {
+		t.Fatalf("server request rejection error = %v", err)
+	}
+	var result struct {
+		OK bool `json:"ok"`
+	}
+	if err := client.call(ctx, "second", nil, &result); err != nil {
+		t.Fatalf("client call after server request error = %v", err)
+	}
+	if !result.OK {
+		t.Fatalf("result = %#v, want ok", result)
+	}
+	if err := <-serverDone; err != nil {
+		t.Fatalf("server goroutine error = %v", err)
+	}
+}
+
 func TestReadLineLimitedAllowsLimitSizedLineWithNewline(t *testing.T) {
 	reader := bufio.NewReader(strings.NewReader("abcd\n"))
 	line, oversized, err := readLineLimited(reader, 4)
@@ -294,6 +389,46 @@ func TestReadLineLimitedAllowsLimitSizedLineWithNewline(t *testing.T) {
 	}
 	if string(line) != "abcd" {
 		t.Fatalf("line = %q, want abcd", line)
+	}
+}
+
+func TestStdioClientDoesNotInheritSensitiveEnvByDefault(t *testing.T) {
+	t.Setenv("MEMAX_MCPBRIDGE_SECRET", "do-not-leak")
+	ctx := context.Background()
+	cfg := testServerConfig("docs", false)
+	cfg.Env["MEMAX_MCPBRIDGE_TEST_REJECT_SECRET"] = "1"
+	client, err := NewStdioClient(ctx, cfg)
+	if err != nil {
+		t.Fatalf("NewStdioClient() error = %v", err)
+	}
+	_ = client.Close()
+}
+
+func TestStdioClientCanOptIntoFullEnvInheritance(t *testing.T) {
+	t.Setenv("MEMAX_MCPBRIDGE_SECRET", "leaked-by-opt-in")
+	ctx := context.Background()
+	cfg := testServerConfig("docs", false)
+	cfg.InheritEnv = true
+	cfg.Env["MEMAX_MCPBRIDGE_TEST_REJECT_SECRET"] = "1"
+	_, err := NewStdioClient(ctx, cfg)
+	if err == nil {
+		t.Fatal("NewStdioClient() error = nil, want helper to observe inherited secret")
+	}
+	if !strings.Contains(err.Error(), "secret env leaked") {
+		t.Fatalf("NewStdioClient() error = %v, want secret env leak marker", err)
+	}
+}
+
+func TestStdioClientUsesConfiguredRPCMessageLimit(t *testing.T) {
+	ctx := context.Background()
+	cfg := testServerConfig("docs", false)
+	cfg.MaxRPCMessageBytes = 128
+	_, err := NewStdioClient(ctx, cfg)
+	if err == nil {
+		t.Fatal("NewStdioClient() error = nil, want initialize response to exceed configured RPC limit")
+	}
+	if !strings.Contains(err.Error(), "exceeded 128 bytes") {
+		t.Fatalf("NewStdioClient() error = %v, want configured max RPC size", err)
 	}
 }
 
@@ -325,6 +460,10 @@ func TestMCPBridgeStdioServerHelper(t *testing.T) {
 	if os.Getenv("MEMAX_MCPBRIDGE_TEST_SERVER") != "1" {
 		return
 	}
+	if os.Getenv("MEMAX_MCPBRIDGE_TEST_REJECT_SECRET") == "1" && os.Getenv("MEMAX_MCPBRIDGE_SECRET") != "" {
+		_, _ = fmt.Fprintln(os.Stderr, "secret env leaked")
+		os.Exit(2)
+	}
 	if os.Getenv("MEMAX_MCPBRIDGE_TEST_SERVER_INIT_FAIL") == "1" {
 		_, _ = fmt.Fprintln(os.Stderr, "test mcp init failed")
 		os.Exit(2)
@@ -354,18 +493,25 @@ func TestMCPBridgeStdioServerHelper(t *testing.T) {
 				},
 			})
 		case "tools/list":
-			writeRPCResult(encoder, req.ID, map[string]any{
-				"tools": []map[string]any{{
-					"name":        "search",
-					"description": "Search test docs.",
-					"inputSchema": map[string]any{
-						"type":     "object",
-						"required": []string{"query"},
-						"properties": map[string]any{
-							"query": map[string]any{"type": "string"},
-						},
+			toolSpec := map[string]any{
+				"name":        "search",
+				"description": "Search test docs.",
+				"inputSchema": map[string]any{
+					"type":     "object",
+					"required": []string{"query"},
+					"properties": map[string]any{
+						"query": map[string]any{"type": "string"},
 					},
-				}},
+				},
+			}
+			if os.Getenv("MEMAX_MCPBRIDGE_TEST_TOOL_ANNOTATIONS") == "1" {
+				toolSpec["annotations"] = map[string]any{
+					"readOnlyHint":    true,
+					"destructiveHint": false,
+				}
+			}
+			writeRPCResult(encoder, req.ID, map[string]any{
+				"tools": []map[string]any{toolSpec},
 			})
 		case "tools/call":
 			var params struct {

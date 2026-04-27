@@ -28,6 +28,11 @@ type ServerConfig struct {
 	Args []string
 	// Env adds or overrides environment variables for the server process.
 	Env map[string]string
+	// InheritEnv forwards the full parent process environment to the MCP
+	// server. The default is false: only a small process-safe allowlist plus Env
+	// is passed so API keys and host secrets are not leaked to third-party MCP
+	// servers by accident.
+	InheritEnv bool
 	// CWD sets the server process working directory.
 	CWD string
 	// SupportsParallelToolCalls marks every discovered server tool as eligible
@@ -45,6 +50,10 @@ type ServerConfig struct {
 	// MaxResultBytes bounds each adapted MCP tool result. Zero uses the default;
 	// negative disables the SDK result limit.
 	MaxResultBytes int
+	// MaxRPCMessageBytes bounds each newline-delimited JSON-RPC message read
+	// from the server. Zero uses the default; negative disables the SDK
+	// transport message limit.
+	MaxRPCMessageBytes int
 	// Stderr receives the server process stderr stream. The writer must return
 	// promptly because MCP servers write to it synchronously. When nil, the SDK
 	// keeps a small stderr tail and includes it in startup errors.
@@ -97,6 +106,16 @@ func (cfg ServerConfig) maxResultBytes() int {
 		return cfg.MaxResultBytes
 	}
 	return defaultMaxResultBytes
+}
+
+func (cfg ServerConfig) maxRPCMessageBytes() int {
+	if cfg.MaxRPCMessageBytes < 0 {
+		return 0
+	}
+	if cfg.MaxRPCMessageBytes > 0 {
+		return cfg.MaxRPCMessageBytes
+	}
+	return defaultMaxRPCMessageBytes
 }
 
 func normalizeName(name string) string {
