@@ -62,6 +62,14 @@ const (
 	// EventVerification is emitted when a verification tool reports pass/fail
 	// status for a host-owned check.
 	EventVerification EventKind = "verification"
+	// EventProviderArtifact is emitted when a provider-native transcript block
+	// (e.g. an Anthropic thinking or redacted_thinking block) completes during
+	// a model stream. The artifact is also appended to the assistant message's
+	// content blocks; this event exists so observers can surface readable
+	// reasoning (when the provider returns it) at the chronological position
+	// it happened, between text and tool-use events. Additive: observers that
+	// switch on known kinds ignore it.
+	EventProviderArtifact EventKind = "provider_artifact"
 	// EventApprovalRequested is emitted when an approval request tool result is
 	// observed. It is followed by EventApprovalGranted or EventApprovalDenied
 	// for the same result.
@@ -127,24 +135,26 @@ type Event struct {
 	Turn            int
 	Time            time.Time
 
-	Message      *model.Message
-	ToolUse      *model.ToolUse
-	ToolUseDelta string
-	ToolResult   *model.ToolResult
-	Usage        *model.Usage
-	Context      *ContextEvent
-	Compaction   *contextwindow.CompactionRecord
-	Memory       *MemoryCandidatesEvent
-	Skill        *SkillEvent
-	Workspace    *WorkspaceEvent
-	Verification *VerificationEvent
-	Approval     *ApprovalEvent
-	Tenant       *TenantEvent
-	Command      *CommandEvent
-	Run          *RunEvent
-	Notification *ScheduledRunNotificationEvent
-	Result       string
-	Err          error
+	Message *model.Message
+	ToolUse *model.ToolUse
+	// ProviderArtifact is set for EventProviderArtifact.
+	ProviderArtifact *model.ProviderArtifact
+	ToolUseDelta     string
+	ToolResult       *model.ToolResult
+	Usage            *model.Usage
+	Context          *ContextEvent
+	Compaction       *contextwindow.CompactionRecord
+	Memory           *MemoryCandidatesEvent
+	Skill            *SkillEvent
+	Workspace        *WorkspaceEvent
+	Verification     *VerificationEvent
+	Approval         *ApprovalEvent
+	Tenant           *TenantEvent
+	Command          *CommandEvent
+	Run              *RunEvent
+	Notification     *ScheduledRunNotificationEvent
+	Result           string
+	Err              error
 }
 
 type ContextEvent struct {

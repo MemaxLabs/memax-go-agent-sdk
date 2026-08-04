@@ -8,6 +8,8 @@ changes should still be called out here with migration notes.
 
 ## Unreleased
 
+- Emit `EventProviderArtifact` when a provider-native transcript block (e.g. Anthropic thinking) completes mid-stream, carrying the artifact so hosts can surface readable reasoning chronologically. Additive.
+
 - Added provider constructor options for API base URLs, full endpoint
   overrides, custom HTTP clients, request timeouts, and provider-specific
   sampling/token controls. OpenAI `BaseURL` follows the OpenAI ecosystem
