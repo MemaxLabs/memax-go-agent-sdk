@@ -4121,3 +4121,51 @@ func requestToolNames(req model.Request) []string {
 	}
 	return out
 }
+
+func TestQueryEmitsProviderArtifactEvent(t *testing.T) {
+	store := session.NewMemoryStore()
+	sess, err := store.Create(context.Background())
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	artifact := &model.ProviderArtifact{
+		Provider: "anthropic",
+		Type:     "thinking",
+		Data:     json.RawMessage(`{"type":"thinking","thinking":"consider the tradeoffs"}`),
+	}
+	events, err := Query(context.Background(), "start", Options{
+		Model: &fakeModel{turns: [][]model.StreamEvent{{
+			{Kind: model.StreamProviderArtifact, ProviderArtifact: artifact},
+			{Kind: model.StreamText, Text: "done"},
+		}}},
+		Sessions:  store,
+		SessionID: sess.ID,
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+	var artifactEvents []Event
+	var sawAssistantAfterArtifact bool
+	for ev := range events {
+		if ev.Kind == EventProviderArtifact {
+			artifactEvents = append(artifactEvents, ev)
+		}
+		if ev.Kind == EventAssistant && len(artifactEvents) > 0 {
+			sawAssistantAfterArtifact = true
+		}
+	}
+	if len(artifactEvents) != 1 {
+		t.Fatalf("provider artifact events = %d, want 1", len(artifactEvents))
+	}
+	got := artifactEvents[0].ProviderArtifact
+	if got == nil || got.Provider != "anthropic" || got.Type != "thinking" {
+		t.Fatalf("artifact = %#v", got)
+	}
+	if string(got.Data) != `{"type":"thinking","thinking":"consider the tradeoffs"}` {
+		t.Fatalf("artifact data = %s", got.Data)
+	}
+	// Chronology: the artifact event lands before the text that follows it.
+	if !sawAssistantAfterArtifact {
+		t.Fatalf("expected assistant text event after the artifact event")
+	}
+}

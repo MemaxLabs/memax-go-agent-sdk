@@ -2352,6 +2352,12 @@ func collectAssistant(
 				Type:             model.ContentProviderArtifact,
 				ProviderArtifact: &artifact,
 			})
+			out := newEvent(EventProviderArtifact, sessionID, turn)
+			artifactCopy := artifact
+			out.ProviderArtifact = &artifactCopy
+			if !emit(out) {
+				return model.Message{Role: model.RoleAssistant, Content: blocks}, uses, earlyResults, usage, ctx.Err()
+			}
 		case model.StreamUsage:
 			if event.Usage == nil {
 				continue
