@@ -8,6 +8,8 @@ changes should still be called out here with migration notes.
 
 ## Unreleased
 
+- Stream readable provider reasoning live: Anthropic `thinking_delta` chunks now surface as `EventThinkingDelta` (new `StreamThinking` model kind) while the completed block still lands as `EventProviderArtifact`. Additive.
+
 - Emit `EventProviderArtifact` when a provider-native transcript block (e.g. Anthropic thinking) completes mid-stream, carrying the artifact so hosts can surface readable reasoning chronologically. Additive.
 
 - Added provider constructor options for API base URLs, full endpoint

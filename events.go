@@ -62,6 +62,11 @@ const (
 	// EventVerification is emitted when a verification tool reports pass/fail
 	// status for a host-owned check.
 	EventVerification EventKind = "verification"
+	// EventThinkingDelta is emitted for incremental readable provider
+	// reasoning chunks (e.g. Anthropic thinking_delta). Observability
+	// only: deltas are not part of the persisted transcript — the
+	// completed block arrives as EventProviderArtifact.
+	EventThinkingDelta EventKind = "thinking_delta"
 	// EventProviderArtifact is emitted when a provider-native transcript block
 	// (e.g. an Anthropic thinking or redacted_thinking block) completes during
 	// a model stream. The artifact is also appended to the assistant message's
@@ -139,22 +144,24 @@ type Event struct {
 	ToolUse *model.ToolUse
 	// ProviderArtifact is set for EventProviderArtifact.
 	ProviderArtifact *model.ProviderArtifact
-	ToolUseDelta     string
-	ToolResult       *model.ToolResult
-	Usage            *model.Usage
-	Context          *ContextEvent
-	Compaction       *contextwindow.CompactionRecord
-	Memory           *MemoryCandidatesEvent
-	Skill            *SkillEvent
-	Workspace        *WorkspaceEvent
-	Verification     *VerificationEvent
-	Approval         *ApprovalEvent
-	Tenant           *TenantEvent
-	Command          *CommandEvent
-	Run              *RunEvent
-	Notification     *ScheduledRunNotificationEvent
-	Result           string
-	Err              error
+	// ThinkingDelta is set for EventThinkingDelta.
+	ThinkingDelta string
+	ToolUseDelta  string
+	ToolResult    *model.ToolResult
+	Usage         *model.Usage
+	Context       *ContextEvent
+	Compaction    *contextwindow.CompactionRecord
+	Memory        *MemoryCandidatesEvent
+	Skill         *SkillEvent
+	Workspace     *WorkspaceEvent
+	Verification  *VerificationEvent
+	Approval      *ApprovalEvent
+	Tenant        *TenantEvent
+	Command       *CommandEvent
+	Run           *RunEvent
+	Notification  *ScheduledRunNotificationEvent
+	Result        string
+	Err           error
 }
 
 type ContextEvent struct {
