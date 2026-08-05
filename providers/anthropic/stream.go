@@ -249,6 +249,9 @@ func (s *stream) handleDelta(index int, data json.RawMessage) (model.StreamEvent
 		if block != nil {
 			thinking, _ := block.Fields["thinking"].(string)
 			block.Fields["thinking"] = thinking + delta.Thinking
+			// Surface the readable chunk live; the accumulated block
+			// still lands as a provider artifact at block end.
+			return model.StreamEvent{Kind: model.StreamThinking, Text: delta.Thinking}, nil
 		}
 	case "signature_delta":
 		block := s.artifacts[index]

@@ -4169,3 +4169,53 @@ func TestQueryEmitsProviderArtifactEvent(t *testing.T) {
 		t.Fatalf("expected assistant text event after the artifact event")
 	}
 }
+
+func TestQueryEmitsThinkingDeltas(t *testing.T) {
+	store := session.NewMemoryStore()
+	sess, err := store.Create(context.Background())
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	artifact := &model.ProviderArtifact{
+		Provider: "anthropic",
+		Type:     "thinking",
+		Data:     json.RawMessage(`{"type":"thinking","thinking":"step one step two"}`),
+	}
+	events, err := Query(context.Background(), "start", Options{
+		Model: &fakeModel{turns: [][]model.StreamEvent{{
+			{Kind: model.StreamThinking, Text: "step one "},
+			{Kind: model.StreamThinking, Text: "step two"},
+			{Kind: model.StreamProviderArtifact, ProviderArtifact: artifact},
+			{Kind: model.StreamText, Text: "done"},
+		}}},
+		Sessions:  store,
+		SessionID: sess.ID,
+	})
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+	var deltas []string
+	var artifactSeen bool
+	var artifactAfterDeltas bool
+	for ev := range events {
+		if ev.Kind == EventThinkingDelta {
+			deltas = append(deltas, ev.ThinkingDelta)
+		}
+		if ev.Kind == EventProviderArtifact {
+			artifactSeen = true
+			artifactAfterDeltas = len(deltas) == 2
+		}
+	}
+	if len(deltas) != 2 || deltas[0] != "step one " || deltas[1] != "step two" {
+		t.Fatalf("thinking deltas = %#v", deltas)
+	}
+	if !artifactSeen || !artifactAfterDeltas {
+		t.Fatalf("artifact event must follow the deltas (seen=%v afterDeltas=%v)", artifactSeen, artifactAfterDeltas)
+	}
+	// Deltas are observability-only — the transcript keeps the artifact.
+	messages, _ := store.Messages(context.Background(), sess.ID)
+	assistant := messages[len(messages)-1]
+	if len(assistant.Content) != 2 || assistant.Content[0].ProviderArtifact == nil {
+		t.Fatalf("assistant content = %#v", assistant.Content)
+	}
+}

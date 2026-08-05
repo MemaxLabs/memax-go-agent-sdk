@@ -2340,6 +2340,15 @@ func collectAssistant(
 					earlyResults[index] = results
 				}
 			}
+		case model.StreamThinking:
+			if event.Text == "" {
+				continue
+			}
+			out := newEvent(EventThinkingDelta, sessionID, turn)
+			out.ThinkingDelta = event.Text
+			if !emit(out) {
+				return model.Message{Role: model.RoleAssistant, Content: blocks}, uses, earlyResults, usage, ctx.Err()
+			}
 		case model.StreamProviderArtifact:
 			if event.ProviderArtifact == nil {
 				continue

@@ -48,6 +48,11 @@ const (
 	StreamToolUseDelta StreamEventKind = "tool_use_delta"
 	// StreamToolUse reports the complete executable tool call.
 	StreamToolUse StreamEventKind = "tool_use"
+	// StreamThinking reports an incremental chunk of readable provider
+	// reasoning (e.g. an Anthropic thinking_delta). Observability only —
+	// the complete block still arrives as StreamProviderArtifact and is
+	// what gets persisted into the transcript.
+	StreamThinking StreamEventKind = "thinking"
 	// StreamProviderArtifact reports opaque provider-native transcript state,
 	// such as encrypted reasoning or signed thinking blocks, that should be
 	// persisted and replayed but not surfaced as assistant text.
