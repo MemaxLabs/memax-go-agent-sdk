@@ -171,12 +171,23 @@ data: {"type":"message_stop"}
 	}
 	defer stream.Close()
 
+	// The readable chunk now streams live BEFORE the completed block —
+	// thinking_delta surfaces as a StreamThinking event, then the
+	// accumulated artifact lands at content_block_stop.
+	delta, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("Recv thinking delta returned error: %v", err)
+	}
+	if delta.Kind != model.StreamThinking || delta.Text != "checked constraints" {
+		t.Fatalf("first event = %#v, want thinking delta", delta)
+	}
+
 	first, err := stream.Recv()
 	if err != nil {
 		t.Fatalf("Recv artifact returned error: %v", err)
 	}
 	if first.Kind != model.StreamProviderArtifact || first.ProviderArtifact == nil {
-		t.Fatalf("first event = %#v, want provider artifact", first)
+		t.Fatalf("second event = %#v, want provider artifact", first)
 	}
 	if first.ProviderArtifact.Provider != "anthropic" || first.ProviderArtifact.Type != "thinking" {
 		t.Fatalf("artifact = %#v", first.ProviderArtifact)
